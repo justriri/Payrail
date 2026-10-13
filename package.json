@@ -1,0 +1,25 @@
+{
+  "name": "payrail",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Pay in Your Currency: pay for services with the stablecoin you already hold (Celo, Textile FX, Buy).",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "rehearse": "node scripts/rehearse.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test \"test/*.test.ts\"",
+    "check": "npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "@celo/attribution-tags": "0.5.0",
+    "@celo/buy-core": "0.8.2",
+    "viem": "2.56.9"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "6.0.3"
+  }
+}

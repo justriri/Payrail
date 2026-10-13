@@ -1,0 +1,613 @@
+{
+  "generatedAt": "2026-10-13T23:39:19.918Z",
+  "addresses": [
+    {
+      "role": "payTo (recipient of the x402 payment)",
+      "address": "0x20faAca5F980E29639A0FCC6dcA6988E18ed333B",
+      "note": "the service gateway's receiving address"
+    },
+    {
+      "role": "payer (Payrail wallet)",
+      "address": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4",
+      "note": "signed the payment authorization; NOT the payTo"
+    }
+  ],
+  "services": [
+    {
+      "service": "x.posts.search",
+      "url": "https://gateway.usebuy.ai/v1/social/x/posts/search",
+      "payments": 2,
+      "confirmed": 2,
+      "totalPaid": "0.01",
+      "token": "USDT"
+    }
+  ],
+  "payments": [
+    {
+      "receiptId": "direct-2026-10-12T16-02-41-922Z",
+      "at": "2026-10-12T16:02:41.922Z",
+      "status": "CONFIRMED",
+      "service": "x.posts.search",
+      "serviceUrl": "https://gateway.usebuy.ai/v1/social/x/posts/search",
+      "amount": "0.005",
+      "token": "USDT",
+      "asset": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+      "payer": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4",
+      "payTo": "0x20faAca5F980E29639A0FCC6dcA6988E18ed333B",
+      "txHash": "0xfb012c514207add68399c8c575d89e9c352c94ac8131378d8e1ffa233f8217ac",
+      "explorerUrl": "https://celoscan.io/tx/0xfb012c514207add68399c8c575d89e9c352c94ac8131378d8e1ffa233f8217ac",
+      "orderId": null,
+      "settlementAuthorizationState": "settled",
+      "transferVerified": true,
+      "httpStatus": 200,
+      "delivered": true,
+      "responseSha256": null,
+      "responseFile": null,
+      "responseSummary": "JSON keys [capability, transaction, payment, provider, upstreamRunId, resultCount, output]; output: object; 57656 bytes",
+      "notes": [
+        "legacy receipt (written before schema v1)",
+        "the response body was not retained for this payment (only a structural summary was kept)",
+        "x402 settlement is submitted by the facilitator and carries no attribution tag; the organizers confirmed none is needed for Buy",
+        "LIVE RE-VERIFICATION 2026-10-13T23:39:25.273Z: receipt success, block 79920194, confirmed by 2 endpoint(s), Transfer(payer -> payTo, 0.005 USDT) found: true"
+      ]
+    },
+    {
+      "receiptId": "direct-2026-10-13T14-41-27-277Z",
+      "at": "2026-10-13T14:41:27.277Z",
+      "status": "CONFIRMED",
+      "service": "x.posts.search",
+      "serviceUrl": "https://gateway.usebuy.ai/v1/social/x/posts/search",
+      "amount": "0.005",
+      "token": "USDT",
+      "asset": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+      "payer": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4",
+      "payTo": "0x20faAca5F980E29639A0FCC6dcA6988E18ed333B",
+      "txHash": "0x57c3c046355dcd623efdcf1daa76b7cb8c46db87528a92116afa379d290f57fe",
+      "explorerUrl": "https://celoscan.io/tx/0x57c3c046355dcd623efdcf1daa76b7cb8c46db87528a92116afa379d290f57fe",
+      "orderId": "b5660887-a162-4116-ab65-c2a86512a7c6",
+      "settlementAuthorizationState": "settled",
+      "transferVerified": true,
+      "httpStatus": 200,
+      "delivered": true,
+      "responseSha256": "08d00251fe2226a89174efc8fbe1a7ec70fe2bdb1c8f2f516df11de5bdd8ff04",
+      "responseFile": "responses/direct-2026-10-13T14-41-27-277Z.body",
+      "responseSummary": "JSON keys [capability, transaction, payment, provider, upstreamRunId, resultCount, output]; output: object; 48403 bytes",
+      "notes": [
+        "x402 settlement is submitted by the facilitator and carries no attribution tag; the organizers confirmed none is needed for Buy",
+        "LIVE RE-VERIFICATION 2026-10-13T23:39:28.107Z: receipt success, block 80001720, confirmed by 2 endpoint(s), Transfer(payer -> payTo, 0.005 USDT) found: true",
+        "RESPONSE FILE CHECK: sha256 of responses/direct-2026-10-13T14-41-27-277Z.body recomputed and matches the receipt"
+      ]
+    }
+  ],
+  "swaps": [
+    {
+      "planId": "3d0e5d35-768d-4e23-a5bb-d26f8dd0a7c0",
+      "at": "2026-10-13T04:00:11.246Z",
+      "state": "CONFIRMED",
+      "code": "CONFIRMED_BY_REVERIFICATION",
+      "provider": "mento-router-v3",
+      "route": "USDm -> USDT",
+      "requestedSell": "1015267685224275700",
+      "received": "1016308",
+      "sellSymbol": "USDm",
+      "buySymbol": "USDT",
+      "transactions": [
+        {
+          "kind": "approve",
+          "to": "0x765DE816845861e75A25fCA122bb6898B8B1282a",
+          "hash": "0xbe28a28915b7da5772cce9eb38121ebc472ea6d3dbddb9a7c223cdb2b4a80159",
+          "explorerUrl": "https://celoscan.io/tx/0xbe28a28915b7da5772cce9eb38121ebc472ea6d3dbddb9a7c223cdb2b4a80159",
+          "mined": true,
+          "attributionVerified": true,
+          "attributionCodes": [
+            "celo_b2fff2ac9413"
+          ]
+        },
+        {
+          "kind": "swap",
+          "to": "0x4861840C2EfB2b98312B0aE34d86fD73E8f9B6f6",
+          "hash": "0xa935302cf2629db8b9b12003aba76e8986d5b69ca25af23ec25672b97847d953",
+          "explorerUrl": "https://celoscan.io/tx/0xa935302cf2629db8b9b12003aba76e8986d5b69ca25af23ec25672b97847d953",
+          "mined": true,
+          "attributionVerified": true,
+          "attributionCodes": [
+            "celo_b2fff2ac9413"
+          ]
+        }
+      ],
+      "notes": [
+        "reconciliation: sell balance change 0 vs logged 1015267685224275700; buy balance change 0 vs logged 1016308",
+        "exact-block reconciliation at block 79963010: sell 1015267685224275700 -> 0 (logged 1015267685224275700); buy 624915 -> 1641223 (logged 1016308)"
+      ]
+    },
+    {
+      "planId": "1d93f12e-a882-4b18-84fa-b0c8d77d5148",
+      "at": "2026-10-13T04:01:37.903Z",
+      "state": "FAILED",
+      "code": "QUOTE_INVALID",
+      "provider": "textile-fx-v2",
+      "route": "USDT -> cNGN",
+      "requestedSell": "1000000",
+      "received": null,
+      "sellSymbol": "USDT",
+      "buySymbol": "cNGN",
+      "transactions": [
+        {
+          "kind": "approve",
+          "to": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+          "hash": "0xf862f1b78a64d0451c214d72efdf018baa41ebb58aac3c320f045f88df1c103b",
+          "explorerUrl": "https://celoscan.io/tx/0xf862f1b78a64d0451c214d72efdf018baa41ebb58aac3c320f045f88df1c103b",
+          "mined": true,
+          "attributionVerified": true,
+          "attributionCodes": [
+            "celo_b2fff2ac9413"
+          ]
+        }
+      ],
+      "notes": []
+    },
+    {
+      "planId": "17cca772-f930-4769-b576-cd213a342d55",
+      "at": "2026-10-13T04:06:58.836Z",
+      "state": "FAILED",
+      "code": "QUOTE_INVALID",
+      "provider": "textile-fx-v2",
+      "route": "USDT -> cNGN",
+      "requestedSell": "1000000",
+      "received": null,
+      "sellSymbol": "USDT",
+      "buySymbol": "cNGN",
+      "transactions": [],
+      "notes": []
+    },
+    {
+      "planId": "c82c0ccf-24b8-40e2-8b86-3e5ade49815b",
+      "at": "2026-10-13T04:10:41.265Z",
+      "state": "CONFIRMED",
+      "code": "CONFIRMED",
+      "provider": "textile-fx-v2",
+      "route": "USDT -> cNGN",
+      "requestedSell": "1000000",
+      "received": "1365928991",
+      "sellSymbol": "USDT",
+      "buySymbol": "cNGN",
+      "transactions": [
+        {
+          "kind": "swap",
+          "to": "0xa9AA0a64769cBed4d3B1Ceb4Df01CdE915C235b3",
+          "hash": "0xab592f83fe659607fff8c8892373c89bb396348028761fa8844c42f82a1d1c0c",
+          "explorerUrl": "https://celoscan.io/tx/0xab592f83fe659607fff8c8892373c89bb396348028761fa8844c42f82a1d1c0c",
+          "mined": true,
+          "attributionVerified": true,
+          "attributionCodes": [
+            "celo_b2fff2ac9413"
+          ]
+        }
+      ],
+      "notes": [
+        "order restricts fillers (PreferredFillerValidation): 1 preferred, exclusive until 2026-10-13T04:12:03.000Z",
+        "reconciliation: sell balance change 1000000 vs logged 1000000; buy balance change 1365928991 vs logged 1365928991",
+        "Textile order status: filled"
+      ]
+    }
+  ],
+  "transactions": [
+    {
+      "seq": 1,
+      "classification": "real on-chain transaction",
+      "kind": "x402 payment",
+      "purpose": "Pay for the service x.posts.search through the x402 protocol",
+      "provider": "Buy gateway (x402, gateway.usebuy.ai)",
+      "token": "USDT",
+      "amount": "0.005",
+      "hash": "0xfb012c514207add68399c8c575d89e9c352c94ac8131378d8e1ffa233f8217ac",
+      "explorerUrl": "https://celoscan.io/tx/0xfb012c514207add68399c8c575d89e9c352c94ac8131378d8e1ffa233f8217ac",
+      "to": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+      "roles": [
+        {
+          "role": "payer (signed the payment authorization)",
+          "address": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4"
+        },
+        {
+          "role": "payTo (recipient of the stablecoin transfer)",
+          "address": "0x20faAca5F980E29639A0FCC6dcA6988E18ed333B"
+        },
+        {
+          "role": "transaction submitter",
+          "address": "the gateway/facilitator; shown as tx.from when verified on-chain"
+        }
+      ],
+      "journalSettlement": "authorization settled; Transfer(payer -> payTo) found: true; receipt status CONFIRMED",
+      "attribution": {
+        "applicable": false,
+        "journalVerified": null,
+        "codes": null,
+        "note": "x402 settlements are submitted by the facilitator; attribution tags are not yet supported by x402 and the organizers confirmed none is needed for Buy"
+      },
+      "origin": "payment receipt",
+      "onChain": {
+        "checkedAt": "2026-10-13T23:39:28.108Z",
+        "found": true,
+        "status": "success",
+        "blockNumber": "79920194",
+        "from": "0x0d74D5Cefd2e7F24E623330ebE3d8D4cB45fFB48",
+        "to": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+        "attributionCodes": null,
+        "decoded": null,
+        "transfers": [
+          {
+            "token": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+            "from": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4",
+            "to": "0x20faAca5F980E29639A0FCC6dcA6988E18ed333B",
+            "value": "5000"
+          }
+        ],
+        "notes": [
+          "submitted by 0x0d74D5Cefd2e7F24E623330ebE3d8D4cB45fFB48 (not the Payrail wallet), as expected for a gateway-sponsored x402 settlement"
+        ]
+      }
+    },
+    {
+      "seq": 2,
+      "classification": "real on-chain transaction",
+      "kind": "approve",
+      "purpose": "Approve USDm for the mento-router-v3 contract so USDm -> USDT can be converted",
+      "provider": "mento-router-v3",
+      "token": "USDm",
+      "amount": "1.0152676852242757",
+      "hash": "0xbe28a28915b7da5772cce9eb38121ebc472ea6d3dbddb9a7c223cdb2b4a80159",
+      "explorerUrl": "https://celoscan.io/tx/0xbe28a28915b7da5772cce9eb38121ebc472ea6d3dbddb9a7c223cdb2b4a80159",
+      "to": "0x765DE816845861e75A25fCA122bb6898B8B1282a",
+      "roles": [
+        {
+          "role": "sender / signer (Payrail wallet)",
+          "address": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4"
+        },
+        {
+          "role": "called contract (token)",
+          "address": "0x765DE816845861e75A25fCA122bb6898B8B1282a"
+        }
+      ],
+      "journalSettlement": "mined; conversion state CONFIRMED; received 1016308 atomic",
+      "attribution": {
+        "applicable": true,
+        "journalVerified": true,
+        "codes": [
+          "celo_b2fff2ac9413"
+        ],
+        "note": "Payrail submitted this transaction itself, so it carries the ERC-8021 tag"
+      },
+      "origin": "confirmed conversion",
+      "onChain": {
+        "checkedAt": "2026-10-13T23:39:29.763Z",
+        "found": true,
+        "status": "success",
+        "blockNumber": "79963003",
+        "from": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4",
+        "to": "0x765DE816845861e75A25fCA122bb6898B8B1282a",
+        "attributionCodes": [
+          "celo_b2fff2ac9413"
+        ],
+        "decoded": "approve(spender 0x4861840C2EfB2b98312B0aE34d86fD73E8f9B6f6, amount 1015267685224275700 atomic)",
+        "transfers": [],
+        "notes": []
+      }
+    },
+    {
+      "seq": 3,
+      "classification": "real on-chain transaction",
+      "kind": "swap",
+      "purpose": "Convert USDm -> USDT through mento-router-v3",
+      "provider": "mento-router-v3",
+      "token": "USDm",
+      "amount": "1.0152676852242757",
+      "hash": "0xa935302cf2629db8b9b12003aba76e8986d5b69ca25af23ec25672b97847d953",
+      "explorerUrl": "https://celoscan.io/tx/0xa935302cf2629db8b9b12003aba76e8986d5b69ca25af23ec25672b97847d953",
+      "to": "0x4861840C2EfB2b98312B0aE34d86fD73E8f9B6f6",
+      "roles": [
+        {
+          "role": "sender / signer (Payrail wallet)",
+          "address": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4"
+        },
+        {
+          "role": "called contract (venue)",
+          "address": "0x4861840C2EfB2b98312B0aE34d86fD73E8f9B6f6"
+        }
+      ],
+      "journalSettlement": "mined; conversion state CONFIRMED; received 1016308 atomic",
+      "attribution": {
+        "applicable": true,
+        "journalVerified": true,
+        "codes": [
+          "celo_b2fff2ac9413"
+        ],
+        "note": "Payrail submitted this transaction itself, so it carries the ERC-8021 tag"
+      },
+      "origin": "confirmed conversion",
+      "onChain": {
+        "checkedAt": "2026-10-13T23:39:30.867Z",
+        "found": true,
+        "status": "success",
+        "blockNumber": "79963010",
+        "from": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4",
+        "to": "0x4861840C2EfB2b98312B0aE34d86fD73E8f9B6f6",
+        "attributionCodes": [
+          "celo_b2fff2ac9413"
+        ],
+        "decoded": null,
+        "transfers": [
+          {
+            "token": "0x765DE816845861e75A25fCA122bb6898B8B1282a",
+            "from": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4",
+            "to": "0x0FEBa760d93423D127DE1B6ABECdB60E5253228D",
+            "value": "1015267685224275700"
+          },
+          {
+            "token": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+            "from": "0x0FEBa760d93423D127DE1B6ABECdB60E5253228D",
+            "to": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4",
+            "value": "1016308"
+          }
+        ],
+        "notes": []
+      }
+    },
+    {
+      "seq": 4,
+      "classification": "real on-chain transaction",
+      "kind": "approve",
+      "purpose": "Approve USDT for the textile-fx-v2 contract so USDT -> cNGN can be converted (the attempt it belonged to ended FAILED/QUOTE_INVALID before any swap was sent)",
+      "provider": "textile-fx-v2",
+      "token": "USDT",
+      "amount": "1",
+      "hash": "0xf862f1b78a64d0451c214d72efdf018baa41ebb58aac3c320f045f88df1c103b",
+      "explorerUrl": "https://celoscan.io/tx/0xf862f1b78a64d0451c214d72efdf018baa41ebb58aac3c320f045f88df1c103b",
+      "to": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+      "roles": [
+        {
+          "role": "sender / signer (Payrail wallet)",
+          "address": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4"
+        },
+        {
+          "role": "called contract (token)",
+          "address": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e"
+        }
+      ],
+      "journalSettlement": "mined; conversion state FAILED",
+      "attribution": {
+        "applicable": true,
+        "journalVerified": true,
+        "codes": [
+          "celo_b2fff2ac9413"
+        ],
+        "note": "Payrail submitted this transaction itself, so it carries the ERC-8021 tag"
+      },
+      "origin": "stopped attempt (FAILED/QUOTE_INVALID); no swap was sent",
+      "onChain": {
+        "checkedAt": "2026-10-13T23:39:36.337Z",
+        "found": true,
+        "status": "success",
+        "blockNumber": "79963336",
+        "from": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4",
+        "to": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+        "attributionCodes": [
+          "celo_b2fff2ac9413"
+        ],
+        "decoded": "approve(spender 0xa9AA0a64769cBed4d3B1Ceb4Df01CdE915C235b3, amount 1000000 atomic)",
+        "transfers": [],
+        "notes": []
+      }
+    },
+    {
+      "seq": 5,
+      "classification": "real on-chain transaction",
+      "kind": "swap",
+      "purpose": "Convert USDT -> cNGN through textile-fx-v2",
+      "provider": "textile-fx-v2",
+      "token": "USDT",
+      "amount": "1",
+      "hash": "0xab592f83fe659607fff8c8892373c89bb396348028761fa8844c42f82a1d1c0c",
+      "explorerUrl": "https://celoscan.io/tx/0xab592f83fe659607fff8c8892373c89bb396348028761fa8844c42f82a1d1c0c",
+      "to": "0xa9AA0a64769cBed4d3B1Ceb4Df01CdE915C235b3",
+      "roles": [
+        {
+          "role": "sender / signer (Payrail wallet)",
+          "address": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4"
+        },
+        {
+          "role": "called contract (venue)",
+          "address": "0xa9AA0a64769cBed4d3B1Ceb4Df01CdE915C235b3"
+        }
+      ],
+      "journalSettlement": "mined; conversion state CONFIRMED; received 1365928991 atomic",
+      "attribution": {
+        "applicable": true,
+        "journalVerified": true,
+        "codes": [
+          "celo_b2fff2ac9413"
+        ],
+        "note": "Payrail submitted this transaction itself, so it carries the ERC-8021 tag"
+      },
+      "origin": "confirmed conversion",
+      "onChain": {
+        "checkedAt": "2026-10-13T23:39:37.982Z",
+        "found": true,
+        "status": "success",
+        "blockNumber": "79963880",
+        "from": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4",
+        "to": "0xa9AA0a64769cBed4d3B1Ceb4Df01CdE915C235b3",
+        "attributionCodes": [
+          "celo_b2fff2ac9413"
+        ],
+        "decoded": null,
+        "transfers": [
+          {
+            "token": "0xF6829D7393dAe24509eb1E52eE8e572e2E271a4f",
+            "from": "0x25A5c1Ae633eB3e1988CfdEed07CdbD2E998AB52",
+            "to": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4",
+            "value": "1365928991"
+          },
+          {
+            "token": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+            "from": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4",
+            "to": "0x25A5c1Ae633eB3e1988CfdEed07CdbD2E998AB52",
+            "value": "999901"
+          },
+          {
+            "token": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+            "from": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4",
+            "to": "0x51727A09b55d56BF8f3CBe61f460327330aECbA4",
+            "value": "99"
+          }
+        ],
+        "notes": []
+      }
+    },
+    {
+      "seq": 6,
+      "classification": "real on-chain transaction",
+      "kind": "x402 payment",
+      "purpose": "Pay for the service x.posts.search through the x402 protocol",
+      "provider": "Buy gateway (x402, gateway.usebuy.ai)",
+      "token": "USDT",
+      "amount": "0.005",
+      "hash": "0x57c3c046355dcd623efdcf1daa76b7cb8c46db87528a92116afa379d290f57fe",
+      "explorerUrl": "https://celoscan.io/tx/0x57c3c046355dcd623efdcf1daa76b7cb8c46db87528a92116afa379d290f57fe",
+      "to": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+      "roles": [
+        {
+          "role": "payer (signed the payment authorization)",
+          "address": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4"
+        },
+        {
+          "role": "payTo (recipient of the stablecoin transfer)",
+          "address": "0x20faAca5F980E29639A0FCC6dcA6988E18ed333B"
+        },
+        {
+          "role": "transaction submitter",
+          "address": "the gateway/facilitator; shown as tx.from when verified on-chain"
+        }
+      ],
+      "journalSettlement": "authorization settled; Transfer(payer -> payTo) found: true; receipt status CONFIRMED",
+      "attribution": {
+        "applicable": false,
+        "journalVerified": null,
+        "codes": null,
+        "note": "x402 settlements are submitted by the facilitator; attribution tags are not yet supported by x402 and the organizers confirmed none is needed for Buy"
+      },
+      "origin": "payment receipt",
+      "orderId": "b5660887-a162-4116-ab65-c2a86512a7c6",
+      "onChain": {
+        "checkedAt": "2026-10-13T23:39:39.568Z",
+        "found": true,
+        "status": "success",
+        "blockNumber": "80001720",
+        "from": "0x0d74D5Cefd2e7F24E623330ebE3d8D4cB45fFB48",
+        "to": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+        "attributionCodes": null,
+        "decoded": null,
+        "transfers": [
+          {
+            "token": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+            "from": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4",
+            "to": "0x20faAca5F980E29639A0FCC6dcA6988E18ed333B",
+            "value": "5000"
+          }
+        ],
+        "notes": [
+          "submitted by 0x0d74D5Cefd2e7F24E623330ebE3d8D4cB45fFB48 (not the Payrail wallet), as expected for a gateway-sponsored x402 settlement"
+        ]
+      }
+    },
+    {
+      "seq": 7,
+      "classification": "real on-chain transaction",
+      "kind": "erc8004 registration",
+      "purpose": "Register the Payrail agent identity on the ERC-8004 Identity Registry (agent ID 9906)",
+      "provider": "ERC-8004 Identity Registry (Celo mainnet)",
+      "token": "CELO (gas only)",
+      "amount": "0",
+      "hash": "0xf654ea5f5286e0a53a1412a7769b48ef38742134d98bd0a7c6938089126cab1b",
+      "explorerUrl": "https://celoscan.io/tx/0xf654ea5f5286e0a53a1412a7769b48ef38742134d98bd0a7c6938089126cab1b",
+      "to": "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432",
+      "roles": [
+        {
+          "role": "sender / owner of the agent identity (Payrail wallet)",
+          "address": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4"
+        },
+        {
+          "role": "called contract (Identity Registry)",
+          "address": "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432"
+        }
+      ],
+      "journalSettlement": "CONFIRMED; block 80032609; agent ID 9906; owner verified: 0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4; stored tokenURI matches: true",
+      "attribution": {
+        "applicable": true,
+        "journalVerified": true,
+        "codes": [
+          "celo_b2fff2ac9413"
+        ],
+        "note": "Payrail submitted this transaction itself, so it carries the ERC-8021 tag"
+      },
+      "origin": "agent identity registration",
+      "onChain": {
+        "checkedAt": "2026-10-13T23:39:41.411Z",
+        "found": true,
+        "status": "success",
+        "blockNumber": "80032609",
+        "from": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4",
+        "to": "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432",
+        "attributionCodes": [
+          "celo_b2fff2ac9413"
+        ],
+        "decoded": null,
+        "transfers": [],
+        "notes": []
+      }
+    }
+  ],
+  "orders": [
+    {
+      "orderId": "b5660887-a162-4116-ab65-c2a86512a7c6",
+      "at": "2026-10-13T14:41:27.446Z",
+      "state": "COMPLETED",
+      "code": "COMPLETED",
+      "service": "x.posts.search",
+      "serviceProvider": "buy-gateway",
+      "route": "direct",
+      "approved": {
+        "symbol": "USDT",
+        "amountAtomic": "5000",
+        "payTo": "0x20faAca5F980E29639A0FCC6dcA6988E18ed333B",
+        "planDigest": "c21d6495285092f51c72f42456ed006b272a647bfa44ac5b6b9523b01b0a8291",
+        "approvedBy": null
+      },
+      "conversion": null,
+      "payment": {
+        "status": "CONFIRMED",
+        "receiptId": "direct-2026-10-13T14-41-27-277Z",
+        "txHash": "0x57c3c046355dcd623efdcf1daa76b7cb8c46db87528a92116afa379d290f57fe",
+        "delivered": true,
+        "httpStatus": 200,
+        "responseSha256": "08d00251fe2226a89174efc8fbe1a7ec70fe2bdb1c8f2f516df11de5bdd8ff04",
+        "responseFile": "responses/direct-2026-10-13T14-41-27-277Z.body"
+      },
+      "ledger": [
+        6
+      ],
+      "needsAttention": false,
+      "consistency": [
+        "payment tx matches receipt direct-2026-10-13T14-41-27-277Z (CONFIRMED)"
+      ],
+      "onChainVerified": true
+    }
+  ],
+  "unresolved": [],
+  "warnings": [],
+  "notes": [
+    "Payment proof = the Transfer(payer -> payTo) in the settlement transaction, plus the independent on-chain authorization state.",
+    "x402 settlements are submitted by the facilitator; attribution tags are not yet supported by x402 and the organizers confirmed none is needed for Buy.",
+    "Transactions Payrail submits itself (approvals and swaps) carry the official ERC-8021 tag and are verified with Celo's verifyTx; see the swaps section.",
+    "The automated test suite (npm test) uses mocks and fakes only. It sends nothing and is NOT evidence of on-chain activity; only the transactions in the ledger are real."
+  ]
+}

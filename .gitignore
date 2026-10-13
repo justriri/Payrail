@@ -1,0 +1,39 @@
+# ---- dependencies and logs
+node_modules/
+*.log
+
+# ---- SECRETS: environment files (only the example is tracked) and anything that looks like key material
+.env
+.env.*
+!.env.example
+*.env
+!.env.example
+*.pem
+*.key
+*.keystore
+*.p12
+keystore*
+wallet*.json
+mnemonic*
+seed*
+secrets/
+credentials.json
+.payrail/
+.loops/
+
+# ---- runtime state written by Payrail (local records, locks, journals, saved third-party responses)
+# These are NOT source. Evidence is summarised in evidence/ instead.
+receipts/
+
+# ---- tools that store local sessions, caches or third-party instruction files
+.claude/
+.agents/
+.vscode/
+.idea/
+
+# ---- OS / sync artefacts
+.DS_Store
+Thumbs.db
+desktop.ini
+~$*
+*.tmp
