@@ -11,7 +11,12 @@
 <body>
   <header>
     <h1>Payrail</h1>
-    <p class="tagline">Paste an API address. Pay with the money you already hold. Get the response. <a href="/market.html">Marketplace (test credits)</a></p>
+    <nav class="tabs" role="tablist" aria-label="Marketplace mode">
+      <a id="tab-buyer" class="tab active" role="tab" href="/market.html#/buyer" aria-selected="true"><span class="tab-title">Buyer</span><span class="tab-sub">Browse, run, pay</span></a>
+      <a id="tab-seller" class="tab" role="tab" href="/market.html#/seller" aria-selected="false"><span class="tab-title">Seller</span><span class="tab-sub">List, verify, earn</span></a>
+    </nav>
+    <p id="mode-line" class="mode-line">You are in Buyer mode: paying with your wallet</p>
+    <p class="tagline">Paste an API address. Pay with the money you already hold. Get the response. <a href="/market.html#/buyer">Back to the marketplace</a></p>
     <div id="banner" class="banner" hidden></div>
     <form id="unlock" class="row" hidden autocomplete="off">
       <input id="unlock-pass" type="password" placeholder="Keystore passphrase" autocomplete="current-password" aria-label="Keystore passphrase">

@@ -45,3 +45,4 @@ data/
 *.db-shm
 contracts/out/
 contracts/cache/
+data-serve.log

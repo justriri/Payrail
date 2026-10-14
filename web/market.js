@@ -410,8 +410,32 @@ function listingPanel(l, box) {
   return p;
 }
 
+
+// ------------------------------------------------------------------ Buyer / Seller tabs
+function currentView() { return /^#\/?seller$/.test(location.hash) ? 'seller' : 'buyer'; }
+function applyView() {
+  const v = currentView();
+  for (const sec of document.querySelectorAll('main [data-view]')) {
+    // the run card is also hidden until a service is chosen; keep that rule
+    const forceHidden = sec.id === 'run-card' && !selected;
+    sec.hidden = sec.dataset.view !== v || forceHidden;
+  }
+  for (const name of ['buyer', 'seller']) {
+    const t = $(`tab-${name}`);
+    t.classList.toggle('active', name === v);
+    t.setAttribute('aria-selected', name === v ? 'true' : 'false');
+  }
+  $('mode-line').textContent = v === 'buyer' ? 'You are in Buyer mode: browse services, run requests and manage test credits.' : 'You are in Seller mode: list APIs, verify ownership, set contracts and track earnings.';
+  document.body.dataset.mode = v;
+  window.scrollTo(0, 0);
+  document.title = `Payrail ${v === 'buyer' ? 'Buyer' : 'Seller'}`;
+  if (v === 'seller') renderSeller();
+}
+window.addEventListener('hashchange', applyView);
+
 $('q').addEventListener('input', () => { clearTimeout(window.__t); window.__t = setTimeout(loadCatalog, 250); });
 (async () => {
   await loadConfig();
   loadCatalog(); renderBuyer(); renderHistory(); renderAgents(); renderEscrow(); renderFunding(); renderSeller();
+  applyView();
 })();
