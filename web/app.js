@@ -44,9 +44,19 @@ function showBanner(mode, signing) {
     b.className = 'banner live';
     b.textContent = signing
       ? 'LIVE: payments use real funds on Celo mainnet, within your spending limits.'
-      : 'LIVE (read-only): you can inspect services and quotes. Payments are disabled until the server is started with a wallet key.';
+      : 'LIVE (read-only): you can inspect services and quotes. Payments are disabled until you unlock with your keystore passphrase (or start the server with a wallet key).';
   }
 }
+
+$('unlock').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const pass = $('unlock-pass').value;
+  $('unlock-pass').value = '';
+  $('unlock-msg').textContent = 'Unlocking…';
+  const { data } = await api('/api/unlock', { passphrase: pass });
+  $('unlock-msg').textContent = data.ok ? 'Unlocked. Payments are enabled for this session.' : (data.problems?.[0]?.message || 'Could not unlock.');
+  if (data.ok) loadWallet();
+});
 
 async function loadWallet() {
   const { data } = await api('/api/status');
@@ -54,6 +64,7 @@ async function loadWallet() {
   clear(w);
   if (!data.ok) { w.textContent = 'Could not read your wallet right now.'; return; }
   showBanner(data.mode, data.signing);
+  $('unlock').hidden = !(data.canUnlock);
   w.append(el('p', {}, 'Address: ', el('code', { text: data.wallet })));
   const t = el('table');
   for (const b of data.balances) t.append(el('tr', {}, el('td', { text: b.symbol }), el('td', { class: 'v', text: b.amount })));

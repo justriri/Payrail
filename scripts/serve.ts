@@ -12,6 +12,11 @@
 //
 // Options: --port <n> (default 4402).
 import { createServer } from 'node:http';
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { KeystoreError, decryptKey } from '../src/keystore.ts';
+import type { KeystoreFile } from '../src/keystore.ts';
 import { privateKeyToAccount } from 'viem/accounts';
 import { getTokenBalance } from '@celo/buy-core';
 import { ASSETS } from '../src/assets.ts';
@@ -73,7 +78,8 @@ if (args.includes('--simulate')) {
     process.exit(1);
   }
   const wallet = cfg.walletAddress;
-  const account = cfg.privateKey ? privateKeyToAccount(cfg.privateKey) : undefined;
+  let account = cfg.privateKey ? privateKeyToAccount(cfg.privateKey) : undefined;
+  const keystorePath = process.env.PAYRAIL_KEYSTORE ?? join(homedir(), '.payrail', 'keystore.json');
   const policy = policyFromEnv(process.env);
   const live = createLive(cfg, policy);
   // Real-funds marketplace is OFF unless explicitly enabled. Deposits are only ever credited after on-chain verification;
@@ -106,7 +112,25 @@ if (args.includes('--simulate')) {
   runtime = {
     mode: 'live',
     wallet,
-    signing: account !== undefined,
+    get signing() {
+      return account !== undefined;
+    },
+    signer: {
+      canUnlock: () => account === undefined && existsSync(keystorePath),
+      async unlock(passphrase) {
+        try {
+          const file = JSON.parse(readFileSync(keystorePath, 'utf8')) as KeystoreFile;
+          if (file.address.toLowerCase() !== wallet.toLowerCase()) return { ok: false, message: 'This keystore belongs to a different wallet than the one configured.' };
+          account = privateKeyToAccount(decryptKey(file, passphrase));
+          return { ok: true };
+        } catch (e) {
+          return { ok: false, message: e instanceof KeystoreError && e.code === 'BAD_PASSPHRASE' ? 'Wrong passphrase.' : 'The keystore could not be opened.' };
+        }
+      },
+      lock() {
+        account = undefined;
+      },
+    },
     attributionTag: cfg.attributionTag,
     chainId: cfg.chainId,
     policy,

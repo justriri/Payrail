@@ -13,6 +13,11 @@
     <h1>Payrail</h1>
     <p class="tagline">Paste an API address. Pay with the money you already hold. Get the response. <a href="/market.html">Marketplace (test credits)</a></p>
     <div id="banner" class="banner" hidden></div>
+    <form id="unlock" class="row" hidden autocomplete="off">
+      <input id="unlock-pass" type="password" placeholder="Keystore passphrase" autocomplete="current-password" aria-label="Keystore passphrase">
+      <button type="submit">Unlock payments</button>
+      <span id="unlock-msg" class="muted" role="status"></span>
+    </form>
   </header>
 
   <main>

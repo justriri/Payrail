@@ -22,6 +22,7 @@ import { ASSETS, assetBySymbol, microUsd } from './assets.ts';
 import type { Asset } from './assets.ts';
 import { searchServices } from './catalog.ts';
 import { handleMarket } from './market.ts';
+import { RateLimiter } from './egress.ts';
 import type { MarketRuntime } from './market.ts';
 import type { Catalog, Service } from './catalog.ts';
 import { executeOrder, loadOrder, planOrder, reconcileOrder, resumeOrder } from './orchestrator.ts';
@@ -55,6 +56,12 @@ export interface WebRuntime {
   orderDeps(opts: { bounds?: ApprovalBounds; log?: (line: string) => void; /** the exact request body being paid for */ body?: string }): OrderDeps;
   now(): number;
   explorerTx(hash: string): string;
+  /** Optional: unlock the signing key from an encrypted keystore with a passphrase, entirely inside this process. */
+  signer?: {
+    canUnlock(): boolean;
+    unlock(passphrase: string): Promise<{ ok: true } | { ok: false; message: string }>;
+    lock(): void;
+  };
 }
 
 // ------------------------------------------------------------------ view models
@@ -358,6 +365,7 @@ export function createWebApp(rt: WebRuntime) {
       mode: rt.mode,
       wallet: rt.wallet,
       signing: rt.signing,
+      canUnlock: !rt.signing && rt.signer?.canUnlock() === true,
       chainId: rt.chainId,
       attributionTag: rt.attributionTag,
       balances: [...tokens, { symbol: 'CELO', amount: human(b.nativeWei, 18), decimals: 18 }],
@@ -733,6 +741,7 @@ const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.j
 /** A local-only HTTP server. Bound to 127.0.0.1; state-changing calls need a per-run token and a same-origin Origin. */
 export function createWebServer(rt: WebRuntime, opts: { webDir?: string; token?: string; market?: MarketRuntime } = {}): { server: Server; token: string; app: WebApp } {
   const app = createWebApp(rt);
+  const unlockLimiter = new RateLimiter(5, 5 / 60);
   const token = opts.token ?? randomBytes(24).toString('hex');
   const dir = opts.webDir ?? WEB_DIR;
 
@@ -830,6 +839,19 @@ export function createWebServer(rt: WebRuntime, opts: { webDir?: string; token?:
         const body = await readJson(req);
         if (!body) return send(res, 400, { ok: false, problems: [{ code: 'BAD_REQUEST', message: 'Send a small JSON body.' }] });
         const s = (v: unknown) => (typeof v === 'string' ? v : undefined);
+
+        if (url.pathname === '/api/unlock') {
+          if (!rt.signer || !rt.signer.canUnlock()) return send(res, 409, { ok: false, problems: [{ code: 'NO_KEYSTORE', message: 'No keystore is available. Create one with scripts/keystore.ts.' }] });
+          if (!unlockLimiter.take('unlock')) return send(res, 429, { ok: false, problems: [{ code: 'TOO_MANY_ATTEMPTS', message: 'Too many attempts. Wait a minute and try again.' }] });
+          const pass = typeof body.passphrase === 'string' ? body.passphrase : '';
+          if (pass.length < 1 || pass.length > 256) return send(res, 400, { ok: false, problems: [{ code: 'BAD_REQUEST', message: 'Enter your passphrase.' }] });
+          const r = await rt.signer.unlock(pass);
+          return r.ok ? send(res, 200, { ok: true, signing: rt.signing }) : send(res, 401, { ok: false, problems: [{ code: 'UNLOCK_FAILED', message: r.message }] });
+        }
+        if (url.pathname === '/api/lock') {
+          rt.signer?.lock();
+          return send(res, 200, { ok: true, signing: rt.signing });
+        }
 
         if (opts.market && url.pathname.startsWith('/api/market/')) {
           const bearer = /^Bearer (\S{20,200})$/.exec(String(req.headers.authorization ?? ''))?.[1];
