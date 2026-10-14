@@ -85,7 +85,7 @@ if (args.includes('--simulate')) {
       line('[STOP] PAYRAIL_MARKET_LIVE=1 needs PAYRAIL_DEPOSIT_ADDRESS (a 0x address you control).');
       process.exit(1);
     }
-    const cap = BigInt(Math.round(Number(process.env.PAYRAIL_MAX_DEPOSIT_USD ?? '25') * 1_000_000));
+    const cap = BigInt(Math.round(Number(process.env.PAYRAIL_MAX_DEPOSIT_USD ?? '5') * 1_000_000));
     liveMarket = {
       funding: {
         chainId: cfg.chainId,
