@@ -266,7 +266,7 @@ test('the marketplace page is served with the token and the static allow-list st
     const page = await fetch(h.base + '/market.html');
     const html = await page.text();
     assert.equal(page.status, 200);
-    assert.ok(html.includes('TEST CREDITS ONLY'));
+    assert.ok(html.includes('Payrail Marketplace'));
     assert.ok(html.includes('content="test-token"'));
     assert.ok(!html.includes('__PAYRAIL_TOKEN__'));
     assert.equal((await fetch(h.base + '/market.js')).status, 200);

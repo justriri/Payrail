@@ -313,3 +313,26 @@ export function unpublishListing(db: Db, actorId: string, listingId: string, now
   audit(db, actorId, 'listing.unpublished', listingId, undefined, new Date(now()));
   return getListing(db, listingId)!;
 }
+
+// ------------------------------------------------------------------ sandbox sellers (test-credit mode only)
+
+/**
+ * A seller account whose wallet key is derived server-side, so the whole flow can be tried in a browser with no wallet
+ * extension. The caller supplies the derived address. NEVER used with real funds: the HTTP layer refuses it when live.
+ */
+export function createSandboxSeller(db: Db, walletAddress: string, displayName: string, now: Clock = Date.now): { accountId: string; token: string; expiresAt: string } {
+  const w = wallet(walletAddress);
+  return inTransaction(db, () => {
+    let acct = queryOne(db, 'SELECT id FROM accounts WHERE wallet_address = ?', w);
+    if (!acct) {
+      const id = `seller_sbx_${randomUUID()}`;
+      db.prepare("INSERT INTO accounts (id, kind, display_name, created_at, wallet_address) VALUES (?, 'seller', ?, ?, ?)").run(id, displayName.slice(0, 120), iso(now), w);
+      audit(db, id, 'seller.sandbox_created', id, { wallet: w }, new Date(now()));
+      acct = { id };
+    }
+    const token = randomBytes(32).toString('base64url');
+    const expiresAt = new Date(now() + SESSION_TTL_MS).toISOString();
+    db.prepare('INSERT INTO sessions (token_hash, account_id, created_at, expires_at) VALUES (?, ?, ?, ?)').run(sha256(token), String(acct.id), iso(now), expiresAt);
+    return { accountId: String(acct.id), token, expiresAt };
+  });
+}

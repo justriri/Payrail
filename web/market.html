@@ -12,17 +12,19 @@
   <header>
     <h1>Payrail Marketplace</h1>
     <p class="tagline">Pay only for API responses that meet the written contract. <a href="/">Back to Pay (Buy gateway)</a></p>
-    <div class="banner" id="mode-banner">TEST CREDITS ONLY — no real money moves in the marketplace. The Buy payment flow is separate and unchanged.</div>
+    <div class="banner" id="mode-banner">Loading…</div>
+    <nav class="row" aria-label="Sections"><a href="#buyer-card">Buyer</a> <a href="#services-card">Services</a> <a href="#seller-card">Seller dashboard</a> <a href="#agents-card">Agents</a> <a href="#escrow-card">Escrow (testnet)</a></nav>
   </header>
 
   <main>
     <section class="card" id="buyer-card">
-      <h2>Buyer</h2>
+      <h2>Buyer: test credits</h2>
       <div id="buyer"></div>
     </section>
 
-    <section class="card">
+    <section class="card" id="services-card">
       <h2>Services</h2>
+      <details><summary>Where does each service come from?</summary><ul id="legend" class="legend"></ul></details>
       <div class="filters"><input id="q" type="search" placeholder="Search services" autocomplete="off"></div>
       <p id="cat-status" class="muted" role="status">Loading…</p>
       <div id="cat-list" class="cards"></div>
@@ -33,19 +35,36 @@
       <p id="run-terms" class="hint"></p>
       <label for="run-input">Input (JSON object)</label>
       <textarea id="run-input" rows="3" spellcheck="false">{}</textarea>
+      <p id="run-hint" class="muted"></p>
+      <label id="run-settle" class="check" hidden><input id="run-escrow" type="checkbox"> <span>Settle through the testnet escrow contract (Celo Sepolia, mock token) instead of the off-chain ledger</span></label>
       <div class="row"><button id="run-btn" type="button">Run and pay only if it qualifies</button><span id="run-msg" class="muted"></span></div>
       <div id="run-result"></div>
     </section>
 
     <section class="card">
       <h2>Your requests</h2>
-      <div id="history" class="muted">Create a buyer first.</div>
+      <div id="history" class="muted">Start testing first.</div>
     </section>
 
     <section class="card" id="seller-card">
-      <h2>Seller</h2>
-      <p class="hint">Sign in by signing a short message with your wallet. Nothing is sent on-chain and no key is ever pasted here. Seller credentials are encrypted and are never shown again.</p>
+      <h2>Seller dashboard</h2>
+      <p class="hint">Credentials are encrypted and never shown again. Nothing here moves real money.</p>
       <div id="seller"></div>
+    </section>
+
+    <section class="card" id="agents-card">
+      <h2>AI agent access</h2>
+      <div id="agents"></div>
+    </section>
+
+    <section class="card" id="escrow-card">
+      <h2>Escrow settlement (testnet only)</h2>
+      <div id="escrow"></div>
+    </section>
+
+    <section class="card" id="funding-card">
+      <h2>Real funds</h2>
+      <div id="funding"></div>
     </section>
   </main>
   <script src="/market.js"></script>

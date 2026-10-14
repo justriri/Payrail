@@ -7,6 +7,8 @@
 //
 // scenario (failure injection): ok | stale | http500 | html | empty | wrongtype | missing | hang | badkey
 import type { Db } from './db.ts';
+import { lookup as dnsLookup, resolveTxt } from 'node:dns/promises';
+import { httpsTransport } from './egress.ts';
 import type { EgressRequest, EgressResponse, Resolver, Transport } from './egress.ts';
 import { createAccount } from './ledger.ts';
 import { putCredential } from './vault.ts';
@@ -136,4 +138,58 @@ export function seedDemo(db: Db, mk: MasterKey, now: () => number = Date.now): {
   const priceListingId = find(DEMO_PRICE_HOST) ?? make(DEMO_PRICE_HOST, '/v1/price', 'GET', 'Demo token price (fresh within 60s)', 'DEMO: a controlled in-process API. Returns a token price with a timestamp; stale or malformed answers are not charged.', 20_000n, PRICE_CONTRACT, true);
   const echoListingId = find(DEMO_ECHO_HOST) ?? make(DEMO_ECHO_HOST, '/v1/echo', 'POST', 'Demo text echo', 'DEMO: a controlled in-process API with failure injection (scenario input).', 5_000n, ECHO_CONTRACT, false);
   return { sellerId: seller, priceListingId, echoListingId };
+}
+
+// ------------------------------------------------------------------ sandbox network
+//
+// SANDBOX: any host ending in `.sandbox.payrail.example` is served IN-PROCESS by Payrail itself, so a seller can walk the
+// whole listing flow in a browser without owning a domain. Because Payrail serves both the API and the verification
+// token for these hosts, a sandbox verification proves NOTHING about real ownership and is labelled as such. Every other
+// host is passed through to the real resolver/transport unchanged (and is still subject to all egress checks).
+export const SANDBOX_SUFFIX = '.sandbox.payrail.example';
+const SANDBOX_HOST = /^[a-z0-9]([a-z0-9-]{0,40}[a-z0-9])?\.sandbox\.payrail\.example$/;
+export const isSandboxHost = (h: string): boolean => SANDBOX_HOST.test(h);
+
+function challengeToken(db: Db, host: string): string | undefined {
+  const r = db
+    .prepare('SELECT c.token AS token FROM ownership_challenges c JOIN listings l ON l.id = c.listing_id WHERE l.host = ? ORDER BY c.created_at DESC LIMIT 1')
+    .get(host) as { token: string } | undefined;
+  return r?.token;
+}
+
+export function createSandboxNetwork(db: Db, now: () => number = Date.now): { resolver: Resolver; transport: Transport; txt: (name: string) => Promise<string[][]> } {
+  const resolver: Resolver = async (host) => {
+    if (isSandboxHost(host)) return [{ address: '93.184.216.34', family: 4 }];
+    if (host === DEMO_PRICE_HOST || host === DEMO_ECHO_HOST) return [{ address: '93.184.216.34', family: 4 }];
+    return (await dnsLookup(host, { all: true, verbatim: true })).map((a) => ({ address: a.address, family: a.family }));
+  };
+  const transport: Transport = async (r) => {
+    const demoHost = r.hostname === DEMO_PRICE_HOST || r.hostname === DEMO_ECHO_HOST;
+    if (!isSandboxHost(r.hostname) && !demoHost) return httpsTransport(r);
+    const path = r.path.split('?')[0];
+    let res: EgressResponse | typeof HANG;
+    if (demoHost) {
+      res = await demoHandler(r, now);
+    } else if (path === '/.well-known/payrail-verification.txt') {
+      const t = challengeToken(db, r.hostname);
+      res = t ? { status: 200, headers: { 'content-type': 'text/plain' }, body: Buffer.from(`payrail-verify=${t}`) } : json(404, { error: 'no listing for this host' });
+    } else if (path === '/v1/price') {
+      res = await demoHandler({ ...r, hostname: DEMO_PRICE_HOST, headers: { ...r.headers, 'x-api-key': DEMO_PRICE_KEY } }, now);
+    } else if (path === '/v1/echo') {
+      res = await demoHandler({ ...r, hostname: DEMO_ECHO_HOST }, now);
+    } else {
+      res = json(404, { error: 'sandbox serves /v1/price and /v1/echo' });
+    }
+    if (res === HANG) return new Promise<EgressResponse>(() => undefined);
+    return res;
+  };
+  const txt = async (name: string): Promise<string[][]> => {
+    const m = /^_payrail-challenge\.(.+)$/.exec(name);
+    if (m && isSandboxHost(m[1]!)) {
+      const t = challengeToken(db, m[1]!);
+      return t ? [[`payrail-verify=${t}`]] : [];
+    }
+    return resolveTxt(name);
+  };
+  return { resolver, transport, txt };
 }

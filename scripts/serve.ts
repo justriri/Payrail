@@ -30,7 +30,8 @@ import type { OrderDeps } from '../src/orchestrator.ts';
 import { planPayment } from '../src/planner.ts';
 import { policyFromEnv } from '../src/policy.ts';
 import { runAmmSwap, runSwap } from '../src/swapexec.ts';
-import { createDemoNetwork, seedDemo } from '../src/demoapis.ts';
+import { createDemoNetwork, createSandboxNetwork, seedDemo } from '../src/demoapis.ts';
+import { createTestnetEscrow } from '../src/escrowtestnet.ts';
 import { recoverExecutions } from '../src/execute.ts';
 import { openDb } from '../src/db.ts';
 import { createViemReader } from '../src/funding.ts';
@@ -207,7 +208,7 @@ if (args.includes('--simulate')) {
   line(account ? 'LIVE MODE: payments enabled (key loaded from the file you supplied; it is never shown).' : 'LIVE MODE (read-only): no key loaded, payments disabled.');
 }
 
-// ---- marketplace (TEST CREDITS ONLY; independent of the Buy payment flow above)
+// ---- marketplace (TEST CREDITS ONLY unless real-funds mode was explicitly enabled above; independent of the Buy flow)
 const dbPath = opt('market-db') ?? (args.includes('--simulate') ? ':memory:' : 'data/marketplace.db');
 const marketDb = openDb(dbPath);
 let vaultKey;
@@ -217,20 +218,43 @@ if (process.env.PAYRAIL_VAULT_KEY) {
   vaultKey = generateMasterKey('ephemeral');
   line('Marketplace vault key: none set (PAYRAIL_VAULT_KEY), using a temporary one. Seller credentials saved now cannot be read after a restart.');
 }
-const seeded = args.includes('--demo') || args.includes('--simulate');
+// demo APIs are labelled DEMO everywhere; turn them off with --no-demo
+const seeded = !args.includes('--no-demo');
 if (seeded) seedDemo(marketDb, vaultKey);
+const sandbox = createSandboxNetwork(marketDb);
 const demoNet = createDemoNetwork();
 const rec = recoverExecutions(marketDb, { staleHeldMs: 5 * 60_000, unresolvedMs: 60 * 60_000 });
 if (rec.interrupted || rec.released) line(`Marketplace recovery: ${rec.interrupted} interrupted call(s) marked unresolved, ${rec.released} released to buyers.`);
+
+// Testnet escrow (Celo Sepolia, mock token). Only with --escrow-testnet AND the testnet deployer key loaded.
+let escrow: MarketRuntime['escrow'];
+if (args.includes('--escrow-testnet')) {
+  const k = process.env.TESTNET_DEPLOYER_KEY;
+  if (!k || !/^0x[0-9a-fA-F]{64}$/.test(k)) {
+    line('[STOP] --escrow-testnet needs TESTNET_DEPLOYER_KEY (load it with --env-file=<testnet-deployer.env>).');
+    process.exit(1);
+  }
+  escrow = createTestnetEscrow({ operatorKey: k as `0x${string}` });
+  line(`Testnet escrow enabled: ${escrow.testnet!.escrow} on Celo Sepolia (mock token, no real value).`);
+}
+const limiter = () => new RateLimiter(60, 10);
 const market: MarketRuntime = {
   db: marketDb,
   keys: [vaultKey],
   activeKey: vaultKey,
-  execute: { demoCall: { limiter: new RateLimiter(60, 10), fetchOptions: { resolver: demoNet.resolver, transport: demoNet.transport, timeoutMs: 3_000 } } },
+  sandbox: !liveMarket,
+  buySimulated: args.includes('--simulate'),
+  execute: {
+    call: { limiter: limiter(), fetchOptions: { resolver: sandbox.resolver, transport: sandbox.transport, timeoutMs: 8_000 } },
+    demoCall: { limiter: limiter(), fetchOptions: { resolver: demoNet.resolver, transport: demoNet.transport, timeoutMs: 3_000 } },
+  },
+  testCall: { limiter: limiter(), fetchOptions: { resolver: sandbox.resolver, transport: sandbox.transport, timeoutMs: 8_000 } },
+  domain: { txt: sandbox.txt, fetchOptions: { resolver: sandbox.resolver, transport: sandbox.transport } },
   buyCatalog: () => runtime.catalog(),
   ...(liveMarket ? { live: liveMarket } : {}),
+  ...(escrow ? { escrow } : {}),
 };
-line(`Marketplace: test credits only${seeded ? ', demo APIs seeded' : ''} (page: /market.html).`);
+line(`Marketplace: ${liveMarket ? 'REAL FUNDS' : 'test credits only'}${seeded ? ', demo APIs seeded' : ''}${market.sandbox ? ', sandbox sellers enabled' : ''} (page: /market.html).`);
 
 const { server } = createWebServer(runtime, { market });
 server.listen(port, '127.0.0.1', () => {

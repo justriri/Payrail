@@ -9,14 +9,16 @@ import type { ExecuteOptions } from './execute.ts';
 import { GatewayError, callUpstream } from './gateway.ts';
 import { LedgerError, balance, createAccount, deposit } from './ledger.ts';
 import {
-  SellerError, authenticate, challengeFor, checkDomainProof, completeLogin, getListing, listingsOf, publishListing, startLogin, submitListing, submitWalletProof, unpublishListing,
+  SellerError, authenticate, challengeFor, createSandboxSeller, checkDomainProof, completeLogin, getListing, listingsOf, publishListing, startLogin, submitListing, submitWalletProof, unpublishListing,
 } from './seller.ts';
 import type { DomainDeps, Listing } from './seller.ts';
 import { TesterError, recentTests, runTest } from './tester.ts';
 import type { CallOptions } from './gateway.ts';
 import { VaultError, listCredentials, putCredential, revokeCredential } from './vault.ts';
 import type { MasterKey } from './vault.ts';
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes, createHash, createHmac } from 'node:crypto';
+import { privateKeyToAccount } from 'viem/accounts';
+import { isSandboxHost } from './demoapis.ts';
 import { AgentError, authenticateAgent, createAgent, executeAsAgent, listAgents, revokeAgent } from './agents.ts';
 import { FundingError, confirmDeposit, fundingMessage, fundingWallets, registerFundingWallet } from './funding.ts';
 import type { FundingConfig } from './funding.ts';
@@ -44,10 +46,19 @@ export interface MarketRuntime {
   domain?: DomainDeps;
   /** the Buy gateway catalog, when available */
   buyCatalog?: () => Promise<Catalog>;
+  /** true when the Buy catalog comes from the simulator rather than the real gateway */
+  buySimulated?: boolean;
+  /** enable sandbox sellers (server-derived test wallets, in-process sandbox hosts). Test-credit mode only. */
+  sandbox?: boolean;
   /** real-funds mode. Absent = test credits only and every real-money route answers LIVE_DISABLED. */
   live?: { funding: FundingConfig; payout: PayoutPolicy };
   /** alternative settlement through the on-chain escrow contract (testnet-verified only) */
-  escrow?: { client: EscrowClient; asset: string };
+  escrow?: {
+    client: EscrowClient;
+    asset: string;
+    /** present when this is the Celo Sepolia TESTNET deployment; enables the testnet deposit helper */
+    testnet?: { chainId: number; escrow: string; token: string; wallet: string; explorer: string; deposit(amountAtomic: bigint): Promise<string> };
+  };
 }
 
 export interface MarketItem {
@@ -61,9 +72,23 @@ export interface MarketItem {
   payOnlyForQualifying: boolean;
   demo: boolean;
   available: boolean;
+  /** where the listing comes from, in plain terms */
+  origin: 'buy-gateway' | 'buy-gateway-simulated' | 'payrail-seller' | 'payrail-sandbox' | 'payrail-demo';
+  originLabel: string;
   /** buy services open in the existing pay flow */
   url?: string;
 }
+
+export const ORIGIN_LABELS: Record<MarketItem['origin'], string> = {
+  'buy-gateway': 'Buy gateway service (independent, paid directly with x402)',
+  'buy-gateway-simulated': 'Buy gateway service, SIMULATED copy (not the real service)',
+  'payrail-seller': 'Independent Payrail seller API (paid only if the response qualifies)',
+  'payrail-sandbox': 'Sandbox seller API (served by Payrail itself; ownership NOT really verified)',
+  'payrail-demo': 'Demo API (controlled test data served by Payrail)',
+};
+
+/** a sandbox account is derived from a per-session seed; the seed is the random label embedded in the account */
+const sandboxSeed = (mk: MasterKey, seed: string): `0x${string}` => `0x${createHmac('sha256', mk.key).update(`sandbox-seed:${seed}`).digest('hex')}`;
 
 class ApiError extends Error {
   status: number;
@@ -104,6 +129,8 @@ export function payrailItems(db: Db): MarketItem[] {
     payOnlyForQualifying: true,
     demo: Number(r.demo) === 1,
     available: true,
+    origin: Number(r.demo) === 1 ? 'payrail-demo' : isSandboxHost(String(r.host ?? '')) ? 'payrail-sandbox' : 'payrail-seller',
+    originLabel: ORIGIN_LABELS[Number(r.demo) === 1 ? 'payrail-demo' : isSandboxHost(String(r.host ?? '')) ? 'payrail-sandbox' : 'payrail-seller'],
   }));
 }
 
@@ -125,6 +152,8 @@ export async function mergedCatalog(rt: MarketRuntime, q?: string): Promise<{ it
           payOnlyForQualifying: false,
           demo: false,
           available: s.available,
+          origin: rt.buySimulated ? 'buy-gateway-simulated' : 'buy-gateway',
+          originLabel: ORIGIN_LABELS[rt.buySimulated ? 'buy-gateway-simulated' : 'buy-gateway'],
           url: s.url,
         })),
       );
@@ -184,6 +213,7 @@ function listingView(db: Db, l: Listing, forOwner: boolean) {
     price: { atomic: l.priceAtomic.toString(), usd: formatAtomic(l.priceAtomic), asset: l.asset },
     feePercent: l.feeBps / 100,
     demo: l.demo,
+    sandbox: isSandboxHost(l.host),
     contract: c ? { id: c.id, version: c.version, rules: c.body.success } : null,
   };
   if (!forOwner) return base;
@@ -411,6 +441,57 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
     return ok({ items: payrailItems(db) });
   }
 
+  // ---- configuration the screens use to explain themselves
+  if (method === 'GET' && path === '/config') {
+    const tn = rt.escrow?.testnet;
+    return ok({
+      mode: rt.live ? 'real-funds' : 'test-credits',
+      sandbox: Boolean(rt.sandbox) && !rt.live,
+      realFunds: Boolean(rt.live),
+      buySimulated: Boolean(rt.buySimulated),
+      escrow: tn ? { network: 'Celo Sepolia TESTNET', chainId: tn.chainId, contract: tn.escrow, token: tn.token, wallet: tn.wallet, explorer: tn.explorer } : null,
+      legend: ORIGIN_LABELS,
+    });
+  }
+
+  // ---- escrow (TESTNET only)
+  if (method === 'GET' && path === '/escrow') {
+    const id = buyer();
+    const tn = rt.escrow?.testnet;
+    if (!rt.escrow || !tn) return ok({ enabled: false });
+    const w = fundingWallets(db, id)[0] ?? null;
+    return ok({ enabled: true, network: 'Celo Sepolia TESTNET', contract: tn.escrow, token: tn.token, explorer: tn.explorer, wallet: w, available: w ? formatAtomic(await rt.escrow.client.available(w)) : null, operatorWallet: tn.wallet });
+  }
+  if (method === 'POST' && path === '/escrow/testnet-deposit') {
+    const id = buyer();
+    const tn = rt.escrow?.testnet;
+    if (!rt.escrow || !tn) throw new ApiError(409, 'ESCROW_DISABLED', 'testnet escrow is not enabled on this server');
+    if (rt.live) throw new ApiError(409, 'ESCROW_DISABLED', 'the testnet escrow helper is disabled in real-funds mode');
+    const amount = parseAtomic(body.amount ?? '0.1');
+    if (amount > 1_000_000n) throw bad('testnet deposits are limited to 1 test token at a time');
+    let w = fundingWallets(db, id)[0];
+    if (!w) {
+      // TESTNET CONVENIENCE: the server's testnet operator wallet funds the escrow on the buyer's behalf, so that wallet is
+      // recorded as this buyer's funding wallet. Only one buyer can hold it (wallets are unique per buyer).
+      const taken = queryOne(db, 'SELECT buyer_id FROM funding_wallets WHERE address = ?', tn.wallet.toLowerCase());
+      if (taken) throw new ApiError(409, 'WALLET_TAKEN', 'the testnet escrow wallet is already used by another test buyer');
+      db.prepare('INSERT INTO funding_wallets (address, buyer_id, signature, verified_at) VALUES (?, ?, ?, ?)').run(tn.wallet.toLowerCase(), id, 'testnet-operator-wallet', new Date(now()).toISOString());
+      w = tn.wallet.toLowerCase();
+    }
+    if (w.toLowerCase() !== tn.wallet.toLowerCase()) throw new ApiError(409, 'NOT_TESTNET_WALLET', 'your registered funding wallet is not the testnet operator wallet, so the server cannot deposit for it');
+    const tx = await tn.deposit(amount);
+    return ok({ txHash: tx, link: `${tn.explorer}/tx/${tx}`, note: 'TESTNET transaction with a mock token. No real value.' }, 201);
+  }
+
+  // ---- seller sandbox sign-in (test-credit mode only)
+  if (method === 'POST' && path === '/seller/sandbox/login') {
+    if (!rt.sandbox || rt.live) throw new ApiError(409, 'SANDBOX_DISABLED', 'sandbox sellers are only available in test-credit mode');
+    const seed = typeof body.seed === 'string' && /^[A-Za-z0-9_-]{16,64}$/.test(body.seed) ? body.seed : randomBytes(16).toString('hex');
+    const wallet = privateKeyToAccount(sandboxSeed(rt.activeKey, seed)).address;
+    const r = createSandboxSeller(db, wallet, 'Sandbox seller', now);
+    return ok({ ...r, wallet, seed, note: 'Sandbox seller: a test wallet derived by this server. Not a real identity.' });
+  }
+
   // ---- seller sign-in
   if (method === 'POST' && path === '/seller/login/start') return ok(startLogin(db, str(body.wallet, 'wallet', 60), now));
   if (method === 'POST' && path === '/seller/login/complete') {
@@ -444,9 +525,22 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
     if (method === 'GET' && !action) return view();
     if (method === 'POST') {
       switch (action) {
-        case 'wallet-proof':
-          await submitWalletProof(db, id, lid, str(body.signature, 'signature', 400), now);
+        case 'wallet-proof': {
+          let signature: string;
+          if (body.sandbox === true) {
+            if (!rt.sandbox || rt.live) throw new ApiError(409, 'SANDBOX_DISABLED', 'sandbox signing is only available in test-credit mode');
+            const acct = queryOne(db, 'SELECT wallet_address FROM accounts WHERE id = ?', id);
+            const ch = challengeFor(db, lid)!;
+            const seed = str(body.seed, 'seed', 64);
+            const key = privateKeyToAccount(sandboxSeed(rt.activeKey, seed));
+            if (!acct || String(acct.wallet_address) !== key.address.toLowerCase()) throw new ApiError(403, 'NOT_SANDBOX_ACCOUNT', 'this account is not a sandbox seller');
+            signature = await key.signMessage({ message: ch.walletMessage });
+          } else {
+            signature = str(body.signature, 'signature', 400);
+          }
+          await submitWalletProof(db, id, lid, signature, now);
           return view();
+        }
         case 'domain-proof': {
           const meth = body.method === 'well_known' ? 'well_known' : body.method === 'dns_txt' ? 'dns_txt' : undefined;
           if (!meth) throw bad('method must be dns_txt or well_known');
