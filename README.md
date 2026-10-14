@@ -197,11 +197,12 @@ submitted by the gateway, so Payrail cannot tag them; the organizers confirmed n
 
 Honest status as of the last audit (see `PROJECT-MASTER-CHECKLIST.md` for the full list):
 
-- **Verified live on mainnet:** direct x402 payments (2), a Mento swap, a Textile swap, one direct order,
-  and the ERC-8004 registration.
-- **Not yet run live (tested with fakes only):** a convert-**then**-pay order, `--reconcile`/`--resume`
-  on a real interrupted order, uncertain-payment resolution, paying a service through Mento.
-- **Interface:** a local web page and the command line; no hosted/multi-user service, and no fiat on/off-ramp. The web page's live conversion-and-payment path has been exercised with the simulation and read-only live quotes, not yet with a real cNGN conversion.
+- **Verified live on mainnet:** direct x402 payments (3), a Mento swap, a Textile swap, one direct order,
+  one **convert-then-pay order from cNGN** (Textile swap then x402 payment, response delivered), and the
+  ERC-8004 registration.
+- **Not yet run live (tested with fakes only):** `--reconcile`/`--resume` on a real interrupted order,
+  uncertain-payment resolution, paying a service through Mento.
+- **Interface:** a local web page and the command line; no hosted/multi-user service, and no fiat on/off-ramp. The web server's live conversion-and-payment path has been exercised end to end with a real cNGN conversion (driven through its API).
 - **One service provider** (Buy) is registered, although the provider seam supports more.
 - **No fiat on/off-ramp**, and amounts are shown in token units, not local-currency units.
 - **Public RPC quirk:** some public nodes prune old receipts, so Payrail asks several endpoints and treats

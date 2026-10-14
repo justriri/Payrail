@@ -155,7 +155,8 @@ if (VERIFY) {
   // an order is verified only if every transaction linked to it was found on-chain and succeeded
   for (const o of pack.orders) {
     const linked = pack.transactions.filter((t) => o.ledger.includes(t.seq));
-    o.onChainVerified = linked.length > 0 && linked.every((t) => t.onChain?.found === true && t.onChain.status === 'success');
+    // an order that sent nothing has no transactions to verify: leave it unset rather than report "false"
+    if (linked.length > 0) o.onChainVerified = linked.every((t) => t.onChain?.found === true && t.onChain.status === 'success');
     if (o.onChainVerified === false && o.state === 'COMPLETED') pack.warnings.push(`order ${o.orderId} is COMPLETED but its transactions did not all verify on-chain`);
   }
 }

@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-13T23:39:19.918Z",
+  "generatedAt": "2026-10-14T01:00:50.885Z",
   "addresses": [
     {
       "role": "payTo (recipient of the x402 payment)",
@@ -16,9 +16,9 @@
     {
       "service": "x.posts.search",
       "url": "https://gateway.usebuy.ai/v1/social/x/posts/search",
-      "payments": 2,
-      "confirmed": 2,
-      "totalPaid": "0.01",
+      "payments": 3,
+      "confirmed": 3,
+      "totalPaid": "0.015",
       "token": "USDT"
     }
   ],
@@ -48,7 +48,7 @@
         "legacy receipt (written before schema v1)",
         "the response body was not retained for this payment (only a structural summary was kept)",
         "x402 settlement is submitted by the facilitator and carries no attribution tag; the organizers confirmed none is needed for Buy",
-        "LIVE RE-VERIFICATION 2026-10-13T23:39:25.273Z: receipt success, block 79920194, confirmed by 2 endpoint(s), Transfer(payer -> payTo, 0.005 USDT) found: true"
+        "LIVE RE-VERIFICATION 2026-10-14T01:01:00.366Z: receipt success, block 79920194, confirmed by 2 endpoint(s), Transfer(payer -> payTo, 0.005 USDT) found: true"
       ]
     },
     {
@@ -74,8 +74,35 @@
       "responseSummary": "JSON keys [capability, transaction, payment, provider, upstreamRunId, resultCount, output]; output: object; 48403 bytes",
       "notes": [
         "x402 settlement is submitted by the facilitator and carries no attribution tag; the organizers confirmed none is needed for Buy",
-        "LIVE RE-VERIFICATION 2026-10-13T23:39:28.107Z: receipt success, block 80001720, confirmed by 2 endpoint(s), Transfer(payer -> payTo, 0.005 USDT) found: true",
+        "LIVE RE-VERIFICATION 2026-10-14T01:01:01.500Z: receipt success, block 80001720, confirmed by 2 endpoint(s), Transfer(payer -> payTo, 0.005 USDT) found: true",
         "RESPONSE FILE CHECK: sha256 of responses/direct-2026-10-13T14-41-27-277Z.body recomputed and matches the receipt"
+      ]
+    },
+    {
+      "receiptId": "direct-2026-10-14T00-58-50-389Z",
+      "at": "2026-10-14T00:58:50.389Z",
+      "status": "CONFIRMED",
+      "service": "x.posts.search",
+      "serviceUrl": "https://gateway.usebuy.ai/v1/social/x/posts/search",
+      "amount": "0.005",
+      "token": "USDT",
+      "asset": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+      "payer": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4",
+      "payTo": "0x20faAca5F980E29639A0FCC6dcA6988E18ed333B",
+      "txHash": "0xf3652222377fb527211fb4fbd1a7e6c6f7f7341048334eb4223806b88c9f2c9c",
+      "explorerUrl": "https://celoscan.io/tx/0xf3652222377fb527211fb4fbd1a7e6c6f7f7341048334eb4223806b88c9f2c9c",
+      "orderId": "90f8d4be-0388-467e-a5b0-4b630d0411d2",
+      "settlementAuthorizationState": "settled",
+      "transferVerified": true,
+      "httpStatus": 200,
+      "delivered": true,
+      "responseSha256": "4a2451147286359972506af30aaff4f85d7892ad8ca9175bf2f829ba90b15177",
+      "responseFile": "responses/direct-2026-10-14T00-58-50-389Z.body",
+      "responseSummary": "JSON keys [capability, transaction, payment, provider, upstreamRunId, resultCount, output]; output: object; 67154 bytes",
+      "notes": [
+        "x402 settlement is submitted by the facilitator and carries no attribution tag; the organizers confirmed none is needed for Buy",
+        "LIVE RE-VERIFICATION 2026-10-14T01:01:02.227Z: receipt success, block 80038764, confirmed by 2 endpoint(s), Transfer(payer -> payTo, 0.005 USDT) found: true",
+        "RESPONSE FILE CHECK: sha256 of responses/direct-2026-10-14T00-58-50-389Z.body recomputed and matches the receipt"
       ]
     }
   ],
@@ -189,6 +216,79 @@
         "reconciliation: sell balance change 1000000 vs logged 1000000; buy balance change 1365928991 vs logged 1365928991",
         "Textile order status: filled"
       ]
+    },
+    {
+      "planId": "9e11ef02-663e-47d0-9a22-10165d0b13cb",
+      "at": "2026-10-14T00:48:24.967Z",
+      "state": "FAILED",
+      "code": "NEVER_SENT",
+      "provider": "textile-fx-v2",
+      "route": "cNGN -> USDT",
+      "requestedSell": "1363850000",
+      "received": null,
+      "sellSymbol": "cNGN",
+      "buySymbol": "USDT",
+      "transactions": [],
+      "notes": [],
+      "orderId": "25aa7922-e01d-441d-9296-a77e14d87b0e"
+    },
+    {
+      "planId": "e3f2c034-4aee-46f0-b684-b09388432eb3",
+      "at": "2026-10-14T00:50:37.238Z",
+      "state": "FAILED",
+      "code": "APPROVAL_INEFFECTIVE",
+      "provider": "textile-fx-v2",
+      "route": "cNGN -> USDT",
+      "requestedSell": "1363665000",
+      "received": null,
+      "sellSymbol": "cNGN",
+      "buySymbol": "USDT",
+      "transactions": [
+        {
+          "kind": "approve",
+          "to": "0xF6829D7393dAe24509eb1E52eE8e572e2E271a4f",
+          "hash": "0x0e33a9e1a192eb93c090cee957d5745b17632576abfb51cb4cf1583163b2dd32",
+          "explorerUrl": "https://celoscan.io/tx/0x0e33a9e1a192eb93c090cee957d5745b17632576abfb51cb4cf1583163b2dd32",
+          "mined": true,
+          "attributionVerified": true,
+          "attributionCodes": [
+            "celo_b2fff2ac9413"
+          ]
+        }
+      ],
+      "notes": [],
+      "orderId": "d9c24dc8-87c4-41be-8791-a82bff1bbb81"
+    },
+    {
+      "planId": "7f6a2512-00ff-4b84-a2b2-b41c2f0b3350",
+      "at": "2026-10-14T00:58:30.475Z",
+      "state": "CONFIRMED",
+      "code": "CONFIRMED",
+      "provider": "textile-fx-v2",
+      "route": "cNGN -> USDT",
+      "requestedSell": "1363665000",
+      "received": "998910",
+      "sellSymbol": "cNGN",
+      "buySymbol": "USDT",
+      "transactions": [
+        {
+          "kind": "swap",
+          "to": "0xa9AA0a64769cBed4d3B1Ceb4Df01CdE915C235b3",
+          "hash": "0x102eafffbaf5d561aa9a5fa65ac9d4910b87613fd1b1b679afca9bdd028bacb7",
+          "explorerUrl": "https://celoscan.io/tx/0x102eafffbaf5d561aa9a5fa65ac9d4910b87613fd1b1b679afca9bdd028bacb7",
+          "mined": true,
+          "attributionVerified": true,
+          "attributionCodes": [
+            "celo_b2fff2ac9413"
+          ]
+        }
+      ],
+      "notes": [
+        "order restricts fillers (PreferredFillerValidation): 1 preferred, exclusive until 2026-10-14T00:59:46.000Z",
+        "reconciliation: sell balance change 1363665000 vs logged 1363665000; buy balance change 998910 vs logged 998910",
+        "Textile order status: filled"
+      ],
+      "orderId": "90f8d4be-0388-467e-a5b0-4b630d0411d2"
     }
   ],
   "transactions": [
@@ -226,7 +326,7 @@
       },
       "origin": "payment receipt",
       "onChain": {
-        "checkedAt": "2026-10-13T23:39:28.108Z",
+        "checkedAt": "2026-10-14T01:01:02.227Z",
         "found": true,
         "status": "success",
         "blockNumber": "79920194",
@@ -279,7 +379,7 @@
       },
       "origin": "confirmed conversion",
       "onChain": {
-        "checkedAt": "2026-10-13T23:39:29.763Z",
+        "checkedAt": "2026-10-14T01:01:03.399Z",
         "found": true,
         "status": "success",
         "blockNumber": "79963003",
@@ -325,7 +425,7 @@
       },
       "origin": "confirmed conversion",
       "onChain": {
-        "checkedAt": "2026-10-13T23:39:30.867Z",
+        "checkedAt": "2026-10-14T01:01:04.642Z",
         "found": true,
         "status": "success",
         "blockNumber": "79963010",
@@ -384,7 +484,7 @@
       },
       "origin": "stopped attempt (FAILED/QUOTE_INVALID); no swap was sent",
       "onChain": {
-        "checkedAt": "2026-10-13T23:39:36.337Z",
+        "checkedAt": "2026-10-14T01:01:05.824Z",
         "found": true,
         "status": "success",
         "blockNumber": "79963336",
@@ -430,7 +530,7 @@
       },
       "origin": "confirmed conversion",
       "onChain": {
-        "checkedAt": "2026-10-13T23:39:37.982Z",
+        "checkedAt": "2026-10-14T01:01:07.282Z",
         "found": true,
         "status": "success",
         "blockNumber": "79963880",
@@ -498,7 +598,7 @@
       "origin": "payment receipt",
       "orderId": "b5660887-a162-4116-ab65-c2a86512a7c6",
       "onChain": {
-        "checkedAt": "2026-10-13T23:39:39.568Z",
+        "checkedAt": "2026-10-14T01:01:16.432Z",
         "found": true,
         "status": "success",
         "blockNumber": "80001720",
@@ -551,7 +651,7 @@
       },
       "origin": "agent identity registration",
       "onChain": {
-        "checkedAt": "2026-10-13T23:39:41.411Z",
+        "checkedAt": "2026-10-14T01:01:17.871Z",
         "found": true,
         "status": "success",
         "blockNumber": "80032609",
@@ -563,6 +663,175 @@
         "decoded": null,
         "transfers": [],
         "notes": []
+      }
+    },
+    {
+      "seq": 8,
+      "classification": "real on-chain transaction",
+      "kind": "approve",
+      "purpose": "Approve cNGN for the textile-fx-v2 contract so cNGN -> USDT can be converted (the attempt it belonged to ended FAILED/APPROVAL_INEFFECTIVE before any swap was sent)",
+      "provider": "textile-fx-v2",
+      "token": "cNGN",
+      "amount": "1363.665",
+      "hash": "0x0e33a9e1a192eb93c090cee957d5745b17632576abfb51cb4cf1583163b2dd32",
+      "explorerUrl": "https://celoscan.io/tx/0x0e33a9e1a192eb93c090cee957d5745b17632576abfb51cb4cf1583163b2dd32",
+      "to": "0xF6829D7393dAe24509eb1E52eE8e572e2E271a4f",
+      "roles": [
+        {
+          "role": "sender / signer (Payrail wallet)",
+          "address": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4"
+        },
+        {
+          "role": "called contract (token)",
+          "address": "0xF6829D7393dAe24509eb1E52eE8e572e2E271a4f"
+        }
+      ],
+      "journalSettlement": "mined; conversion state FAILED",
+      "attribution": {
+        "applicable": true,
+        "journalVerified": true,
+        "codes": [
+          "celo_b2fff2ac9413"
+        ],
+        "note": "Payrail submitted this transaction itself, so it carries the ERC-8021 tag"
+      },
+      "origin": "stopped attempt (FAILED/APPROVAL_INEFFECTIVE); no swap was sent",
+      "orderId": "d9c24dc8-87c4-41be-8791-a82bff1bbb81",
+      "onChain": {
+        "checkedAt": "2026-10-14T01:01:19.020Z",
+        "found": true,
+        "status": "success",
+        "blockNumber": "80038278",
+        "from": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4",
+        "to": "0xF6829D7393dAe24509eb1E52eE8e572e2E271a4f",
+        "attributionCodes": [
+          "celo_b2fff2ac9413"
+        ],
+        "decoded": "approve(spender 0xa9AA0a64769cBed4d3B1Ceb4Df01CdE915C235b3, amount 1363665000 atomic)",
+        "transfers": [],
+        "notes": []
+      }
+    },
+    {
+      "seq": 9,
+      "classification": "real on-chain transaction",
+      "kind": "swap",
+      "purpose": "Convert cNGN -> USDT through textile-fx-v2",
+      "provider": "textile-fx-v2",
+      "token": "cNGN",
+      "amount": "1363.665",
+      "hash": "0x102eafffbaf5d561aa9a5fa65ac9d4910b87613fd1b1b679afca9bdd028bacb7",
+      "explorerUrl": "https://celoscan.io/tx/0x102eafffbaf5d561aa9a5fa65ac9d4910b87613fd1b1b679afca9bdd028bacb7",
+      "to": "0xa9AA0a64769cBed4d3B1Ceb4Df01CdE915C235b3",
+      "roles": [
+        {
+          "role": "sender / signer (Payrail wallet)",
+          "address": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4"
+        },
+        {
+          "role": "called contract (venue)",
+          "address": "0xa9AA0a64769cBed4d3B1Ceb4Df01CdE915C235b3"
+        }
+      ],
+      "journalSettlement": "mined; conversion state CONFIRMED; received 998910 atomic",
+      "attribution": {
+        "applicable": true,
+        "journalVerified": true,
+        "codes": [
+          "celo_b2fff2ac9413"
+        ],
+        "note": "Payrail submitted this transaction itself, so it carries the ERC-8021 tag"
+      },
+      "origin": "confirmed conversion",
+      "orderId": "90f8d4be-0388-467e-a5b0-4b630d0411d2",
+      "onChain": {
+        "checkedAt": "2026-10-14T01:01:20.165Z",
+        "found": true,
+        "status": "success",
+        "blockNumber": "80038743",
+        "from": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4",
+        "to": "0xa9AA0a64769cBed4d3B1Ceb4Df01CdE915C235b3",
+        "attributionCodes": [
+          "celo_b2fff2ac9413"
+        ],
+        "decoded": null,
+        "transfers": [
+          {
+            "token": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+            "from": "0x25A5c1Ae633eB3e1988CfdEed07CdbD2E998AB52",
+            "to": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4",
+            "value": "998910"
+          },
+          {
+            "token": "0xF6829D7393dAe24509eb1E52eE8e572e2E271a4f",
+            "from": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4",
+            "to": "0x25A5c1Ae633eB3e1988CfdEed07CdbD2E998AB52",
+            "value": "1363528648"
+          },
+          {
+            "token": "0xF6829D7393dAe24509eb1E52eE8e572e2E271a4f",
+            "from": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4",
+            "to": "0x51727A09b55d56BF8f3CBe61f460327330aECbA4",
+            "value": "136352"
+          }
+        ],
+        "notes": []
+      }
+    },
+    {
+      "seq": 10,
+      "classification": "real on-chain transaction",
+      "kind": "x402 payment",
+      "purpose": "Pay for the service x.posts.search through the x402 protocol",
+      "provider": "Buy gateway (x402, gateway.usebuy.ai)",
+      "token": "USDT",
+      "amount": "0.005",
+      "hash": "0xf3652222377fb527211fb4fbd1a7e6c6f7f7341048334eb4223806b88c9f2c9c",
+      "explorerUrl": "https://celoscan.io/tx/0xf3652222377fb527211fb4fbd1a7e6c6f7f7341048334eb4223806b88c9f2c9c",
+      "to": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+      "roles": [
+        {
+          "role": "payer (signed the payment authorization)",
+          "address": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4"
+        },
+        {
+          "role": "payTo (recipient of the stablecoin transfer)",
+          "address": "0x20faAca5F980E29639A0FCC6dcA6988E18ed333B"
+        },
+        {
+          "role": "transaction submitter",
+          "address": "the gateway/facilitator; shown as tx.from when verified on-chain"
+        }
+      ],
+      "journalSettlement": "authorization settled; Transfer(payer -> payTo) found: true; receipt status CONFIRMED",
+      "attribution": {
+        "applicable": false,
+        "journalVerified": null,
+        "codes": null,
+        "note": "x402 settlements are submitted by the facilitator; attribution tags are not yet supported by x402 and the organizers confirmed none is needed for Buy"
+      },
+      "origin": "payment receipt",
+      "orderId": "90f8d4be-0388-467e-a5b0-4b630d0411d2",
+      "onChain": {
+        "checkedAt": "2026-10-14T01:01:21.305Z",
+        "found": true,
+        "status": "success",
+        "blockNumber": "80038764",
+        "from": "0x0d74D5Cefd2e7F24E623330ebE3d8D4cB45fFB48",
+        "to": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+        "attributionCodes": null,
+        "decoded": null,
+        "transfers": [
+          {
+            "token": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+            "from": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4",
+            "to": "0x20faAca5F980E29639A0FCC6dcA6988E18ed333B",
+            "value": "5000"
+          }
+        ],
+        "notes": [
+          "submitted by 0x0d74D5Cefd2e7F24E623330ebE3d8D4cB45fFB48 (not the Payrail wallet), as expected for a gateway-sponsored x402 settlement"
+        ]
       }
     }
   ],
@@ -600,9 +869,121 @@
         "payment tx matches receipt direct-2026-10-13T14-41-27-277Z (CONFIRMED)"
       ],
       "onChainVerified": true
+    },
+    {
+      "orderId": "25aa7922-e01d-441d-9296-a77e14d87b0e",
+      "at": "2026-10-14T00:48:29.084Z",
+      "state": "STOPPED",
+      "code": "CONVERSION_FAILED",
+      "service": "x.posts.search",
+      "serviceProvider": "buy-gateway",
+      "route": "not paid",
+      "approved": {
+        "symbol": "USDT",
+        "amountAtomic": "5000",
+        "payTo": "0x20faAca5F980E29639A0FCC6dcA6988E18ed333B",
+        "planDigest": "69447979ad240afab6f20eb65a8365ba41c73eacb7fae87b479e70dbdbf223b5",
+        "approvedBy": "human:web"
+      },
+      "conversion": {
+        "provider": "textile-fx-v2",
+        "swapPlanId": "9e11ef02-663e-47d0-9a22-10165d0b13cb",
+        "state": "FAILED",
+        "sell": "1363850000 atomic cNGN",
+        "buy": "? atomic USDT",
+        "txHashes": []
+      },
+      "payment": null,
+      "ledger": [],
+      "needsAttention": false,
+      "consistency": [
+        "conversion tx hashes match swap record 9e11ef02-663e-47d0-9a22-10165d0b13cb (FAILED)"
+      ]
+    },
+    {
+      "orderId": "d9c24dc8-87c4-41be-8791-a82bff1bbb81",
+      "at": "2026-10-14T00:50:37.242Z",
+      "state": "STOPPED",
+      "code": "CONVERSION_FAILED",
+      "service": "x.posts.search",
+      "serviceProvider": "buy-gateway",
+      "route": "not paid",
+      "approved": {
+        "symbol": "USDT",
+        "amountAtomic": "5000",
+        "payTo": "0x20faAca5F980E29639A0FCC6dcA6988E18ed333B",
+        "planDigest": "a64ac08073cee5c12022af5b8439498ad40ec8aba006b4773e4808f347e926a0",
+        "approvedBy": "human:web"
+      },
+      "conversion": {
+        "provider": "textile-fx-v2",
+        "swapPlanId": "e3f2c034-4aee-46f0-b684-b09388432eb3",
+        "state": "FAILED",
+        "sell": "1363665000 atomic cNGN",
+        "buy": "? atomic USDT",
+        "txHashes": [
+          "0x0e33a9e1a192eb93c090cee957d5745b17632576abfb51cb4cf1583163b2dd32"
+        ]
+      },
+      "payment": null,
+      "ledger": [
+        8
+      ],
+      "needsAttention": true,
+      "consistency": [
+        "conversion tx hashes match swap record e3f2c034-4aee-46f0-b684-b09388432eb3 (FAILED)"
+      ],
+      "onChainVerified": true
+    },
+    {
+      "orderId": "90f8d4be-0388-467e-a5b0-4b630d0411d2",
+      "at": "2026-10-14T00:58:50.399Z",
+      "state": "COMPLETED",
+      "code": "COMPLETED",
+      "service": "x.posts.search",
+      "serviceProvider": "buy-gateway",
+      "route": "converted",
+      "approved": {
+        "symbol": "USDT",
+        "amountAtomic": "5000",
+        "payTo": "0x20faAca5F980E29639A0FCC6dcA6988E18ed333B",
+        "planDigest": "730f567a0137c919a2bb214db447f17da8e6514783ebb42e41129475f80304ee",
+        "approvedBy": "human:web"
+      },
+      "conversion": {
+        "provider": "textile-fx-v2",
+        "swapPlanId": "7f6a2512-00ff-4b84-a2b2-b41c2f0b3350",
+        "state": "CONFIRMED",
+        "sell": "1363665000 atomic cNGN",
+        "buy": "998910 atomic USDT",
+        "txHashes": [
+          "0x102eafffbaf5d561aa9a5fa65ac9d4910b87613fd1b1b679afca9bdd028bacb7"
+        ]
+      },
+      "payment": {
+        "status": "CONFIRMED",
+        "receiptId": "direct-2026-10-14T00-58-50-389Z",
+        "txHash": "0xf3652222377fb527211fb4fbd1a7e6c6f7f7341048334eb4223806b88c9f2c9c",
+        "delivered": true,
+        "httpStatus": 200,
+        "responseSha256": "4a2451147286359972506af30aaff4f85d7892ad8ca9175bf2f829ba90b15177",
+        "responseFile": "responses/direct-2026-10-14T00-58-50-389Z.body"
+      },
+      "ledger": [
+        9,
+        10
+      ],
+      "needsAttention": false,
+      "consistency": [
+        "conversion tx hashes match swap record 7f6a2512-00ff-4b84-a2b2-b41c2f0b3350 (CONFIRMED)",
+        "payment tx matches receipt direct-2026-10-14T00-58-50-389Z (CONFIRMED)"
+      ],
+      "onChainVerified": true
     }
   ],
-  "unresolved": [],
+  "unresolved": [
+    "order d9c24dc8-87c4-41be-8791-a82bff1bbb81 is STOPPED (CONVERSION_FAILED) and needs a human"
+  ],
   "warnings": [],
   "notes": [
     "Payment proof = the Transfer(payer -> payTo) in the settlement transaction, plus the independent on-chain authorization state.",

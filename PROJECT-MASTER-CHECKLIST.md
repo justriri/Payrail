@@ -10,8 +10,8 @@
 | Check | Result |
 |---|---|
 | `tsc` type check | exit 0 |
-| Full test suite | **323 tests, 323 pass, 0 fail** (~75 s) |
-| Evidence regeneration (`scripts/evidence.ts --verify`) | 7 transactions, 1 order, 2 payments, 4 conversion records, **0 warnings, 0 unresolved**; same hashes as the committed evidence |
+| Full test suite | **330 tests, 330 pass, 0 fail** (~80 s) |
+| Evidence regeneration (`scripts/evidence.ts --verify`) | 10 transactions, 4 orders, 3 payments, 7 conversion records, **0 warnings, 1 unresolved** (attempt-2 order flagged "needs a human"; see B10) |
 | Git | 2 local commits, 78 tracked files, **no remote**, working tree clean |
 | Loops entry (`loops project get`) | tag `celo_b2fff2ac9413`, agent wallet `0x652C…D2a4`, **`hasIdentity: true`**, **project not yet created** |
 
@@ -41,11 +41,15 @@
 | 18 | Loops CLI v0.6.0 installed and signed in; event skill present in `.agents/` and `.claude/` | on disk (both git-ignored) |
 | 19 | **Web interface** (`npm run serve` / `serve:sim`): paste a URL, see price/rate/fees/max spend, choose the currency to pay with, approve, track progress, view the response; local-only server, per-run token, strict CSP, text-only rendering, approval bound to a terms digest + hard bounds | MOCK/simulated through the real HTTP API and the real planner/orchestrator (14 tests); LIVE read-only: real status, real service inspection, real Textile cNGN→USDT preview |
 | 20 | **User-chosen funding currency** (`sourceSymbol`; UI and `order.ts --source`): the chosen currency is the only one used; no silent fallback | MOCK (planner + orchestrator tests); LIVE read-only plan with cNGN |
+| 22 | **LIVE convert-then-pay order, verified on-chain (2026-10-14)**: order `90f8d4be-…`: sold 1,363.665 cNGN → 0.998910 USDT via Textile (swap tx `0x102eafff…acb7`, tagged, block 80038743), then paid 0.005 USDT (tx `0xf3652222…2c9c`, block 80038764); response delivered, SHA-256 recomputed and matches; balances reconcile to the atomic unit; remaining allowance 0 | CHAIN (independent reads, `verifyTx`, receipts) |
+| 23 | Live-found defects fixed: OneDrive `EPERM` on journal rename (bounded retries, still throws), stale allowance read after a mined approval (read at the approval block), journals that never signed anything can now be closed (`NEVER_SENT`) | MOCK regression tests (7) + proven by the live run |
 | 21 | Mento classifier: a reason-less router revert is "no route for this pair" (verified live: Mento has **no cNGN pool**; Textile is the only cNGN route) | LIVE read-only + MOCK |
 
 ---
 
 ## 2. Known bugs and remaining fixes
+
+**Found by the live convert-then-pay attempts (2026-10-14) and fixed:** (a) journal saves use temp-file-then-rename, which OneDrive can block with `EPERM` (now retried with backoff; a save that cannot be done still stops the run); (b) the allowance read right after a *mined* approval hit a lagging RPC backend and returned 0, so the order stopped before requesting a quote (now read at the approval's block, with bounded re-reads; same for the pre-swap check and sequence building); (c) a journal that never signed anything could not be closed by the tool (now closed as `NEVER_SENT` only with chain corroboration).
 
 **Fixed this round (with the cause, so it is not rediscovered):**
 
@@ -77,6 +81,9 @@
 | B7 | Cosmetic: `scripts/register-agent.ts` line 32 comment says 0.05 CELO, value is 0.15 | Low | Wrong comment, correct value |
 | B8 | Occasional unexplained failure in the multi-process lock test (seen once earlier) | Low | Hardened (diagnostics + Windows `EPERM` tolerance); did not recur in the last 4 full runs; cause unconfirmed |
 | B9 | Mento paying for a *service* (`findRoute`) never run live | Low | Standalone Mento swap is verified; service-payment route is MOCK |
+| B10 | Attempt-2 order `d9c24dc8-…` still shows "needs a human" in evidence | Low | Its approval tx was sent but no swap followed; that approval was later consumed by the successful order (allowance now 0). There is no acknowledgement mechanism; records were not edited. Needs a decision: add an additive acknowledgement note, or explain it in the submission |
+| B11 | The web page's own approve button has been exercised via the API only, not clicked in a browser by us | Medium | Drive it once in your browser (`node --env-file=<key file> scripts/serve.ts`) |
+| B12 | Standing cost of the test: ≈0.056 CELO gas total (0.373 → 0.317 CELO) | Info | Approval ≈0.0114 + swap ≈0.0450; x402 gas is paid by the gateway |
 
 ---
 
@@ -86,7 +93,7 @@ All three remain **unverified against real orders**. Existing evidence does not 
 
 | Flow | Status | What a safe test needs |
 |---|---|---|
-| **Live convert-then-pay order** | `[~]` MOCK / simulated only. **Live read-only plan done (2026-10-14):** sell 1,363.624 cNGN → ~0.999525 USDT via Textile (fee 0.136 cNGN ≈ 1 bp, kept after paying ≈ 0.9945 USDT), then pay 0.005 USDT; worst-case gas estimate 0.22 CELO (usually far lower). cNGN→USDT has **never been executed live** (only USDT→cNGN) | (1) ~~force-convert option~~ done, (2) corridor check done, (3) plan done, (4) **your explicit approval** of the exact bounded command. Exposure: one conversion of about the venue minimum (~$1), gas for approve+swap of roughly 0.05–0.1 CELO at the current ~200 gwei (the planner assumes up to 550k gas units; the real figure will be shown by the plan), then a $0.005 payment |
+| **Live convert-then-pay order** | `[x]` **VERIFIED ON-CHAIN 2026-10-14** (order `90f8d4be-…`, see item 22). It took three attempts: attempts 1 and 2 stopped safely (OneDrive rename `EPERM`; stale allowance read) with nothing swapped or paid and only an approval's gas (≈0.011 CELO) spent. Direction cNGN→USDT is now proven; the Mento route for paying a service is still not | Done. Repeat only if you want a second data point |
 | **`--reconcile` / `--resume` on a real interrupted order** | `[~]` MOCK only. Only a read-only `--reconcile` on the *completed* order was run (it reported "already COMPLETED" and changed nothing) | A genuinely interrupted order cannot be created on demand without spending. The realistic route is to run the convert-then-pay test above and stop it (Ctrl+C) right after the conversion confirms, then run `--reconcile` and `--resume`. Needs your approval and careful timing |
 | **Payment resolution for a real uncertain payment** | `[~]` MOCK only | Needs a real `UNCERTAIN` receipt. None exists, and one should not be created deliberately. `resolve.ts --payment` will be exercised only if a genuine uncertain payment ever occurs; state this limitation honestly in the submission |
 
