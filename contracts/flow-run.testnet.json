@@ -1,0 +1,84 @@
+{
+  "chainId": 11142220,
+  "escrow": "0x7385609bd68d1833f3c52bad1d55300bc2e441ad",
+  "seller": "0x7a8fc6b96E319FCAcf8f8542227afB1062595FB6",
+  "at": "2026-10-14T12:41:53.478Z",
+  "log": [
+    {
+      "step": "fund throwaway seller (gas)",
+      "tx": "0xbd30fbe1d4b387b86d2257bd0423957f4ab5852dba31afbacb09755e4d3c64aa"
+    },
+    {
+      "step": "buyer approves escrow",
+      "tx": "0x051518119b8d2d542e4b222fce654e042ecd8a378cb747bfc779f4a225038130"
+    },
+    {
+      "step": "buyer deposits 0.1",
+      "tx": "0xe841e4000185c4a400fbf90c4d296c7c310863d071d2d3797b37e2d4d1574c6f"
+    },
+    {
+      "step": "check available after deposit",
+      "note": "200000"
+    },
+    {
+      "step": "hold A (0.02 -> seller)",
+      "tx": "0xcba0bca142a006c24f5d0f8da50d77c6b164798fe969cd0d90f4eafc9099a23b"
+    },
+    {
+      "step": "capture A (qualifying)",
+      "tx": "0xe9d10f77778f7053984514942bc549be029aa053a60db92fe45e9819b636fbc9"
+    },
+    {
+      "step": "check seller earnings (97%)",
+      "note": "19400"
+    },
+    {
+      "step": "check fee recipient earnings (3%)",
+      "note": "600"
+    },
+    {
+      "step": "hold B (0.02 -> seller)",
+      "tx": "0x040571b854b30365de4aa92feadc1d4e19843db91571b7f655c159f5ad7ed801"
+    },
+    {
+      "step": "check available while B held",
+      "note": "160000"
+    },
+    {
+      "step": "release B (not qualifying)",
+      "tx": "0x072bc9a6c667aa75588c1b0bf477f69e02346f0abe61851e71dcdb666b74cc6b"
+    },
+    {
+      "step": "check available after release",
+      "note": "180000"
+    },
+    {
+      "step": "check released hold cannot be captured",
+      "note": "reverted as expected"
+    },
+    {
+      "step": "seller claims",
+      "tx": "0xe30b2e88a157036cbdf95f6fef422df07570f9666c8fd8c404dab0523e47ca5d"
+    },
+    {
+      "step": "check seller token balance",
+      "note": "19400"
+    },
+    {
+      "step": "buyer withdraws remainder",
+      "tx": "0x0abf3e72b5cc3e00f79602ac4a31ed0768ee8e422a2a964cbfddbe9c70838ea0"
+    },
+    {
+      "step": "fee recipient claims",
+      "tx": "0xbfba7f145dbff7fd42d986a2f6a273b4418d8699c6f8fa60f14c686eb6ba0f81"
+    },
+    {
+      "step": "check escrow liabilities at end",
+      "note": "0"
+    },
+    {
+      "step": "check escrow token balance at end",
+      "note": "0"
+    }
+  ]
+}
