@@ -21,6 +21,8 @@ import type { Address } from 'viem';
 import { ASSETS, assetBySymbol, microUsd } from './assets.ts';
 import type { Asset } from './assets.ts';
 import { searchServices } from './catalog.ts';
+import { handleMarket } from './market.ts';
+import type { MarketRuntime } from './market.ts';
 import type { Catalog, Service } from './catalog.ts';
 import { executeOrder, loadOrder, planOrder, reconcileOrder, resumeOrder } from './orchestrator.ts';
 import type { OrderContext, OrderDeps, OrderPlan } from './orchestrator.ts';
@@ -729,7 +731,7 @@ const WEB_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 
 /** A local-only HTTP server. Bound to 127.0.0.1; state-changing calls need a per-run token and a same-origin Origin. */
-export function createWebServer(rt: WebRuntime, opts: { webDir?: string; token?: string } = {}): { server: Server; token: string; app: WebApp } {
+export function createWebServer(rt: WebRuntime, opts: { webDir?: string; token?: string; market?: MarketRuntime } = {}): { server: Server; token: string; app: WebApp } {
   const app = createWebApp(rt);
   const token = opts.token ?? randomBytes(24).toString('hex');
   const dir = opts.webDir ?? WEB_DIR;
@@ -779,9 +781,9 @@ export function createWebServer(rt: WebRuntime, opts: { webDir?: string; token?:
 
       if (method === 'GET' && !url.pathname.startsWith('/api/')) {
         const name = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
-        if (!/^[a-z0-9._-]+$/i.test(name) || !(name in { 'index.html': 1, 'app.js': 1, 'style.css': 1 })) return send(res, 404, 'not found', 'text/plain');
+        if (!/^[a-z0-9._-]+$/i.test(name) || !(name in { 'index.html': 1, 'app.js': 1, 'style.css': 1, 'market.html': 1, 'market.js': 1 })) return send(res, 404, 'not found', 'text/plain');
         let text = readFileSync(join(dir, name), 'utf8');
-        if (name === 'index.html') text = text.replace('__PAYRAIL_TOKEN__', token).replace('__PAYRAIL_MODE__', rt.mode);
+        if (name === 'index.html' || name === 'market.html') text = text.replace('__PAYRAIL_TOKEN__', token).replace('__PAYRAIL_MODE__', rt.mode);
         const ext = name.slice(name.lastIndexOf('.'));
         return send(res, 200, text, TYPES[ext] ?? 'text/plain');
       }
@@ -799,6 +801,12 @@ export function createWebServer(rt: WebRuntime, opts: { webDir?: string; token?:
           ...(num('limit') !== undefined ? { limit: num('limit')! } : {}),
         });
         return send(res, r.ok ? 200 : 502, r);
+      }
+
+      if (opts.market && url.pathname.startsWith('/api/market/') && method === 'GET') {
+        const bearer = /^Bearer (\S{20,200})$/.exec(String(req.headers.authorization ?? ''))?.[1];
+        const r = await handleMarket(opts.market, { method: 'GET', path: url.pathname.slice('/api/market'.length), query: url.searchParams, body: {}, bearer });
+        return send(res, r.status, r.body);
       }
 
       let m: RegExpMatchArray | null;
@@ -821,6 +829,12 @@ export function createWebServer(rt: WebRuntime, opts: { webDir?: string; token?:
         const body = await readJson(req);
         if (!body) return send(res, 400, { ok: false, problems: [{ code: 'BAD_REQUEST', message: 'Send a small JSON body.' }] });
         const s = (v: unknown) => (typeof v === 'string' ? v : undefined);
+
+        if (opts.market && url.pathname.startsWith('/api/market/')) {
+          const bearer = /^Bearer (\S{20,200})$/.exec(String(req.headers.authorization ?? ''))?.[1];
+          const r = await handleMarket(opts.market, { method: 'POST', path: url.pathname.slice('/api/market'.length), query: url.searchParams, body, bearer });
+          return send(res, r.status, r.body);
+        }
 
         if (url.pathname === '/api/inspect') {
           const url0 = s(body.url);

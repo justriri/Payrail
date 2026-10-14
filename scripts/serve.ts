@@ -25,6 +25,12 @@ import type { OrderDeps } from '../src/orchestrator.ts';
 import { planPayment } from '../src/planner.ts';
 import { policyFromEnv } from '../src/policy.ts';
 import { runAmmSwap, runSwap } from '../src/swapexec.ts';
+import { createDemoNetwork, seedDemo } from '../src/demoapis.ts';
+import { recoverExecutions } from '../src/execute.ts';
+import { openDb } from '../src/db.ts';
+import { RateLimiter } from '../src/egress.ts';
+import { generateMasterKey, masterKeyFrom } from '../src/vault.ts';
+import type { MarketRuntime } from '../src/market.ts';
 import { createWebServer } from '../src/webapi.ts';
 import type { WebRuntime } from '../src/webapi.ts';
 import { createSimulatedRuntime } from '../src/websim.ts';
@@ -150,7 +156,31 @@ if (args.includes('--simulate')) {
   line(account ? 'LIVE MODE: payments enabled (key loaded from the file you supplied; it is never shown).' : 'LIVE MODE (read-only): no key loaded, payments disabled.');
 }
 
-const { server } = createWebServer(runtime);
+// ---- marketplace (TEST CREDITS ONLY; independent of the Buy payment flow above)
+const dbPath = opt('market-db') ?? (args.includes('--simulate') ? ':memory:' : 'data/marketplace.db');
+const marketDb = openDb(dbPath);
+let vaultKey;
+if (process.env.PAYRAIL_VAULT_KEY) {
+  vaultKey = masterKeyFrom(process.env.PAYRAIL_VAULT_KEY_ID ?? 'k1', process.env.PAYRAIL_VAULT_KEY);
+} else {
+  vaultKey = generateMasterKey('ephemeral');
+  line('Marketplace vault key: none set (PAYRAIL_VAULT_KEY), using a temporary one. Seller credentials saved now cannot be read after a restart.');
+}
+const seeded = args.includes('--demo') || args.includes('--simulate');
+if (seeded) seedDemo(marketDb, vaultKey);
+const demoNet = createDemoNetwork();
+const rec = recoverExecutions(marketDb, { staleHeldMs: 5 * 60_000, unresolvedMs: 60 * 60_000 });
+if (rec.interrupted || rec.released) line(`Marketplace recovery: ${rec.interrupted} interrupted call(s) marked unresolved, ${rec.released} released to buyers.`);
+const market: MarketRuntime = {
+  db: marketDb,
+  keys: [vaultKey],
+  activeKey: vaultKey,
+  execute: { demoCall: { limiter: new RateLimiter(60, 10), fetchOptions: { resolver: demoNet.resolver, transport: demoNet.transport, timeoutMs: 3_000 } } },
+  buyCatalog: () => runtime.catalog(),
+};
+line(`Marketplace: test credits only${seeded ? ', demo APIs seeded' : ''} (page: /market.html).`);
+
+const { server } = createWebServer(runtime, { market });
 server.listen(port, '127.0.0.1', () => {
   line(`\nPayrail is running:  http://127.0.0.1:${port}/`);
   line('Open that address in your browser. Press Ctrl+C to stop.');

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="payrail-token" content="__PAYRAIL_TOKEN__">
+  <meta name="payrail-mode" content="__PAYRAIL_MODE__">
+  <title>Payrail Marketplace</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>Payrail Marketplace</h1>
+    <p class="tagline">Pay only for API responses that meet the written contract. <a href="/">Back to Pay (Buy gateway)</a></p>
+    <div class="banner" id="mode-banner">TEST CREDITS ONLY — no real money moves in the marketplace. The Buy payment flow is separate and unchanged.</div>
+  </header>
+
+  <main>
+    <section class="card" id="buyer-card">
+      <h2>Buyer</h2>
+      <div id="buyer"></div>
+    </section>
+
+    <section class="card">
+      <h2>Services</h2>
+      <div class="filters"><input id="q" type="search" placeholder="Search services" autocomplete="off"></div>
+      <p id="cat-status" class="muted" role="status">Loading…</p>
+      <div id="cat-list" class="cards"></div>
+    </section>
+
+    <section class="card" id="run-card" hidden>
+      <h2 id="run-title">Run</h2>
+      <p id="run-terms" class="hint"></p>
+      <label for="run-input">Input (JSON object)</label>
+      <textarea id="run-input" rows="3" spellcheck="false">{}</textarea>
+      <div class="row"><button id="run-btn" type="button">Run and pay only if it qualifies</button><span id="run-msg" class="muted"></span></div>
+      <div id="run-result"></div>
+    </section>
+
+    <section class="card">
+      <h2>Your requests</h2>
+      <div id="history" class="muted">Create a buyer first.</div>
+    </section>
+
+    <section class="card" id="seller-card">
+      <h2>Seller</h2>
+      <p class="hint">Sign in by signing a short message with your wallet. Nothing is sent on-chain and no key is ever pasted here. Seller credentials are encrypted and are never shown again.</p>
+      <div id="seller"></div>
+    </section>
+  </main>
+  <script src="/market.js"></script>
+</body>
+</html>
