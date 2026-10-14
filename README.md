@@ -220,3 +220,7 @@ evidence/   generated submission evidence
 ```
 
 See `docs/ARCHITECTURE.md` for how the pieces fit together.
+
+## Marketplace (pay only for qualifying responses)
+
+See [docs/MARKETPLACE.md](docs/MARKETPLACE.md): what exists, how each part was verified, the two (test-credit / real-funds) modes, and the trust assumptions.
