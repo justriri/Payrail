@@ -121,6 +121,8 @@ export interface Listing {
   asset: string;
   feeBps: number;
   verifiedAt: string | null;
+  /** platform-operated demo listing: served only by the in-process demo network */
+  demo: boolean;
 }
 const toListing = (r: Record<string, unknown>): Listing => ({
   id: String(r.id),
@@ -135,6 +137,7 @@ const toListing = (r: Record<string, unknown>): Listing => ({
   asset: String(r.asset),
   feeBps: Number(r.fee_bps),
   verifiedAt: r.verified_at === null ? null : String(r.verified_at),
+  demo: Number(r.demo) === 1,
 });
 
 export function getListing(db: Db, id: string): Listing | undefined {

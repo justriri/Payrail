@@ -188,10 +188,16 @@ CREATE TRIGGER contract_body_immutable BEFORE UPDATE OF body_json, body_hash, ve
 CREATE TRIGGER contract_no_delete BEFORE DELETE ON contract_versions BEGIN SELECT RAISE(ABORT, 'contract versions cannot be deleted'); END;
 `;
 
+/** Version 4: platform-operated demo listings (served only by the in-process demo network, never the real internet). */
+const V4 = `
+ALTER TABLE listings ADD COLUMN demo INTEGER NOT NULL DEFAULT 0;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'accounts, listings, contracts, ledger, executions, audit', sql: V1 },
   { version: 2, name: 'encrypted seller credentials', sql: V2 },
   { version: 3, name: 'sign-in, listing endpoints, ownership challenges, test runs', sql: V3 },
+  { version: 4, name: 'demo listings flag', sql: V4 },
 ];
 
 /** Open (creating the file and folder if needed) and bring the schema up to date. ':memory:' for tests. */
