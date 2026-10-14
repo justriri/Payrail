@@ -13,6 +13,8 @@ import type { MarketRuntime } from '../src/market.ts';
 import { verifyLedger } from '../src/ledger.ts';
 import { generateMasterKey } from '../src/vault.ts';
 import { createWebServer } from '../src/webapi.ts';
+import { TRANSFER_TOPIC, fundingMessage } from '../src/funding.ts';
+import type { ChainReader, ChainReceipt } from '../src/funding.ts';
 import { createSimulatedRuntime } from '../src/websim.ts';
 
 const SELLER_SECRET = 'sk_seller_http_secret_9876543210abcdef';
@@ -26,7 +28,7 @@ const buyCat = normalizeCatalog(
   Date.now(),
 );
 
-async function start() {
+async function start(liveCfg?: MarketRuntime['live']) {
   const db = openDb(':memory:');
   seedDemo(db, mk);
   const demo = createDemoNetwork();
@@ -50,6 +52,7 @@ async function start() {
     testCall: { limiter: new RateLimiter(100, 100), fetchOptions: { resolver: sellerResolver, transport: sellerTransport } },
     domain: { txt: async (name) => (txtRecords.has(name) ? [[txtRecords.get(name)!]] : []) },
     buyCatalog: async () => buyCat,
+    ...(liveCfg ? { live: liveCfg } : {}),
   };
   const rt = createSimulatedRuntime({ scenario: 'ok', delayMs: 5 });
   const { server, token } = createWebServer(rt, { token: 'test-token', market });
@@ -269,6 +272,133 @@ test('the marketplace page is served with the token and the static allow-list st
     assert.equal((await fetch(h.base + '/market.js')).status, 200);
     assert.equal((await fetch(h.base + '/package.json')).status, 404);
     assert.equal((await fetch(h.base + '/..%2fsrc%2fvault.ts')).status, 404);
+  } finally {
+    await h.close();
+  }
+});
+
+// ------------------------------------------------------------------ phase 2 over HTTP
+
+test('agents over HTTP: owner creates a capped key; the agent runs without the page token; caps, allow-list and revocation hold', async () => {
+  const h = await start();
+  try {
+    const bt = await buyer(h);
+    await h.call('POST', '/credits', { bearer: bt, body: { amount: '1' } });
+    const cat = (await h.call('GET', '/catalog')).body.items as any[];
+    const price = cat.find((i) => i.title.startsWith('Demo token price'));
+    const echo = cat.find((i) => i.title === 'Demo text echo');
+    const created = await h.call('POST', '/agents', { bearer: bt, body: { name: 'bot-one', perRequestCap: '0.03', dailyCap: '0.05', allowedListings: [price.id] } });
+    assert.equal(created.status, 201, created.text);
+    const key = created.body.key as string;
+    const agentId = created.body.agent.id as string;
+
+    // the agent calls with ONLY its key: no page token, no Origin
+    const raw = async (path: string, body: unknown, bearer: string) => {
+      const r = await fetch(h.base + '/api/market' + path, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${bearer}` }, body: JSON.stringify(body) });
+      return { status: r.status, body: (await r.json()) as any };
+    };
+    const ok = await raw('/agent/execute', { listingId: price.id, input: { id: 'eth' }, idempotencyKey: 'agent-http-01' }, key);
+    assert.equal(ok.status, 201);
+    assert.equal(ok.body.result.charged, true);
+    assert.equal((await raw('/agent/execute', { listingId: echo.id, input: { text: 'x' }, idempotencyKey: 'agent-http-02' }, key)).body.code, 'LISTING_NOT_ALLOWED');
+    assert.equal((await raw('/agent/execute', { listingId: price.id, input: { id: 'eth' }, idempotencyKey: 'agent-http-03' }, key)).status, 201);
+    assert.equal((await raw('/agent/execute', { listingId: price.id, input: { id: 'eth' }, idempotencyKey: 'agent-http-04' }, key)).body.code, 'DAILY_CAP');
+    // an agent key cannot act as a buyer, and a made-up key is refused
+    assert.equal((await h.call('GET', '/me', { bearer: key })).status, 401);
+    assert.equal((await raw('/agent/execute', { listingId: price.id, input: {}, idempotencyKey: 'agent-http-05' }, 'pra_' + 'z'.repeat(43))).status, 401);
+    // a cross-site browser request cannot use the token-free agent route
+    const xo = await fetch(h.base + '/api/market/agent/execute', { method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://evil.example', authorization: `Bearer ${key}` }, body: '{}' });
+    assert.equal(xo.status, 403);
+
+    const listed = await h.call('GET', '/agents', { bearer: bt });
+    assert.equal(listed.body.agents[0].spentLast24h, '0.04');
+    assert.ok(!listed.text.includes(key));
+    assert.equal((await h.call('POST', `/agents/${agentId}/revoke`, { bearer: bt })).body.agent.status, 'revoked');
+    assert.equal((await raw('/agent/execute', { listingId: price.id, input: { id: 'eth' }, idempotencyKey: 'agent-http-06' }, key)).status, 401);
+    assert.deepEqual(verifyLedger(h.db), { ok: true, problems: [] });
+  } finally {
+    await h.close();
+  }
+});
+
+test('real-funds routes are closed in test mode and say why', async () => {
+  const h = await start();
+  try {
+    const bt = await buyer(h);
+    assert.equal((await h.call('GET', '/funding', { bearer: bt })).body.enabled, false);
+    const w = privateKeyToAccount(generatePrivateKey());
+    const r = await h.call('POST', '/funding/wallet', { bearer: bt, body: { wallet: w.address, signature: '0x00' } });
+    assert.equal(r.status, 409);
+    assert.equal(r.body.code, 'LIVE_DISABLED');
+    const st = (await seller(h)).token;
+    assert.equal((await h.call('POST', '/seller/payouts', { bearer: st, body: { amount: '1' } })).body.code, 'LIVE_DISABLED');
+    const l = await h.call('POST', '/seller/listings', { bearer: st, body: { name: 'Real listing', endpointUrl: 'https://api.x.example/v1', price: '1', live: true } });
+    assert.equal(l.body.code, 'LIVE_DISABLED');
+  } finally {
+    await h.close();
+  }
+});
+
+test('real-funds mode over HTTP (fake chain): register wallet, confirm a deposit, spend it; payout request reserves earnings', async () => {
+  const TOKEN = '0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e';
+  const DEP = '0x00000000000000000000000000000000000dEaD1';
+  const receipts = new Map<string, ChainReceipt>();
+  const reader: ChainReader = { blockNumber: async () => 5_000n, receipt: async (hash) => receipts.get(hash.toLowerCase()) ?? null };
+  const h = await start({
+    funding: { chainId: 42220, token: TOKEN, asset: 'USDT', depositAddress: DEP, minConfirmations: 5, maxDepositAtomic: 10_000_000n, reader },
+    payout: { payableAssets: ['USDT'], minAtomic: 10_000n, maxAtomic: 10_000_000n },
+  });
+  try {
+    const bt = await buyer(h);
+    const w = privateKeyToAccount(generatePrivateKey());
+    const buyerId = (await h.call('GET', '/me', { bearer: bt })).body.accountId as string;
+    const info = await h.call('GET', '/funding', { bearer: bt });
+    assert.equal(info.body.enabled, true);
+    assert.equal(info.body.depositAddress, DEP);
+    const reg = await h.call('POST', '/funding/wallet', { bearer: bt, body: { wallet: w.address, signature: await w.signMessage({ message: fundingMessage(buyerId, w.address) }) } });
+    assert.equal(reg.status, 201, reg.text);
+
+    const pad = (a: string) => `0x${a.toLowerCase().replace('0x', '').padStart(64, '0')}`;
+    const hash = `0x${'ab'.repeat(32)}`;
+    receipts.set(hash, { status: 'success', blockNumber: 4_990n, logs: [{ address: TOKEN, topics: [TRANSFER_TOPIC, pad(w.address), pad(DEP)], data: `0x${(1_000_000n).toString(16).padStart(64, '0')}`, logIndex: 2 }] });
+    const c = await h.call('POST', '/funding/confirm', { bearer: bt, body: { txHash: hash } });
+    assert.equal(c.status, 200, c.text);
+    assert.equal(c.body.credited[0].amount, '1');
+    assert.equal((await h.call('POST', '/funding/confirm', { bearer: bt, body: { txHash: hash } })).body.credited[0].alreadyCredited, true);
+    const me = await h.call('GET', '/me', { bearer: bt });
+    assert.equal(me.body.live.available, '1');
+    assert.equal(me.body.available, '0', 'test credits are separate');
+
+    // a seller prices a real listing; the buyer pays real (ledger) USDT only for a qualifying answer
+    const { w: sw, token: st } = await seller(h);
+    const created = await h.call('POST', '/seller/listings', { bearer: st, body: { name: 'Real quote API', endpointUrl: 'https://api.sellerco.example/v1/quote', price: '0.5', live: true } });
+    assert.equal(created.status, 201, created.text);
+    assert.equal(created.body.listing.price.asset, 'USDT');
+    const l = created.body.listing;
+    await h.call('POST', `/seller/listing/${l.id}/wallet-proof`, { bearer: st, body: { signature: await sw.signMessage({ message: l.challenge.walletMessage }) } });
+    h.txtRecords.set(l.challenge.dnsRecord.name, l.challenge.dnsRecord.value);
+    await h.call('POST', `/seller/listing/${l.id}/domain-proof`, { bearer: st, body: { method: 'dns_txt' } });
+    await h.call('POST', `/seller/listing/${l.id}/credential`, { bearer: st, body: { label: 'key', headerName: 'X-Api-Key', value: SELLER_SECRET } });
+    const sug = await h.call('POST', `/seller/listing/${l.id}/suggest-contract`, { bearer: st, body: { input: {} } });
+    const prop = await h.call('POST', `/seller/listing/${l.id}/contract`, { bearer: st, body: { contract: sug.body.suggestion } });
+    await h.call('POST', `/seller/contract/${prop.body.contract.id}/approve`, { bearer: st });
+    assert.equal((await h.call('POST', `/seller/listing/${l.id}/publish`, { bearer: st })).body.listing.status, 'published');
+
+    const run = await h.call('POST', '/execute', { bearer: bt, body: { listingId: l.id, input: {}, idempotencyKey: 'live-key-0001' } });
+    assert.equal(run.body.result.charged, true, run.text);
+    assert.equal(run.body.result.asset, 'USDT');
+    assert.equal((await h.call('GET', '/me', { bearer: bt })).body.live.available, '0.5');
+
+    const sme = await h.call('GET', '/me', { bearer: st });
+    assert.equal(sme.body.live.earnings, '0.485');
+    const pay = await h.call('POST', '/seller/payouts', { bearer: st, body: { amount: '0.4' } });
+    assert.equal(pay.status, 201, pay.text);
+    assert.equal(pay.body.payout.destination, sw.address.toLowerCase());
+    assert.equal((await h.call('GET', '/me', { bearer: st })).body.live.earnings, '0.085');
+    assert.equal((await h.call('POST', '/seller/payouts', { bearer: st, body: { amount: '0.4' } })).body.code, 'INSUFFICIENT_EARNINGS');
+    assert.equal((await h.call('POST', `/seller/payouts/${pay.body.payout.id}/cancel`, { bearer: st })).body.payout.state, 'cancelled');
+    assert.equal((await h.call('GET', '/me', { bearer: st })).body.live.earnings, '0.485');
+    assert.deepEqual(verifyLedger(h.db), { ok: true, problems: [] });
   } finally {
     await h.close();
   }

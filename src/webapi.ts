@@ -825,7 +825,8 @@ export function createWebServer(rt: WebRuntime, opts: { webDir?: string; token?:
         // CSRF / DNS-rebinding defence for anything that can start a payment
         const origin = req.headers.origin;
         if (origin !== undefined && origin !== `http://${host}`) return send(res, 403, { ok: false, problems: [{ code: 'BAD_ORIGIN', message: 'Cross-site request refused.' }] });
-        if (req.headers['x-payrail-token'] !== token) return send(res, 403, { ok: false, problems: [{ code: 'BAD_TOKEN', message: 'Missing or wrong session token. Reload the page.' }] });
+        const agentRoute = url.pathname === '/api/market/agent/execute' && origin === undefined;
+        if (!agentRoute && req.headers['x-payrail-token'] !== token) return send(res, 403, { ok: false, problems: [{ code: 'BAD_TOKEN', message: 'Missing or wrong session token. Reload the page.' }] });
         const body = await readJson(req);
         if (!body) return send(res, 400, { ok: false, problems: [{ code: 'BAD_REQUEST', message: 'Send a small JSON body.' }] });
         const s = (v: unknown) => (typeof v === 'string' ? v : undefined);

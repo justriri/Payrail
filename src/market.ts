@@ -17,6 +17,11 @@ import type { CallOptions } from './gateway.ts';
 import { VaultError, listCredentials, putCredential, revokeCredential } from './vault.ts';
 import type { MasterKey } from './vault.ts';
 import { randomBytes, createHash } from 'node:crypto';
+import { AgentError, authenticateAgent, createAgent, executeAsAgent, listAgents, revokeAgent } from './agents.ts';
+import { FundingError, confirmDeposit, fundingMessage, fundingWallets, registerFundingWallet } from './funding.ts';
+import type { FundingConfig } from './funding.ts';
+import { PayoutError, cancelPayout, payoutsOf, requestPayout } from './payouts.ts';
+import type { PayoutPolicy } from './payouts.ts';
 
 /** Test credits live in their own ledger asset so they can never mix with real funds. */
 export const TEST_ASSET = 'TESTUSDT';
@@ -37,6 +42,8 @@ export interface MarketRuntime {
   domain?: DomainDeps;
   /** the Buy gateway catalog, when available */
   buyCatalog?: () => Promise<Catalog>;
+  /** real-funds mode. Absent = test credits only and every real-money route answers LIVE_DISABLED. */
+  live?: { funding: FundingConfig; payout: PayoutPolicy };
 }
 
 export interface MarketItem {
@@ -223,11 +230,13 @@ function mapError(e: unknown): MarketResponse {
   if (e instanceof ApiError) return { status: e.status, body: { ok: false, code: e.code, message: e.message } };
   const code = (e as { code?: string }).code ?? 'ERROR';
   const message = (e as Error).message;
-  const known = e instanceof LedgerError || e instanceof SellerError || e instanceof VaultError || e instanceof ContractError || e instanceof GatewayError || e instanceof TesterError;
+  const known = e instanceof LedgerError || e instanceof SellerError || e instanceof VaultError || e instanceof ContractError || e instanceof GatewayError || e instanceof TesterError || e instanceof FundingError || e instanceof PayoutError || e instanceof AgentError;
   if (!known) return { status: 500, body: { ok: false, code: 'INTERNAL_ERROR', message: 'Something went wrong on our side.' } };
   const status: Record<string, number> = {
     SESSION_INVALID: 401, NOT_OWNER: 403, NOT_FOUND: 404, INSUFFICIENT_CREDITS: 402, IDEMPOTENCY_CONFLICT: 409, WRONG_STATE: 409, HOST_CLAIMED: 409,
     LISTING_NOT_PUBLISHED: 409, CONTRACT_NOT_APPROVED: 409, RATE_LIMITED: 429, DOMAIN_PROOF_FAILED: 422, BAD_SIGNATURE: 422,
+    WALLET_TAKEN: 409, NO_FUNDING_WALLET: 409, TX_NOT_FOUND: 404, TX_REVERTED: 422, NOT_ENOUGH_CONFIRMATIONS: 409, NO_MATCHING_TRANSFER: 422, OVER_LIMIT: 422, READ_FAILED: 502,
+    KEY_INVALID: 401, LISTING_NOT_ALLOWED: 403, PER_REQUEST_CAP: 403, DAILY_CAP: 403, INSUFFICIENT_EARNINGS: 409, NO_WALLET: 409, TEST_ASSET: 422,
   };
   return { status: status[code] ?? 400, body: { ok: false, code, message } };
 }
@@ -283,8 +292,12 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
       out.available = formatAtomic(balance(db, id, 'buyer_available', TEST_ASSET));
       out.held = formatAtomic(balance(db, id, 'buyer_held', TEST_ASSET));
       out.creditCap = formatAtomic(TEST_CREDIT_CAP);
+      if (rt.live) {
+        out.live = { asset: LIVE_ASSET, available: formatAtomic(balance(db, id, 'buyer_available', LIVE_ASSET)), held: formatAtomic(balance(db, id, 'buyer_held', LIVE_ASSET)) };
+      }
     } else {
       out.earnings = formatAtomic(balance(db, id, 'seller_earnings', TEST_ASSET));
+      if (rt.live) out.live = { asset: LIVE_ASSET, earnings: formatAtomic(balance(db, id, 'seller_earnings', LIVE_ASSET)), pendingPayout: formatAtomic(balance(db, id, 'payout_pending', LIVE_ASSET)) };
     }
     return ok(out);
   }
@@ -310,6 +323,85 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
     return ok({ result: executionResult(db, m[1]!) });
   }
 
+  // ---- real funds (only when live mode is configured)
+  const liveOnly = () => {
+    if (!rt.live) throw new ApiError(409, 'LIVE_DISABLED', 'real-funds mode is not enabled on this server; the marketplace is running on test credits');
+    return rt.live.funding;
+  };
+  if (method === 'GET' && path === '/funding') {
+    const id = buyer();
+    if (!rt.live) return ok({ enabled: false });
+    const f = rt.live.funding;
+    return ok({
+      enabled: true,
+      asset: f.asset,
+      chainId: f.chainId,
+      token: f.token,
+      depositAddress: f.depositAddress,
+      minConfirmations: f.minConfirmations,
+      maxDeposit: formatAtomic(f.maxDepositAtomic),
+      wallets: fundingWallets(db, id),
+      walletMessageTemplate: fundingMessage(id, '<your wallet address in lowercase>'),
+      howTo: 'Register the wallet you will send from (sign the message), then send the deposit token from that wallet to the deposit address, then paste the transaction hash. Only transfers from your registered wallet are credited.',
+    });
+  }
+  if (method === 'POST' && path === '/funding/wallet') {
+    const id = buyer();
+    liveOnly();
+    return ok(await registerFundingWallet(db, id, str(body.wallet, 'wallet', 60), str(body.signature, 'signature', 400), now), 201);
+  }
+  if (method === 'POST' && path === '/funding/confirm') {
+    const id = buyer();
+    const r = await confirmDeposit(db, liveOnly(), id, str(body.txHash, 'txHash', 80), now);
+    return ok({ credited: r.credited.map((c) => ({ amount: formatAtomic(c.amountAtomic), logIndex: c.logIndex, alreadyCredited: !c.created })), confirmations: r.confirmations });
+  }
+  if (method === 'GET' && path === '/seller/payouts') {
+    const id = seller();
+    return ok({ enabled: Boolean(rt.live), payouts: payoutsOf(db, id).map((p) => ({ id: p.id, amount: formatAtomic(p.amountAtomic), asset: p.asset, destination: p.destination, state: p.state, txHash: p.txHash, requestedAt: p.requestedAt, note: p.note })) });
+  }
+  if (method === 'POST' && path === '/seller/payouts') {
+    const id = seller();
+    if (!rt.live) throw new ApiError(409, 'LIVE_DISABLED', 'payouts are not enabled; earnings here are test credits and cannot be paid out');
+    const p = requestPayout(db, id, { asset: LIVE_ASSET, amountAtomic: parseAtomic(body.amount) }, rt.live.payout, now);
+    return ok({ payout: { id: p.id, state: p.state, destination: p.destination, amount: formatAtomic(p.amountAtomic) }, note: 'Waiting for operator approval. Funds are reserved and cannot be spent twice.' }, 201);
+  }
+  if (method === 'POST' && (m = path.match(/^\/seller\/payouts\/([\w-]{1,80})\/cancel$/))) {
+    const id = seller();
+    const cur = payoutsOf(db, id).find((p) => p.id === m![1]);
+    if (!cur) throw new ApiError(404, 'NOT_FOUND', 'no such payout');
+    return ok({ payout: { id: cur.id, state: cancelPayout(db, cur.id, id, now).state } });
+  }
+
+  // ---- agents (owner side)
+  if (method === 'POST' && path === '/agents') {
+    const id = buyer();
+    const list = Array.isArray(body.allowedListings) ? body.allowedListings.filter((x): x is string => typeof x === 'string') : undefined;
+    const r = createAgent(db, id, { name: str(body.name, 'name', 60), perRequestCapAtomic: parseAtomic(body.perRequestCap), dailyCapAtomic: parseAtomic(body.dailyCap), ...(list && list.length ? { allowedListings: list } : {}) }, now);
+    return ok({ agent: { id: r.agent.id, name: r.agent.name, perRequestCap: formatAtomic(r.agent.perRequestCapAtomic), dailyCap: formatAtomic(r.agent.dailyCapAtomic) }, key: r.key, note: 'Copy the key now. It is shown once and only its hash is stored.' }, 201);
+  }
+  if (method === 'GET' && path === '/agents') {
+    const id = buyer();
+    return ok({
+      agents: listAgents(db, id, now).map((a) => ({ id: a.id, name: a.name, status: a.status, perRequestCap: formatAtomic(a.perRequestCapAtomic), dailyCap: formatAtomic(a.dailyCapAtomic), spentLast24h: formatAtomic(a.spentLast24hAtomic), allowedListings: a.allowedListings })),
+    });
+  }
+  if (method === 'POST' && (m = path.match(/^\/agents\/([\w-]{1,80})\/revoke$/))) {
+    const id = buyer();
+    return ok({ agent: { id: m[1], status: revokeAgent(db, id, m[1]!, now).status } });
+  }
+  // ---- agents (the agent itself; authenticated by its own key, which a browser never holds)
+  if (method === 'POST' && path === '/agent/execute') {
+    if (!req.bearer) throw new AgentError('KEY_INVALID', 'send the agent key as a Bearer token');
+    const agent = authenticateAgent(db, req.bearer);
+    const r = await executeAsAgent(db, rt.keys, agent, { listingId: str(body.listingId, 'listingId', 80), idempotencyKey: str(body.idempotencyKey, 'idempotencyKey', 50), input: body.input ?? {} }, rt.execute ?? {});
+    return ok({ result: r }, r.replay ? 200 : 201);
+  }
+  if (method === 'GET' && path === '/agent/catalog') {
+    if (!req.bearer) throw new AgentError('KEY_INVALID', 'send the agent key as a Bearer token');
+    authenticateAgent(db, req.bearer);
+    return ok({ items: payrailItems(db) });
+  }
+
   // ---- seller sign-in
   if (method === 'POST' && path === '/seller/login/start') return ok(startLogin(db, str(body.wallet, 'wallet', 60), now));
   if (method === 'POST' && path === '/seller/login/complete') {
@@ -328,7 +420,7 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
     const r = submitListing(
       db,
       id,
-      { name: str(body.name, 'name', 80), description: typeof body.description === 'string' ? body.description : '', endpointUrl: str(body.endpointUrl, 'endpointUrl', 500), method: meth, priceAtomic: parseAtomic(body.price), asset: TEST_ASSET },
+      { name: str(body.name, 'name', 80), description: typeof body.description === 'string' ? body.description : '', endpointUrl: str(body.endpointUrl, 'endpointUrl', 500), method: meth, priceAtomic: parseAtomic(body.price), asset: body.live === true ? liveOnly().asset : TEST_ASSET },
       now,
     );
     return ok({ listing: listingView(db, r.listing, true) }, 201);

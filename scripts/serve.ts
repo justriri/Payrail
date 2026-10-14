@@ -28,6 +28,8 @@ import { runAmmSwap, runSwap } from '../src/swapexec.ts';
 import { createDemoNetwork, seedDemo } from '../src/demoapis.ts';
 import { recoverExecutions } from '../src/execute.ts';
 import { openDb } from '../src/db.ts';
+import { createViemReader } from '../src/funding.ts';
+import { rpcUrlList } from '../src/chainread.ts';
 import { RateLimiter } from '../src/egress.ts';
 import { generateMasterKey, masterKeyFrom } from '../src/vault.ts';
 import type { MarketRuntime } from '../src/market.ts';
@@ -46,6 +48,7 @@ const port = Number(opt('port') ?? 4402);
 const line = (s = '') => console.log(s);
 
 let runtime: WebRuntime;
+let liveMarket: MarketRuntime['live'];
 if (args.includes('--simulate')) {
   const scenario = (opt('scenario') ?? 'ok') as SimScenario;
   if (!['ok', 'swap_fails', 'payment_uncertain', 'price_rises'].includes(scenario)) {
@@ -73,6 +76,30 @@ if (args.includes('--simulate')) {
   const account = cfg.privateKey ? privateKeyToAccount(cfg.privateKey) : undefined;
   const policy = policyFromEnv(process.env);
   const live = createLive(cfg, policy);
+  // Real-funds marketplace is OFF unless explicitly enabled. Deposits are only ever credited after on-chain verification;
+  // payouts are never sent by this server (operator CLI only).
+  if (process.env.PAYRAIL_MARKET_LIVE === '1') {
+    const depositAddress = process.env.PAYRAIL_DEPOSIT_ADDRESS;
+    const usdt = ASSETS.find((a) => a.symbol === 'USDT')!;
+    if (!depositAddress || !/^0x[0-9a-fA-F]{40}$/.test(depositAddress)) {
+      line('[STOP] PAYRAIL_MARKET_LIVE=1 needs PAYRAIL_DEPOSIT_ADDRESS (a 0x address you control).');
+      process.exit(1);
+    }
+    const cap = BigInt(Math.round(Number(process.env.PAYRAIL_MAX_DEPOSIT_USD ?? '25') * 1_000_000));
+    liveMarket = {
+      funding: {
+        chainId: cfg.chainId,
+        token: usdt.address,
+        asset: 'USDT',
+        depositAddress,
+        minConfirmations: Number(process.env.PAYRAIL_DEPOSIT_CONFIRMATIONS ?? '20'),
+        maxDepositAtomic: cap,
+        reader: createViemReader(rpcUrlList(cfg.rpcUrl, cfg.rpcFallbackUrls)),
+      },
+      payout: { payableAssets: ['USDT'], minAtomic: 1_000_000n, maxAtomic: cap },
+    };
+    line(`REAL-FUNDS MARKETPLACE ENABLED: deposits to ${depositAddress} are credited after ${liveMarket.funding.minConfirmations} confirmations (cap ${cap / 1_000_000n} USDT each). Payouts need operator approval via scripts/payouts.ts.`);
+  }
   const reader = createChainReader(live.client as never, live.getBalance, live.reads);
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -177,6 +204,7 @@ const market: MarketRuntime = {
   activeKey: vaultKey,
   execute: { demoCall: { limiter: new RateLimiter(60, 10), fetchOptions: { resolver: demoNet.resolver, transport: demoNet.transport, timeoutMs: 3_000 } } },
   buyCatalog: () => runtime.catalog(),
+  ...(liveMarket ? { live: liveMarket } : {}),
 };
 line(`Marketplace: test credits only${seeded ? ', demo APIs seeded' : ''} (page: /market.html).`);
 
