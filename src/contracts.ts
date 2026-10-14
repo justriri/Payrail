@@ -274,7 +274,7 @@ export function proposeContract(db: Db, listingId: string, actorId: string, raw:
   const hash = hashContract(body);
   return inTransaction(db, () => {
     const l = ownedListing(db, listingId, actorId);
-    if (!['verified', 'published'].includes(String(l.status))) throw new ContractError('LISTING_NOT_VERIFIED', 'verify ownership before defining a contract');
+    if (!['verified', 'published', 'unpublished'].includes(String(l.status))) throw new ContractError('LISTING_NOT_VERIFIED', 'verify ownership before defining a contract');
     const same = queryOne(db, "SELECT * FROM contract_versions WHERE listing_id = ? AND body_hash = ? AND status <> 'superseded'", listingId, hash);
     if (same) return toVersion(same);
     const m = queryOne<{ v: bigint | null }>(db, 'SELECT MAX(version) AS v FROM contract_versions WHERE listing_id = ?', listingId);

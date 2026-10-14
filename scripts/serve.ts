@@ -12,9 +12,9 @@
 //
 // Options: --port <n> (default 4402).
 import { createServer } from 'node:http';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { KeystoreError, decryptKey } from '../src/keystore.ts';
 import type { KeystoreFile } from '../src/keystore.ts';
 import { privateKeyToAccount } from 'viem/accounts';
@@ -214,6 +214,20 @@ const marketDb = openDb(dbPath);
 let vaultKey;
 if (process.env.PAYRAIL_VAULT_KEY) {
   vaultKey = masterKeyFrom(process.env.PAYRAIL_VAULT_KEY_ID ?? 'k1', process.env.PAYRAIL_VAULT_KEY);
+} else if (dbPath !== ':memory:' && !liveMarket) {
+  // Test-credit mode with a persistent database: keep a local vault key file next to the database (gitignored, owner-only)
+  // so stored seller credentials survive restarts. Real-funds mode must supply PAYRAIL_VAULT_KEY explicitly.
+  const keyFile = join(dirname(dbPath), 'vault.key');
+  let hex: string;
+  if (existsSync(keyFile)) {
+    hex = readFileSync(keyFile, 'utf8').trim();
+  } else {
+    hex = generateMasterKey('file1').key.toString('hex');
+    mkdirSync(dirname(keyFile), { recursive: true });
+    writeFileSync(keyFile, `${hex}\n`, { mode: 0o600 });
+    line(`Marketplace vault key: created ${keyFile} (keep it with the database; it decrypts stored seller credentials).`);
+  }
+  vaultKey = masterKeyFrom('file1', hex);
 } else {
   vaultKey = generateMasterKey('ephemeral');
   line('Marketplace vault key: none set (PAYRAIL_VAULT_KEY), using a temporary one. Seller credentials saved now cannot be read after a restart.');

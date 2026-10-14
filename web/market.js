@@ -240,6 +240,40 @@ async function renderFunding() {
 }
 
 // ------------------------------------------------------------------ seller
+// Seller UI state lives in `ui` (mirrored to localStorage; NEVER holds secrets) so that re-rendering the dashboard after
+// any action cannot lose what the seller typed. Secrets (credential values) are kept in memory only.
+const SELLER_UI_KEY = 'payrail.seller.ui';
+const blankForm = () => ({ name: '', desc: '', url: '', method: 'GET', price: '' });
+const ui = (() => {
+  try {
+    const v = JSON.parse(store.get(SELLER_UI_KEY) || 'null');
+    if (v && typeof v === 'object') return { form: { ...blankForm(), ...(v.form || {}) }, per: v.per && typeof v.per === 'object' ? v.per : {} };
+  } catch { /* fall through */ }
+  return { form: blankForm(), per: {} };
+})();
+const saveUi = () => store.set(SELLER_UI_KEY, JSON.stringify(ui));
+const per = (id) => (ui.per[id] = ui.per[id] || {});
+const memSecrets = {};
+let renderToken = 0;
+
+function sellerRoute() {
+  const m = /^#\/seller(?:\/(new|api\/([\w-]{1,80})))?$/.exec(location.hash);
+  if (!m || !m[1]) return { page: 'apis' };
+  if (m[1] === 'new') return { page: 'new' };
+  return { page: 'edit', id: m[2] };
+}
+const go = (hash) => { if (location.hash === hash) renderSeller(); else location.hash = hash; };
+
+// a status line that is always on screen while the seller works (sticky), so results are never lost off-screen
+function say(text, kind) {
+  const bar = $('seller-status');
+  clear(bar);
+  if (!text) { bar.hidden = true; return; }
+  bar.hidden = false;
+  bar.className = `status-bar ${kind || 'info'}`;
+  bar.append(el('span', { text }), el('button', { type: 'button', class: 'secondary', text: 'Dismiss', onclick: () => say('') }));
+}
+
 async function walletSign(message) {
   if (!window.ethereum) throw new Error('No browser wallet found. Use the sandbox seller instead, or install a wallet extension.');
   const [account] = await window.ethereum.request({ method: 'eth_requestAccounts' });
@@ -262,157 +296,272 @@ async function sellerLoginSandbox() {
   session.seller = d.token; store.set('payrail.seller', d.token);
   session.sandboxSeed = d.seed; store.set('payrail.sandboxSeed', d.seed);
 }
-const signOutSeller = () => { session.seller = null; store.set('payrail.seller', null); renderSeller(); };
+const signOutSeller = () => { session.seller = null; store.set('payrail.seller', null); say(''); renderSeller(); };
 
-const STEP = (done, text) => el('li', { class: done ? 'step done' : 'step', text: `${done ? '✓' : '○'} ${text}` });
+const STATUS_CLASS = { Published: 'ok', Suspended: 'bad', Draft: '', 'Pending verification': 'warn' };
+const chip = (text, cls) => el('span', { class: `badge ${cls || ''}`, text });
+const tick = (done, text) => el('li', { class: done ? 'step done' : 'step', text: `${done ? '✓' : '○'} ${text}` });
 
 async function renderSeller() {
+  const mine = ++renderToken;
   const box = $('seller');
-  clear(box);
   if (!session.seller) {
+    clear(box);
+    say('');
     box.append(
       el('p', { text: 'Sellers list an API, prove they own it, set a price and a response contract, and are paid only for qualifying responses.' }),
       el('div', { class: 'row' },
         config.sandbox && el('button', { type: 'button', text: 'Use the sandbox seller (no wallet needed)', onclick: async () => {
-          try { await sellerLoginSandbox(); renderSeller(); } catch (e) { flash(box, e.message, true); }
+          try { await sellerLoginSandbox(); renderSeller(); } catch (e) { say(e.message, 'bad'); }
         } }),
         el('button', { type: 'button', class: 'secondary', text: 'Sign in with a browser wallet', onclick: async () => {
-          try { await sellerLoginWallet(); renderSeller(); } catch (e) { flash(box, e.message, true); }
+          try { await sellerLoginWallet(); renderSeller(); } catch (e) { say(e.message, 'bad'); }
         } })),
       config.sandbox && el('p', { class: 'muted', text: 'Sandbox: Payrail derives a test wallet for you and serves your sandbox API and verification file itself. It is a complete walk-through, but proves nothing about real ownership.' }),
     );
     return;
   }
   const [me, ls, earn] = await Promise.all([api('/me', { bearer: session.seller }), api('/seller/listings', { bearer: session.seller }), api('/seller/earnings', { bearer: session.seller })]);
+  if (mine !== renderToken) return; // a newer render started; never paint stale data over it
   if (!ls.ok || !me.ok) { signOutSeller(); return; }
-  const sandboxAccount = Boolean(session.sandboxSeed);
+  clear(box);
+  const route = sellerRoute();
+  const listings = ls.listings;
+  const published = listings.filter((l) => l.public).length;
   box.append(
     el('div', { class: 'row' },
-      el('strong', { text: `Earnings: ${earn.earnings} ${earn.asset}` }), el('span', { class: 'badge', text: 'TEST CREDITS' }),
-      sandboxAccount && el('span', { class: 'badge o-sandbox', text: 'SANDBOX SELLER' }),
+      el('strong', { text: `Earnings: ${earn.earnings} ${earn.asset}` }), chip('TEST CREDITS'),
+      config.sandbox && session.sandboxSeed && chip('SANDBOX SELLER', 'o-sandbox'),
       el('button', { type: 'button', class: 'secondary', text: 'Sign out', onclick: signOutSeller })),
-    el('p', { class: 'muted', text: `Account ${me.accountId}` }),
+    el('p', { class: 'muted', text: `${listings.length} API${listings.length === 1 ? '' : 's'} · ${published} published · payouts: ${config.realFunds ? 'available once you have real earnings' : 'disabled (test credits cannot be paid out)'}` }),
+    el('nav', { class: 'subtabs', 'aria-label': 'Seller sections' },
+      el('a', { class: `subtab${route.page === 'apis' ? ' active' : ''}`, href: '#/seller', text: `My APIs (${listings.length})` }),
+      el('a', { class: `subtab${route.page === 'new' ? ' active' : ''}`, href: '#/seller/new', text: 'New listing' }),
+      route.page === 'edit' && el('span', { class: 'subtab active', text: 'Manage API' })),
   );
-  // earnings by outcome
-  if (earn.byState.length) {
-    box.append(el('table', {}, el('tr', {}, el('th', { text: 'Outcome' }), el('th', { text: 'Requests' }), el('th', { text: 'You earned' })),
-      ...earn.byState.map((s) => el('tr', {}, el('td', { text: s.state }), el('td', { text: String(s.count) }), el('td', { text: s.sellerAtomic })))));
-  }
-  if (earn.recent.length) {
-    box.append(el('details', {}, el('summary', { text: `Recent requests (${earn.recent.length})` }),
-      el('ul', {}, ...earn.recent.map((e) => el('li', { text: `${e.at.slice(0, 19).replace('T', ' ')}  ${e.listing}  ${e.state}  ${e.price} ${e.asset}${e.reason ? ` — ${e.reason}` : ''}` })))));
-  }
-  box.append(el('p', { class: 'muted', text: 'Payouts: ' + (config.realFunds ? 'request a payout below once you have real earnings.' : 'disabled. Earnings here are test credits and cannot be paid out.') }));
-  box.append(submitForm(box));
-  if (!ls.listings.length) box.append(el('p', { class: 'muted', text: 'No listings yet. Open "List a new API" above.' }));
-  for (const l of ls.listings) box.append(listingPanel(l, box));
+  if (route.page === 'new') box.append(newListingPage());
+  else if (route.page === 'edit') {
+    const l = listings.find((x) => x.id === route.id);
+    if (!l) { box.append(el('p', { class: 'problem', text: 'That listing was not found in your account.' }), el('a', { href: '#/seller', text: 'Back to My APIs' })); }
+    else box.append(editorPage(l));
+  } else box.append(myApisPage(listings, earn));
 }
 
-function submitForm(box) {
-  const f = {
-    name: el('input', { placeholder: 'Name' }), desc: el('input', { placeholder: 'Short description' }),
-    url: el('input', { placeholder: 'https://api.example.com/v1/price', type: 'url' }),
-    method: el('select', {}, el('option', { value: 'GET', text: 'GET' }), el('option', { value: 'POST', text: 'POST' })),
-    price: el('input', { placeholder: 'Price per qualifying response, e.g. 0.02' }),
-  };
+// ---- My APIs (private management view)
+function myApisPage(listings, earn) {
+  const wrap = el('div', {});
+  wrap.append(el('p', { class: 'notice', text: 'My APIs is your private management view: only you see these listings. Buyers only discover APIs with status "Published", in the Buyer tab.' }));
+  if (!listings.length) {
+    wrap.append(el('p', { class: 'muted', text: 'You have not submitted any APIs yet.' }), el('a', { class: 'btn', href: '#/seller/new', text: 'Create your first listing' }));
+  }
+  for (const l of listings) {
+    const o = l.ownership || {};
+    wrap.append(el('div', { class: 'svc wide', 'data-listing': l.id },
+      el('div', {}, el('strong', { text: l.name }), ' ', chip(l.displayStatus, STATUS_CLASS[l.displayStatus] || ''), ' ',
+        l.demo && chip('DEMO', 'o-demo'), l.sandbox && chip('SANDBOX', 'o-sandbox')),
+      l.description && el('div', { class: 'muted', text: l.description }),
+      el('div', { class: 'muted', text: `${l.method} ${l.endpointUrl}` }),
+      el('ul', { class: 'steps' },
+        el('li', { text: `Price: ${l.price.usd} ${l.price.asset} per qualifying response (platform fee ${l.feePercent}%)` }),
+        tick(o.wallet, 'Wallet ownership proof'),
+        tick(o.domain, `Domain ownership proof${o.domainMethod ? ` (${o.domainMethod === 'dns_txt' ? 'DNS record' : 'well-known file'})` : ''}`),
+        tick(l.contractStatus.state === 'approved', `Response contract: ${l.contractStatus.state === 'none' ? 'none yet' : `v${l.contractStatus.version} ${l.contractStatus.state}`}`),
+        el('li', { class: l.public ? 'step done' : 'step', text: `${l.public ? '●' : '○'} ${l.visibility}` }),
+      ),
+      el('div', { class: 'muted', text: `Requests: ${l.stats.requests} · qualified: ${l.stats.qualified} · earned: ${l.stats.earned} ${l.price.asset}` }),
+      el('div', { class: 'row' },
+        el('a', { class: 'btn', href: `#/seller/api/${l.id}`, text: l.public ? 'Manage' : 'Open and continue' }),
+        l.public && el('a', { class: 'btn secondary', href: '#/buyer', text: 'View in the marketplace', onclick: () => { $('q').value = l.name; } }))));
+  }
+  return wrap;
+}
+
+// ---- New listing
+function newListingPage() {
+  const f = ui.form;
+  const bind = (input, key) => { input.value = f[key] || ''; input.addEventListener('input', () => { f[key] = input.value; saveUi(); }); return input; };
   const rid = () => Math.random().toString(36).slice(2, 8);
   const preset = (label, path, method, name, price) => el('button', { type: 'button', class: 'secondary', text: label, onclick: () => {
-    f.url.value = `https://my-${rid()}.sandbox.payrail.example${path}`;
-    f.method.value = method; f.name.value = name; f.price.value = price; f.desc.value = 'Sandbox API served by Payrail';
+    Object.assign(f, { url: `https://my-${rid()}.sandbox.payrail.example${path}`, method, name, price, desc: 'Sandbox API served by Payrail' });
+    saveUi(); renderSeller();
   } });
-  return el('details', { open: '' }, el('summary', { text: 'List a new API' }),
-    config.sandbox && el('div', { class: 'row' }, el('span', { class: 'muted', text: 'Sandbox presets:' }),
-      preset('Price API', '/v1/price', 'GET', 'My sandbox price API', '0.01'), preset('Echo API', '/v1/echo', 'POST', 'My sandbox echo API', '0.005')),
-    f.name, f.desc, f.url, f.method, f.price,
-    el('button', { type: 'button', text: 'Submit listing', onclick: async () => {
-      const d = await api('/seller/listings', { body: { name: f.name.value, description: f.desc.value, endpointUrl: f.url.value, method: f.method.value, price: f.price.value }, bearer: session.seller });
-      if (!d.ok) return flash(box, fail(d), true);
-      renderSeller();
-    } }));
+  const method = el('select', {}, el('option', { value: 'GET', text: 'GET' }), el('option', { value: 'POST', text: 'POST' }));
+  method.value = f.method; method.addEventListener('change', () => { f.method = method.value; saveUi(); });
+  const msg = el('div', {});
+  return el('div', {},
+    el('h3', { text: 'New listing' }),
+    config.sandbox && el('div', { class: 'row' }, el('span', { class: 'muted', text: 'Sandbox presets:' }), preset('Price API', '/v1/price', 'GET', 'My sandbox price API', '0.01'), preset('Echo API', '/v1/echo', 'POST', 'My sandbox echo API', '0.005')),
+    el('label', { text: 'Name' }), bind(el('input', { placeholder: 'e.g. Token price API' }), 'name'),
+    el('label', { text: 'Description' }), bind(el('input', { placeholder: 'What does it return?' }), 'desc'),
+    el('label', { text: 'Endpoint URL (https, fixed; buyers can only change input values)' }), bind(el('input', { placeholder: 'https://api.example.com/v1/price', type: 'url' }), 'url'),
+    el('label', { text: 'HTTP method' }), method,
+    el('label', { text: 'Price per qualifying response (test credits)' }), bind(el('input', { placeholder: 'e.g. 0.02' }), 'price'),
+    el('p', { class: 'muted', text: 'Your entries are kept if something fails, and after a page reload, until you submit successfully.' }),
+    el('div', { class: 'row' },
+      el('button', { type: 'button', text: 'Submit listing', onclick: async () => {
+        say('Submitting…', 'info');
+        const d = await api('/seller/listings', { body: { name: f.name, description: f.desc, endpointUrl: f.url, method: f.method, price: f.price }, bearer: session.seller });
+        if (!d.ok) { say(`Could not submit: ${fail(d)}. Your entries are still here.`, 'bad'); return; }
+        Object.assign(f, blankForm()); saveUi();
+        say(`Saved "${d.listing.name}" as ${d.listing.displayStatus}. Continue with ownership verification below.`, 'ok');
+        go(`#/seller/api/${d.listing.id}`);
+      } }),
+      el('button', { type: 'button', class: 'secondary', text: 'Clear form', onclick: () => { Object.assign(f, blankForm()); saveUi(); renderSeller(); } })),
+    msg,
+  );
 }
 
-function listingPanel(l, box) {
+// ---- Manage one API
+function editorPage(l) {
+  const st = per(l.id);
   const act = async (path, body, okText) => {
+    say('Working…', 'info');
     const d = await api(`/seller/listing/${l.id}${path}`, { body: body || {}, bearer: session.seller });
-    if (!d.ok) { flash(box, fail(d), true); return d; }
-    if (okText) flash(box, okText);
-    renderSeller();
+    if (!d.ok) {
+      st.note = { kind: 'bad', text: fail(d) }; saveUi();
+      say(fail(d), 'bad');
+      await renderSeller();
+      return d;
+    }
+    st.note = { kind: 'ok', text: okText || 'Done.' }; saveUi();
+    say(okText || 'Done.', 'ok');
+    await renderSeller();
     loadCatalog();
     return d;
   };
-  const c = l.challenge;
-  const hasContract = l.contract !== null;
-  const p = el('div', { class: 'svc wide' },
-    el('div', {}, el('strong', { text: l.name }), ' ', el('span', { class: 'badge', text: l.status }), ' ', l.demo && el('span', { class: 'badge o-demo', text: 'DEMO' }), l.sandbox && el('span', { class: 'badge o-sandbox', text: 'SANDBOX' })),
-    el('div', { class: 'muted', text: `${l.method} ${l.endpointUrl} · ${l.price.usd} ${l.price.asset} · fee ${l.feePercent}%` }),
-    el('ul', { class: 'steps' },
-      STEP(l.status !== 'draft', 'Ownership verified (wallet proof + domain proof)'),
-      STEP(l.credentials.some((x) => x.status === 'active') || l.demo || l.sandbox, 'Credentials (optional): stored encrypted, write-only'),
-      STEP(l.tests.length > 0, 'Tested'),
-      STEP(hasContract, 'Contract approved'),
-      STEP(l.status === 'published', 'Published'),
-    ),
+  const bindState = (input, key, dflt) => { input.value = st[key] !== undefined ? st[key] : dflt; input.addEventListener('input', () => { st[key] = input.value; saveUi(); }); return input; };
+  const o = l.ownership;
+  const ch = l.challenge;
+  const page = el('div', { class: 'editor' });
+
+  page.append(
+    el('p', {}, el('a', { href: '#/seller', text: '← My APIs' })),
+    el('h3', { text: l.name }),
+    el('div', {}, chip(l.displayStatus, STATUS_CLASS[l.displayStatus] || ''), ' ', l.demo && chip('DEMO', 'o-demo'), l.sandbox && chip('SANDBOX', 'o-sandbox')),
+    el('p', { class: l.public ? 'notice' : 'muted', text: l.visibility }),
+    st.note && el('p', { class: st.note.kind === 'bad' ? 'problem' : 'notice', text: `Last action: ${st.note.text}` }),
   );
-  if (c && l.status === 'draft') {
-    p.append(el('div', {},
-      el('p', { text: `1. Wallet proof: ${c.walletVerified ? 'done' : 'sign the listing challenge'}` }),
-      !c.walletVerified && el('button', { type: 'button', class: 'secondary', text: session.sandboxSeed ? 'Sign (sandbox wallet)' : 'Sign with wallet', onclick: async () => {
+
+  // saved details
+  const nameIn = bindState(el('input', {}), 'name', l.name);
+  const descIn = bindState(el('input', {}), 'desc', l.description);
+  const priceIn = bindState(el('input', {}), 'price', l.price.usd);
+  page.append(el('details', { open: '' }, el('summary', { text: 'Listing details (saved in your account)' }),
+    el('div', { class: 'muted', text: `${l.method} ${l.endpointUrl} (the endpoint and method are fixed once submitted; submit a new listing to change them)` }),
+    el('label', { text: 'Name' }), nameIn, el('label', { text: 'Description' }), descIn, el('label', { text: 'Price per qualifying response' }), priceIn,
+    l.public && el('p', { class: 'muted', text: 'Unpublish before changing the price.' }),
+    l.editable && el('button', { type: 'button', class: 'secondary', text: 'Save details', onclick: async () => {
+      const d = await act('/details', { name: nameIn.value, description: descIn.value, price: priceIn.value }, 'Details saved.');
+      if (d.ok) { delete st.name; delete st.desc; delete st.price; saveUi(); }
+    } })));
+
+  // 1. ownership
+  if (ch && !l.demo) {
+    page.append(el('div', {},
+      el('h3', { text: '1. Verify ownership' }),
+      el('p', { text: `Wallet proof: ${o.wallet ? 'done' : 'not done'}` }),
+      !o.wallet && el('button', { type: 'button', class: 'secondary', text: session.sandboxSeed ? 'Sign (sandbox wallet)' : 'Sign with wallet', onclick: async () => {
         try {
           if (session.sandboxSeed) await act('/wallet-proof', { sandbox: true, seed: session.sandboxSeed }, 'Wallet proof recorded.');
-          else { const { signature } = await walletSign(c.walletMessage); await act('/wallet-proof', { signature }, 'Wallet proof recorded.'); }
-        } catch (e) { flash(box, e.message, true); }
+          else { const { signature } = await walletSign(ch.walletMessage); await act('/wallet-proof', { signature }, 'Wallet proof recorded.'); }
+        } catch (e) { say(e.message, 'bad'); }
       } }),
-      el('p', { text: `2. Domain proof: ${c.domainVerified ? `done (${c.domainMethod})` : l.sandbox ? 'sandbox hosts are verified by Payrail itself: just press a check button' : 'publish ONE of these, then check'}` }),
-      !c.domainVerified && !l.sandbox && el('pre', { text: `DNS TXT  ${c.dnsRecord.name}\n  = ${c.dnsRecord.value}\nor file  ${c.wellKnown.url}\n  containing ${c.wellKnown.content}` }),
-      !c.domainVerified && el('div', { class: 'row' },
+      el('p', { text: `Domain proof: ${o.domain ? `done (${o.domainMethod === 'dns_txt' ? 'DNS record' : 'well-known file'})` : l.sandbox ? 'not done: sandbox hosts are verified by Payrail itself, just press a check button' : 'not done: publish ONE of these, then check'}` }),
+      !o.domain && !l.sandbox && el('pre', { text: `DNS TXT  ${ch.dnsRecord.name}\n  = ${ch.dnsRecord.value}\nor file  ${ch.wellKnown.url}\n  containing ${ch.wellKnown.content}` }),
+      !o.domain && el('div', { class: 'row' },
         el('button', { type: 'button', class: 'secondary', text: 'Check DNS', onclick: () => act('/domain-proof', { method: 'dns_txt' }, 'Domain verified.') }),
         el('button', { type: 'button', class: 'secondary', text: 'Check file', onclick: () => act('/domain-proof', { method: 'well_known' }, 'Domain verified.') })),
     ));
   }
-  if (l.status !== 'draft' && l.status !== 'suspended') {
-    const cred = el('input', { type: 'password', placeholder: 'API credential value (write-only)', autocomplete: 'off' });
-    const hdr = el('input', { placeholder: 'Header name, e.g. Authorization', value: 'Authorization' });
-    const testIn = el('input', { value: l.method === 'POST' ? '{"text":"hello"}' : '{"id":"eth"}', 'aria-label': 'Test input JSON' });
-    const result = el('div', {});
-    p.append(el('div', {},
-      !l.demo && el('div', {}, el('p', { class: 'muted', text: `Credentials: ${l.credentials.filter((x) => x.status === 'active').map((x) => `${x.label} v${x.version}`).join(', ') || 'none'} (values are never shown)` }), hdr, cred,
+
+  const verified = l.status !== 'draft' && l.status !== 'suspended';
+  if (!verified) {
+    page.append(el('p', { class: 'muted', text: 'Credentials, testing, contracts and publishing unlock after both ownership proofs are done.' }));
+  } else {
+    // 2. credentials (secret value is kept in memory only)
+    if (!l.demo) {
+      const hdr = bindState(el('input', { placeholder: 'Header name, e.g. Authorization' }), 'credHeader', 'Authorization');
+      const cred = el('input', { type: 'password', placeholder: 'API credential value (write-only)', autocomplete: 'off' });
+      cred.value = memSecrets[l.id] || '';
+      cred.addEventListener('input', () => { memSecrets[l.id] = cred.value; });
+      page.append(el('div', {},
+        el('h3', { text: '2. Credentials (optional)' }),
+        el('p', { class: 'muted', text: `Stored encrypted, never shown again, sent only to your verified host. Active: ${l.credentials.filter((x) => x.status === 'active').map((x) => `${x.headerName} v${x.version}`).join(', ') || 'none'}` }),
+        hdr, cred,
         el('button', { type: 'button', class: 'secondary', text: 'Save credential', onclick: async () => {
-          const v = cred.value; cred.value = '';
-          await act('/credential', { label: 'api-key', headerName: hdr.value, value: v }, 'Credential stored encrypted.');
-        } })),
-      el('p', { text: 'Test your API (no buyer is charged):' }), testIn,
-      el('div', { class: 'row' },
-        el('button', { type: 'button', class: 'secondary', text: 'Run test', onclick: async () => {
-          let input; try { input = JSON.parse(testIn.value || '{}'); } catch { return flash(box, 'Test input must be JSON.', true); }
-          const d = await api(`/seller/listing/${l.id}/test`, { body: { input, ...(l.contract ? { contractId: l.contract.id } : {}) }, bearer: session.seller });
-          clear(result);
-          if (!d.ok) return result.append(el('p', { class: 'problem', text: fail(d) }));
-          const r = d.report;
-          result.append(el('p', { text: `${r.outcome} ${r.httpStatus || ''} ${r.elapsedMs ? r.elapsedMs + 'ms' : ''}${r.contract ? (r.contract.qualified ? ' · QUALIFIES' : ' · does NOT qualify') : ''}${r.failure ? ` · ${r.failure.code}: ${r.failure.message}` : ''}` }));
-          if (r.bodyPreview) result.append(el('pre', { text: r.bodyPreview }));
-        } }),
-        !l.demo && el('button', { type: 'button', class: 'secondary', text: 'Suggest contract from a sample', onclick: async () => {
-          let input; try { input = JSON.parse(testIn.value || '{}'); } catch { return flash(box, 'Test input must be JSON.', true); }
-          const s = await api(`/seller/listing/${l.id}/suggest-contract`, { body: { input }, bearer: session.seller });
-          if (!s.ok) return flash(box, fail(s), true);
-          if (confirm(`Propose this contract?\n${JSON.stringify(s.suggestion.success, null, 2)}`)) await act('/contract', { contract: s.suggestion }, 'Contract proposed. Approve it below.');
-        } }),
-        l.status !== 'published'
-          ? el('button', { type: 'button', text: 'Publish', onclick: () => act('/publish', {}, 'Published: buyers can now find it.') })
-          : el('button', { type: 'button', class: 'secondary', text: 'Unpublish', onclick: () => act('/unpublish', {}, 'Unpublished.') })),
-      result,
-      el('ul', {}, ...l.contracts.map((x) => el('li', {}, `contract v${x.version} ${x.status} `, x.status === 'proposed' && el('button', { type: 'button', class: 'secondary', text: 'Approve', onclick: async () => {
-        const d = await api(`/seller/contract/${x.id}/approve`, { body: {}, bearer: session.seller });
-        flash(box, d.ok ? 'Contract approved.' : fail(d), !d.ok); renderSeller(); loadCatalog();
-      } })))),
+          const d = await act('/credential', { label: 'api-key', headerName: hdr.value, value: memSecrets[l.id] || '' }, 'Credential stored encrypted.');
+          if (d.ok) delete memSecrets[l.id];
+        } })));
+    }
+
+    // 3. test
+    const testIn = bindState(el('input', { 'aria-label': 'Test input JSON' }), 'testInput', l.method === 'POST' ? '{"text":"hello"}' : '{"id":"eth"}');
+    page.append(el('div', {},
+      el('h3', { text: '3. Test your API (no buyer is charged)' }), testIn,
+      el('div', { class: 'row' }, el('button', { type: 'button', class: 'secondary', text: 'Run test', onclick: async () => {
+        let input; try { input = JSON.parse(testIn.value || '{}'); } catch { st.note = { kind: 'bad', text: 'Test input must be valid JSON.' }; say('Test input must be valid JSON.', 'bad'); return; }
+        say('Testing…', 'info');
+        const d = await api(`/seller/listing/${l.id}/test`, { body: { input, ...(l.contractStatus.state === 'approved' ? { contractId: l.contract.id } : {}) }, bearer: session.seller });
+        if (!d.ok) { say(fail(d), 'bad'); return; }
+        const r = d.report;
+        st.testResult = `${r.outcome} ${r.httpStatus || ''} ${r.elapsedMs ? r.elapsedMs + 'ms' : ''}${r.contract ? (r.contract.qualified ? ' · QUALIFIES for the approved contract' : ' · does NOT qualify') : ''}${r.failure ? ` · ${r.failure.code}: ${r.failure.message}` : ''}\n${r.bodyPreview || ''}`;
+        saveUi(); say('Test finished.', r.outcome === 'RESPONDED' ? 'ok' : 'bad'); await renderSeller();
+      } })),
+      st.testResult && el('pre', { text: st.testResult }),
+      l.tests.length > 0 && el('p', { class: 'muted', text: `${l.tests.length} recent test run(s) saved.` }),
     ));
+
+    // 4. contract
+    const contractBox = el('div', {}, el('h3', { text: '4. Response contract' }),
+      el('p', { class: 'muted', text: 'The contract is the written definition of a qualifying response. Buyers are charged only when a response satisfies the approved version.' }));
+    if (!l.demo) {
+      contractBox.append(el('button', { type: 'button', class: 'secondary', text: 'Suggest a contract from a sample call', onclick: async () => {
+        let input; try { input = JSON.parse(testIn.value || '{}'); } catch { say('Test input must be valid JSON.', 'bad'); return; }
+        say('Calling your API for a sample…', 'info');
+        const s = await api(`/seller/listing/${l.id}/suggest-contract`, { body: { input }, bearer: session.seller });
+        if (!s.ok) { say(fail(s), 'bad'); return; }
+        st.suggestion = s.suggestion; saveUi(); say('Suggestion ready: review it below.', 'ok'); await renderSeller();
+      } }));
+    }
+    if (st.suggestion) {
+      contractBox.append(el('div', { class: 'notice' }, el('strong', { text: 'Suggested contract (review before proposing):' }), el('pre', { text: JSON.stringify(st.suggestion.success, null, 2) }),
+        el('div', { class: 'row' },
+          el('button', { type: 'button', text: 'Propose this contract', onclick: async () => {
+            const d = await act('/contract', { contract: st.suggestion }, 'Contract proposed. Approve it below.');
+            if (d.ok) { delete st.suggestion; saveUi(); }
+          } }),
+          el('button', { type: 'button', class: 'secondary', text: 'Discard', onclick: () => { delete st.suggestion; saveUi(); renderSeller(); } }))));
+    }
+    contractBox.append(el('ul', {}, ...l.contracts.map((x) => el('li', {}, `v${x.version} ${x.status}: status ${x.rules.statuses.join('/')}, within ${x.rules.maxLatencyMs}ms, ${x.rules.fields.length} field rule(s)${x.rules.freshness ? `, ${x.rules.freshness.path} ≤ ${x.rules.freshness.maxAgeSeconds}s old` : ''} `,
+      x.status === 'proposed' && el('button', { type: 'button', class: 'secondary', text: 'Approve', onclick: async () => {
+        say('Approving…', 'info');
+        const d = await api(`/seller/contract/${x.id}/approve`, { body: {}, bearer: session.seller });
+        st.note = d.ok ? { kind: 'ok', text: `Contract v${x.version} approved.` } : { kind: 'bad', text: fail(d) }; saveUi();
+        say(d.ok ? `Contract v${x.version} approved.` : fail(d), d.ok ? 'ok' : 'bad');
+        await renderSeller(); loadCatalog();
+      } })))));
+    page.append(contractBox);
+
+    // 5. publish
+    const rd = l.publishReadiness;
+    const pub = el('div', {}, el('h3', { text: '5. Publish' }));
+    if (l.public) {
+      pub.append(el('p', { class: 'notice', text: 'Published: buyers can find and run this API in the Buyer tab.' }),
+        el('div', { class: 'row' },
+          el('a', { class: 'btn', href: '#/buyer', text: 'View in the marketplace', onclick: () => { $('q').value = l.name; } }),
+          el('button', { type: 'button', class: 'secondary', text: 'Unpublish', onclick: () => act('/unpublish', {}, 'Unpublished: it is private again.') })));
+    } else {
+      if (!rd.ready) pub.append(el('div', { class: 'problem' }, el('strong', { text: 'Not ready to publish yet:' }), el('ul', {}, ...rd.missing.map((m) => el('li', { text: m.message })))));
+      else pub.append(el('p', { class: 'muted', text: 'All requirements are met. Publishing makes this listing visible to buyers.' }));
+      pub.append(el('button', { type: 'button', ...(rd.ready ? {} : { disabled: '' }), text: 'Publish', onclick: () => act('/publish', {}, `Published at ${new Date().toLocaleTimeString()}. Buyers can now find "${l.name}" in the Buyer tab.`) }));
+    }
+    page.append(pub);
   }
-  return p;
+  return page;
 }
 
-
 // ------------------------------------------------------------------ Buyer / Seller tabs
-function currentView() { return /^#\/?seller$/.test(location.hash) ? 'seller' : 'buyer'; }
+function currentView() { return /^#\/?seller(\/.*)?$/.test(location.hash) ? 'seller' : 'buyer'; }
 function applyView() {
   const v = currentView();
   for (const sec of document.querySelectorAll('main [data-view]')) {
@@ -430,6 +579,7 @@ function applyView() {
   window.scrollTo(0, 0);
   document.title = `Payrail ${v === 'buyer' ? 'Buyer' : 'Seller'}`;
   if (v === 'seller') renderSeller();
+  else { loadCatalog(); renderBuyer(); renderHistory(); }
 }
 window.addEventListener('hashchange', applyView);
 

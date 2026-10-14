@@ -59,7 +59,9 @@ export async function callUpstream(db: Db, keys: readonly MasterKey[], listingId
   const l = getListing(db, listingId);
   if (!l) throw new GatewayError('NOT_FOUND', `no listing ${listingId}`);
   // credentials are only ever sent to a host whose ownership was verified
-  if (l.status !== 'verified' && l.status !== 'published') throw new GatewayError('LISTING_NOT_VERIFIED', `listing is ${l.status}`);
+  // An unpublished listing was verified before it was unpublished, so its owner may keep testing it; buyers cannot run it.
+  const allowed = opts.purpose === 'seller-test' ? ['verified', 'published', 'unpublished'] : ['verified', 'published'];
+  if (!allowed.includes(l.status)) throw new GatewayError('LISTING_NOT_VERIFIED', `listing is ${l.status}`);
   const clean = cleanInput(input);
   if (!(opts.limiter ?? limiter).take(listingId)) throw new GatewayError('RATE_LIMITED', 'too many calls to this listing');
 

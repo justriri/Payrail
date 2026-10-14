@@ -23,6 +23,7 @@ import { AgentError, authenticateAgent, createAgent, executeAsAgent, listAgents,
 import { FundingError, confirmDeposit, fundingMessage, fundingWallets, registerFundingWallet } from './funding.ts';
 import type { FundingConfig } from './funding.ts';
 import { PayoutError, cancelPayout, payoutsOf, requestPayout } from './payouts.ts';
+import { publishReadiness, updateListingDetails } from './seller.ts';
 import type { PayoutPolicy } from './payouts.ts';
 import { EscrowError, executeEscrowRequest } from './escrow.ts';
 import type { EscrowClient } from './escrow.ts';
@@ -217,14 +218,41 @@ function listingView(db: Db, l: Listing, forOwner: boolean) {
     contract: c ? { id: c.id, version: c.version, rules: c.body.success } : null,
   };
   if (!forOwner) return base;
+  const ch = l.demo ? null : challengeFor(db, l.id);
+  const contracts = listContracts(db, l.id);
+  const approved = contracts.find((v) => v.status === 'approved');
+  const proposed = contracts.filter((v) => v.status === 'proposed');
+  const readiness = publishReadiness(db, l);
+  const stats = queryOne<{ n: bigint; q: bigint | null; s: bigint | null }>(
+    db,
+    "SELECT COUNT(*) AS n, SUM(CASE WHEN state = 'QUALIFIED' THEN 1 ELSE 0 END) AS q, SUM(COALESCE(seller_atomic, 0)) AS s FROM executions WHERE listing_id = ?",
+    l.id,
+  );
+  const wallet = Boolean(ch?.walletVerified) || l.demo;
+  const domain = Boolean(ch?.domainVerified) || l.demo;
+  // a label derived ONLY from persisted state; nothing here is optimistic
+  const displayStatus =
+    l.status === 'published' ? 'Published'
+      : l.status === 'suspended' ? 'Suspended'
+        : l.status === 'unpublished' ? 'Unpublished (private)'
+          : l.status === 'verified' ? (approved ? 'Contract approved: ready to publish' : proposed.length ? 'Verified: contract awaiting approval' : 'Verified: needs a response contract')
+            : wallet || domain ? 'Pending verification' : 'Draft';
   return {
     ...base,
     endpointUrl: l.endpointUrl,
     verifiedAt: l.verifiedAt,
-    challenge: l.demo ? null : challengeFor(db, l.id),
-    contracts: listContracts(db, l.id).map((v) => ({ id: v.id, version: v.version, status: v.status, rules: v.body.success })),
+    challenge: ch,
+    contracts: contracts.map((v) => ({ id: v.id, version: v.version, status: v.status, rules: v.body.success })),
     credentials: listCredentials(db, l.id),
     tests: recentTests(db, l.id, 5),
+    displayStatus,
+    public: l.status === 'published',
+    visibility: l.status === 'published' ? 'Public: buyers can find and run it in the marketplace' : 'Private: only you can see it',
+    ownership: { wallet, domain, domainMethod: ch?.domainMethod ?? null, verified: l.verifiedAt !== null || l.demo },
+    contractStatus: approved ? { state: 'approved', version: approved.version } : proposed.length ? { state: 'proposed', version: proposed[proposed.length - 1]!.version } : { state: 'none', version: null },
+    publishReadiness: readiness,
+    stats: { requests: Number(stats?.n ?? 0n), qualified: Number(stats?.q ?? 0n), earned: formatAtomic(BigInt(stats?.s ?? 0n)) },
+    editable: !l.demo && l.status !== 'suspended',
   };
 }
 
@@ -571,6 +599,14 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
           const r = await callUpstream(db, rt.keys, lid, body.input ?? {}, { ...call, now, purpose: 'seller-test' });
           const suggestion = inferContract([{ json: r.json, elapsedMs: r.elapsedMs }]);
           return ok({ suggestion, note: 'A suggestion built from one sample. Review every rule, then propose and approve it.' });
+        }
+        case 'details': {
+          const patch: { name?: string; description?: string; priceAtomic?: bigint } = {};
+          if (typeof body.name === 'string') patch.name = body.name;
+          if (typeof body.description === 'string') patch.description = body.description;
+          if (body.price !== undefined) patch.priceAtomic = parseAtomic(body.price);
+          updateListingDetails(db, id, lid, patch, now);
+          return view();
         }
         case 'publish':
           publishListing(db, id, lid, now);

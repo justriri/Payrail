@@ -292,15 +292,35 @@ function finalize(db: Db, listingId: string, actorId: string, now: Clock): Chall
 
 // ------------------------------------------------------------------ publishing
 
+export interface Readiness {
+  ready: boolean;
+  /** every unmet publication condition, in the order a seller would fix them */
+  missing: Array<{ code: 'WALLET_PROOF' | 'DOMAIN_PROOF' | 'CONTRACT_NOT_APPROVED' | 'LISTING_STATE'; message: string }>;
+}
+
+/** The single definition of "may this listing be published right now?". Publishing enforces exactly this. */
+export function publishReadiness(db: Db, l: Listing): Readiness {
+  const missing: Readiness['missing'] = [];
+  if (l.status === 'suspended') missing.push({ code: 'LISTING_STATE', message: 'This listing is suspended and cannot be published.' });
+  if (l.demo) return { ready: missing.length === 0, missing };
+  const ch = challengeFor(db, l.id);
+  if (!ch?.walletVerified) missing.push({ code: 'WALLET_PROOF', message: 'Wallet ownership proof is missing: sign the listing challenge with your wallet.' });
+  if (!ch?.domainVerified) missing.push({ code: 'DOMAIN_PROOF', message: 'Domain ownership proof is missing: publish the DNS TXT record or the well-known file, then press a Check button.' });
+  const c = queryOne(db, "SELECT id FROM contract_versions WHERE listing_id = ? AND status = 'approved'", l.id);
+  if (!c) missing.push({ code: 'CONTRACT_NOT_APPROVED', message: 'No response contract is approved yet: propose a contract and approve it.' });
+  if (missing.length === 0 && l.verifiedAt === null && l.status !== 'published') missing.push({ code: 'LISTING_STATE', message: 'The listing has not been marked verified yet; re-run a proof check.' });
+  return { ready: missing.length === 0, missing };
+}
+
 /** verified + approved contract -> published (visible to buyers). */
 export function publishListing(db: Db, actorId: string, listingId: string, now: Clock = Date.now): Listing {
   return inTransaction(db, () => {
     const l = owned(db, listingId, actorId);
     if (l.status === 'published') return l;
+    if (l.status === 'suspended') throw new SellerError('WRONG_STATE', 'a suspended listing cannot be published');
+    const r = publishReadiness(db, l);
+    if (!r.ready) throw new SellerError(l.status === 'draft' ? 'WRONG_STATE' : 'PROOF_MISSING', `Cannot publish yet. ${r.missing.map((m) => m.message).join(' ')}`);
     if (l.status !== 'verified' && l.status !== 'unpublished') throw new SellerError('WRONG_STATE', `a ${l.status} listing cannot be published`);
-    if (l.verifiedAt === null) throw new SellerError('PROOF_MISSING', 'ownership is not verified');
-    const c = queryOne(db, "SELECT id FROM contract_versions WHERE listing_id = ? AND status = 'approved'", listingId);
-    if (!c) throw new SellerError('PROOF_MISSING', 'approve a response contract first');
     db.prepare("UPDATE listings SET status = 'published' WHERE id = ?").run(listingId);
     audit(db, actorId, 'listing.published', listingId, undefined, new Date(now()));
     return getListing(db, listingId)!;
@@ -312,6 +332,43 @@ export function unpublishListing(db: Db, actorId: string, listingId: string, now
   db.prepare("UPDATE listings SET status = 'unpublished' WHERE id = ?").run(listingId);
   audit(db, actorId, 'listing.unpublished', listingId, undefined, new Date(now()));
   return getListing(db, listingId)!;
+}
+
+/**
+ * Edit the descriptive fields of your own listing. The endpoint and method are NOT editable (they are what ownership was
+ * proven for; change them by submitting a new listing). A published listing must be unpublished before its price changes.
+ */
+export function updateListingDetails(
+  db: Db,
+  actorId: string,
+  listingId: string,
+  patch: { name?: string; description?: string; priceAtomic?: bigint },
+  now: Clock = Date.now,
+): Listing {
+  return inTransaction(db, () => {
+    const l = owned(db, listingId, actorId);
+    if (l.demo) throw new SellerError('WRONG_STATE', 'demo listings are managed by the platform');
+    if (l.status === 'suspended') throw new SellerError('WRONG_STATE', 'a suspended listing cannot be edited');
+    const set: string[] = [];
+    const args: Array<string | bigint> = [];
+    if (patch.name !== undefined) {
+      const n = patch.name.trim();
+      if (n.length < 3 || n.length > 80) throw new SellerError('BAD_INPUT', 'name must be 3-80 characters');
+      set.push('name = ?'); args.push(n);
+    }
+    if (patch.description !== undefined) {
+      set.push('description = ?'); args.push(patch.description.slice(0, 500));
+    }
+    if (patch.priceAtomic !== undefined) {
+      if (patch.priceAtomic <= 0n) throw new SellerError('BAD_INPUT', 'price must be a positive amount');
+      if (l.status === 'published' && patch.priceAtomic !== l.priceAtomic) throw new SellerError('WRONG_STATE', 'unpublish the listing before changing its price');
+      set.push('price_atomic = ?'); args.push(patch.priceAtomic);
+    }
+    if (set.length === 0) return l;
+    db.prepare(`UPDATE listings SET ${set.join(', ')} WHERE id = ?`).run(...args, listingId);
+    audit(db, actorId, 'listing.updated', listingId, { fields: set.map((x) => x.split(' ')[0]) }, new Date(now()));
+    return getListing(db, listingId)!;
+  });
 }
 
 // ------------------------------------------------------------------ sandbox sellers (test-credit mode only)

@@ -91,3 +91,18 @@ th, td { text-align:left; padding:4px 12px 4px 0; }
 
 /* the hidden attribute must always win over component display rules */
 [hidden] { display: none !important; }
+
+/* seller dashboard */
+.status-bar { position: sticky; top: 0; z-index: 5; display:flex; gap:12px; align-items:center; justify-content:space-between; padding:10px 12px; margin: 8px 0; border-radius:8px; font-weight:600; border:1px solid var(--line); background:#eef6ff; }
+.status-bar.ok { background:#e7f6ee; border-color:#abefc6; color: var(--ok); }
+.status-bar.bad { background:#fef3f2; border-color:#fecdca; color: var(--bad); }
+.status-bar button { padding:4px 10px; }
+.subtabs { display:flex; gap:8px; margin: 10px 0; flex-wrap: wrap; }
+.subtab { padding:6px 14px; border-radius:999px; border:1px solid var(--line); background:#fff; color: var(--ink); text-decoration:none; font-weight:600; }
+.subtab.active { background:#e7f6ee; border-color: var(--brand); color: var(--brand); }
+a.btn { display:inline-block; background: var(--brand); color:#fff; padding:10px 16px; border-radius:8px; text-decoration:none; font-weight:600; }
+a.btn.secondary { background:#fff; color: var(--brand); border:1px solid var(--brand); }
+.badge.ok { background:#e7f6ee; color: var(--ok); }
+.badge.warn { background:#fff4e5; color: var(--warn); }
+.badge.bad { background:#fef3f2; color: var(--bad); }
+.editor input { width:100%; padding:10px; border:1px solid var(--line); border-radius:8px; font: inherit; }
