@@ -120,7 +120,32 @@ CREATE TRIGGER audit_no_update BEFORE UPDATE ON audit_log BEGIN SELECT RAISE(ABO
 CREATE TRIGGER audit_no_delete BEFORE DELETE ON audit_log BEGIN SELECT RAISE(ABORT, 'audit log is append-only'); END;
 `;
 
-export const MIGRATIONS: readonly Migration[] = [{ version: 1, name: 'accounts, listings, contracts, ledger, executions, audit', sql: V1 }];
+/** Version 2: seller credentials, stored ONLY as envelope-encrypted ciphertext (see vault.ts). */
+const V2 = `
+CREATE TABLE credentials (
+  id TEXT PRIMARY KEY,
+  listing_id TEXT NOT NULL REFERENCES listings(id),
+  label TEXT NOT NULL,
+  header_name TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version >= 1),
+  status TEXT NOT NULL CHECK (status IN ('active','rotated','revoked')),
+  algorithm TEXT NOT NULL,
+  key_id TEXT NOT NULL,
+  iv BLOB NOT NULL,
+  ciphertext BLOB NOT NULL,
+  tag BLOB NOT NULL,
+  wrapped_dek BLOB NOT NULL,
+  created_at TEXT NOT NULL,
+  revoked_at TEXT,
+  UNIQUE (listing_id, label, version)
+) STRICT;
+CREATE INDEX credentials_listing ON credentials (listing_id, status);
+`;
+
+export const MIGRATIONS: readonly Migration[] = [
+  { version: 1, name: 'accounts, listings, contracts, ledger, executions, audit', sql: V1 },
+  { version: 2, name: 'encrypted seller credentials', sql: V2 },
+];
 
 /** Open (creating the file and folder if needed) and bring the schema up to date. ':memory:' for tests. */
 export function openDb(path: string = ':memory:', migrations: readonly Migration[] = MIGRATIONS): Db {

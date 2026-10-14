@@ -33,7 +33,7 @@ const bal = (w: ReturnType<typeof world>, who: string, kind: any, asset = ASSET)
 test('schema: migrations apply once, are idempotent, and foreign keys are enforced', () => {
   const db = openDb(':memory:');
   assert.deepEqual(migrate(db, MIGRATIONS), [], 'a second run applies nothing');
-  assert.equal(Number(queryOne<{ n: bigint }>(db, 'SELECT COUNT(*) AS n FROM schema_migrations')!.n), 1);
+  assert.equal(Number(queryOne<{ n: bigint }>(db, 'SELECT COUNT(*) AS n FROM schema_migrations')!.n), MIGRATIONS.length);
   assert.throws(
     () => db.prepare("INSERT INTO listings (id, seller_id, name, status, price_atomic, asset, created_at) VALUES ('l','no-such-seller','n','draft',1,'USDT','t')").run(),
     /FOREIGN KEY/i,
