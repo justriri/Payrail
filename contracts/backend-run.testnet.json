@@ -1,0 +1,29 @@
+{
+  "chainId": 11142220,
+  "escrow": "0x7385609bd68d1833f3c52bad1d55300bc2e441ad",
+  "seller": "0x346C6798Fa9edd2Dc7Bf16D157932f8b52532A28",
+  "steps": [
+    {
+      "label": "qualifying",
+      "executionId": "exec_87ad7f6f-491d-4c41-95d6-e330de46ab18",
+      "holdId": "0x4450a12fa1b7bd0bd52bb68a1e8a196403933fe0d9f8e10d7ae5232f08ccb8e6",
+      "onChain": "Captured",
+      "backend": "QUALIFIED"
+    },
+    {
+      "label": "stale",
+      "executionId": "exec_5b816bab-c46e-4148-8a9e-3bd4a11e1eac",
+      "holdId": "0xd153a4434aececa839edbce8417f00d80f21d40457ccf0c2e97cfb64c94d180e",
+      "onChain": "Released",
+      "backend": "NOT_QUALIFIED"
+    },
+    {
+      "label": "timeout",
+      "executionId": "exec_1082d4e4-ef15-4f72-8828-a4b2402e916e",
+      "holdId": "0xd9c531714e7af7d84c369135363f2c6aa7a5c3bb3b1ef145205e2e4bab878bd9",
+      "onChain": "Held",
+      "backend": "UNRESOLVED"
+    }
+  ],
+  "at": "2026-10-14T12:46:02.261Z"
+}

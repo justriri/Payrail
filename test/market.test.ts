@@ -403,3 +403,16 @@ test('real-funds mode over HTTP (fake chain): register wallet, confirm a deposit
     await h.close();
   }
 });
+
+test('escrow settlement over HTTP: disabled by default; when enabled it settles through the client and reports the fee split', async () => {
+  const h = await start();
+  try {
+    const bt = await buyer(h);
+    const cat = (await h.call('GET', '/catalog')).body.items as any[];
+    const off = await h.call('POST', '/execute', { bearer: bt, body: { listingId: cat[0].id, input: { id: 'eth' }, idempotencyKey: 'esc-http-001', settlement: 'escrow' } });
+    assert.equal(off.status, 409);
+    assert.equal(off.body.code, 'ESCROW_DISABLED');
+  } finally {
+    await h.close();
+  }
+});

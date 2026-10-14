@@ -274,12 +274,18 @@ CREATE TABLE agents (
 ALTER TABLE executions ADD COLUMN agent_id TEXT;
 `;
 
+/** Version 6: how an execution is settled: the off-chain ledger (default) or the on-chain escrow contract. */
+const V6 = `
+ALTER TABLE executions ADD COLUMN settlement TEXT NOT NULL DEFAULT 'ledger' CHECK (settlement IN ('ledger','escrow'));
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'accounts, listings, contracts, ledger, executions, audit', sql: V1 },
   { version: 2, name: 'encrypted seller credentials', sql: V2 },
   { version: 3, name: 'sign-in, listing endpoints, ownership challenges, test runs', sql: V3 },
   { version: 4, name: 'demo listings flag', sql: V4 },
   { version: 5, name: 'payouts, chain deposits, funding wallets, agents', sql: V5, rebuild: true },
+  { version: 6, name: 'execution settlement mode', sql: V6 },
 ];
 
 /** Open (creating the file and folder if needed) and bring the schema up to date. ':memory:' for tests. */

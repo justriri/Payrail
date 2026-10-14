@@ -22,6 +22,8 @@ import { FundingError, confirmDeposit, fundingMessage, fundingWallets, registerF
 import type { FundingConfig } from './funding.ts';
 import { PayoutError, cancelPayout, payoutsOf, requestPayout } from './payouts.ts';
 import type { PayoutPolicy } from './payouts.ts';
+import { EscrowError, executeEscrowRequest } from './escrow.ts';
+import type { EscrowClient } from './escrow.ts';
 
 /** Test credits live in their own ledger asset so they can never mix with real funds. */
 export const TEST_ASSET = 'TESTUSDT';
@@ -44,6 +46,8 @@ export interface MarketRuntime {
   buyCatalog?: () => Promise<Catalog>;
   /** real-funds mode. Absent = test credits only and every real-money route answers LIVE_DISABLED. */
   live?: { funding: FundingConfig; payout: PayoutPolicy };
+  /** alternative settlement through the on-chain escrow contract (testnet-verified only) */
+  escrow?: { client: EscrowClient; asset: string };
 }
 
 export interface MarketItem {
@@ -230,13 +234,13 @@ function mapError(e: unknown): MarketResponse {
   if (e instanceof ApiError) return { status: e.status, body: { ok: false, code: e.code, message: e.message } };
   const code = (e as { code?: string }).code ?? 'ERROR';
   const message = (e as Error).message;
-  const known = e instanceof LedgerError || e instanceof SellerError || e instanceof VaultError || e instanceof ContractError || e instanceof GatewayError || e instanceof TesterError || e instanceof FundingError || e instanceof PayoutError || e instanceof AgentError;
+  const known = e instanceof LedgerError || e instanceof SellerError || e instanceof VaultError || e instanceof ContractError || e instanceof GatewayError || e instanceof TesterError || e instanceof FundingError || e instanceof PayoutError || e instanceof AgentError || e instanceof EscrowError;
   if (!known) return { status: 500, body: { ok: false, code: 'INTERNAL_ERROR', message: 'Something went wrong on our side.' } };
   const status: Record<string, number> = {
     SESSION_INVALID: 401, NOT_OWNER: 403, NOT_FOUND: 404, INSUFFICIENT_CREDITS: 402, IDEMPOTENCY_CONFLICT: 409, WRONG_STATE: 409, HOST_CLAIMED: 409,
     LISTING_NOT_PUBLISHED: 409, CONTRACT_NOT_APPROVED: 409, RATE_LIMITED: 429, DOMAIN_PROOF_FAILED: 422, BAD_SIGNATURE: 422,
     WALLET_TAKEN: 409, NO_FUNDING_WALLET: 409, TX_NOT_FOUND: 404, TX_REVERTED: 422, NOT_ENOUGH_CONFIRMATIONS: 409, NO_MATCHING_TRANSFER: 422, OVER_LIMIT: 422, READ_FAILED: 502,
-    KEY_INVALID: 401, LISTING_NOT_ALLOWED: 403, PER_REQUEST_CAP: 403, DAILY_CAP: 403, INSUFFICIENT_EARNINGS: 409, NO_WALLET: 409, TEST_ASSET: 422,
+    KEY_INVALID: 401, LISTING_NOT_ALLOWED: 403, PER_REQUEST_CAP: 403, DAILY_CAP: 403, INSUFFICIENT_EARNINGS: 409, NO_WALLET: 409, TEST_ASSET: 422, NO_SELLER_WALLET: 409, HOLD_FAILED: 502,
   };
   return { status: status[code] ?? 400, body: { ok: false, code, message } };
 }
@@ -308,6 +312,11 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
   }
   if (method === 'POST' && path === '/execute') {
     const id = buyer();
+    if (body.settlement === 'escrow') {
+      if (!rt.escrow) throw new ApiError(409, 'ESCROW_DISABLED', 'escrow settlement is not enabled on this server');
+      const er = await executeEscrowRequest(db, rt.keys, rt.escrow.client, { buyerId: id, listingId: str(body.listingId, 'listingId', 80), idempotencyKey: str(body.idempotencyKey, 'idempotencyKey', 100), input: body.input ?? {}, asset: rt.escrow.asset }, { ...(rt.execute?.call ? { call: rt.execute.call } : {}), ...(rt.execute?.demoCall ? { demoCall: rt.execute.demoCall } : {}), ...(rt.now ? { now: rt.now } : {}) });
+      return ok({ result: er, settlement: 'escrow' }, er.replay ? 200 : 201);
+    }
     const r = await executeRequest(db, rt.keys, { buyerId: id, listingId: str(body.listingId, 'listingId', 80), idempotencyKey: str(body.idempotencyKey, 'idempotencyKey', 100), input: body.input ?? {} }, rt.execute ?? {});
     return ok({ result: r }, r.replay ? 200 : 201);
   }

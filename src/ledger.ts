@@ -316,13 +316,13 @@ export function verifyLedger(db: Db): { ok: boolean; problems: string[] } {
   const open = new Map<string, bigint>();
   for (const r of query<{ buyer_id: string; asset: string; s: bigint }>(
     db,
-    `SELECT buyer_id, asset, SUM(price_atomic) AS s FROM executions WHERE state IN ('HELD','UNRESOLVED') GROUP BY buyer_id, asset`,
+    `SELECT buyer_id, asset, SUM(price_atomic) AS s FROM executions WHERE state IN ('HELD','UNRESOLVED') AND settlement = 'ledger' GROUP BY buyer_id, asset`,
   )) open.set(`${r.buyer_id}|${r.asset}`, BigInt(r.s));
   for (const k of new Set([...held.keys(), ...open.keys()])) {
     if ((held.get(k) ?? 0n) !== (open.get(k) ?? 0n)) problems.push(`held balance for ${k} is ${held.get(k) ?? 0n} but open executions total ${open.get(k) ?? 0n}`);
   }
   // each execution has exactly the ledger transactions its state requires
-  for (const e of query<{ id: string; state: string; price_atomic: bigint; fee_atomic: bigint | null; seller_atomic: bigint | null }>(db, 'SELECT id, state, price_atomic, fee_atomic, seller_atomic FROM executions')) {
+  for (const e of query<{ id: string; state: string; price_atomic: bigint; fee_atomic: bigint | null; seller_atomic: bigint | null }>(db, "SELECT id, state, price_atomic, fee_atomic, seller_atomic FROM executions WHERE settlement = 'ledger'")) {
     const kinds = query<{ kind: string }>(db, 'SELECT kind FROM ledger_transactions WHERE execution_id = ? ORDER BY id', e.id).map((r) => String(r.kind));
     const want: Record<string, string[]> = {
       HELD: ['hold'],
