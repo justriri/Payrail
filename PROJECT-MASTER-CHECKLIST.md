@@ -10,7 +10,7 @@
 | Check | Result |
 |---|---|
 | `tsc` type check | exit 0 |
-| Full test suite | **307 tests, 307 pass, 0 fail** (~87 s) |
+| Full test suite | **323 tests, 323 pass, 0 fail** (~75 s) |
 | Evidence regeneration (`scripts/evidence.ts --verify`) | 7 transactions, 1 order, 2 payments, 4 conversion records, **0 warnings, 0 unresolved**; same hashes as the committed evidence |
 | Git | 2 local commits, 78 tracked files, **no remote**, working tree clean |
 | Loops entry (`loops project get`) | tag `celo_b2fff2ac9413`, agent wallet `0x652C…D2a4`, **`hasIdentity: true`**, **project not yet created** |
@@ -39,6 +39,9 @@
 | 16 | `scripts/check-key-file.ts`: verifies a key file/backup by printing only the public address | MOCK (throwaway keys) |
 | 17 | Git set up safely: history stored **outside OneDrive** (`C:\Users\HP\payrail-git\payrail.git`) | see §4 |
 | 18 | Loops CLI v0.6.0 installed and signed in; event skill present in `.agents/` and `.claude/` | on disk (both git-ignored) |
+| 19 | **Web interface** (`npm run serve` / `serve:sim`): paste a URL, see price/rate/fees/max spend, choose the currency to pay with, approve, track progress, view the response; local-only server, per-run token, strict CSP, text-only rendering, approval bound to a terms digest + hard bounds | MOCK/simulated through the real HTTP API and the real planner/orchestrator (14 tests); LIVE read-only: real status, real service inspection, real Textile cNGN→USDT preview |
+| 20 | **User-chosen funding currency** (`sourceSymbol`; UI and `order.ts --source`): the chosen currency is the only one used; no silent fallback | MOCK (planner + orchestrator tests); LIVE read-only plan with cNGN |
+| 21 | Mento classifier: a reason-less router revert is "no route for this pair" (verified live: Mento has **no cNGN pool**; Textile is the only cNGN route) | LIVE read-only + MOCK |
 
 ---
 
@@ -69,7 +72,7 @@
 | B2 | `scripts/register-agent.ts` and `scripts/rehearse.ts` use a single RPC client | Low | Not migrated to the resilient reads; registration worked, but its receipt wait is not retry-hardened |
 | B3 | Planner balance reads use `@celo/buy-core`'s own reader | Low | Not covered by the fallback list |
 | B4 | **Loops "first tagged tx" shows the registration** (`0xf654ea5f…`), not the earlier tagged approvals/swaps (blocks 79963003–79963880) | Medium | We do not know why or whether the earlier four are credited; check the Celo checklist on the Loops submit page and ask organizers |
-| B5 | No way to force the convert route | Medium | The planner pays directly whenever an accepted asset is held; `allowedPaymentAssets` has no env override. Needed to test convert-then-pay (§3) |
+| B5 | ~~No way to force the convert route~~ **Resolved**: the user can choose the funding currency (web page or `order.ts --source cNGN`) | — | Convert-then-pay can now be planned for a wallet that also holds USDT |
 | B6 | OneDrive symlink regression test cannot run on this machine | Low | `EPERM` creating symlinks, so it exits early; the fix itself is verified only by the real journals now being read |
 | B7 | Cosmetic: `scripts/register-agent.ts` line 32 comment says 0.05 CELO, value is 0.15 | Low | Wrong comment, correct value |
 | B8 | Occasional unexplained failure in the multi-process lock test (seen once earlier) | Low | Hardened (diagnostics + Windows `EPERM` tolerance); did not recur in the last 4 full runs; cause unconfirmed |
@@ -83,7 +86,7 @@ All three remain **unverified against real orders**. Existing evidence does not 
 
 | Flow | Status | What a safe test needs |
 |---|---|---|
-| **Live convert-then-pay order** | `[~]` MOCK only | (1) a reviewed way to force the convert route (B5), (2) a live corridor check (read-only `scripts/routes.ts`), (3) a plan-only run showing SWAP_REQUIRED, (4) **your explicit approval** of the exact bounded command. Exposure: one conversion of about the venue minimum (~$1), gas for approve+swap of roughly 0.05–0.1 CELO at the current ~200 gwei (the planner assumes up to 550k gas units; the real figure will be shown by the plan), then a $0.005 payment |
+| **Live convert-then-pay order** | `[~]` MOCK / simulated only. **Live read-only plan done (2026-10-14):** sell 1,363.624 cNGN → ~0.999525 USDT via Textile (fee 0.136 cNGN ≈ 1 bp, kept after paying ≈ 0.9945 USDT), then pay 0.005 USDT; worst-case gas estimate 0.22 CELO (usually far lower). cNGN→USDT has **never been executed live** (only USDT→cNGN) | (1) ~~force-convert option~~ done, (2) corridor check done, (3) plan done, (4) **your explicit approval** of the exact bounded command. Exposure: one conversion of about the venue minimum (~$1), gas for approve+swap of roughly 0.05–0.1 CELO at the current ~200 gwei (the planner assumes up to 550k gas units; the real figure will be shown by the plan), then a $0.005 payment |
 | **`--reconcile` / `--resume` on a real interrupted order** | `[~]` MOCK only. Only a read-only `--reconcile` on the *completed* order was run (it reported "already COMPLETED" and changed nothing) | A genuinely interrupted order cannot be created on demand without spending. The realistic route is to run the convert-then-pay test above and stop it (Ctrl+C) right after the conversion confirms, then run `--reconcile` and `--resume`. Needs your approval and careful timing |
 | **Payment resolution for a real uncertain payment** | `[~]` MOCK only | Needs a real `UNCERTAIN` receipt. None exists, and one should not be created deliberately. `resolve.ts --payment` will be exercised only if a genuine uncertain payment ever occurs; state this limitation honestly in the submission |
 
@@ -124,7 +127,7 @@ Also mock-only: quote-cancel endpoint, Textile reverse corridor (cNGN→USDT), d
 | Repo URL for the submission | `[ ]` | No remote exists; needs your decision |
 | Demo (video/screens/live walkthrough) and a plain-language pitch for a named user | `[ ]` | Required by the judging criteria (see §6) |
 | Evidence of real users / counterparties | `[ ]` | Criteria reward it; none exists |
-| Local-currency / non-crypto-friendly interface | `[ ]` | CLI only; UX is a scored criterion on some tracks |
+| Local-currency / non-crypto-friendly interface | `[~]` | Local web page exists (item 19); amounts are still shown in token units, not local-currency units |
 | Refresh this checklist after each milestone | `[ ]` | |
 
 ---

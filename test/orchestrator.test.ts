@@ -160,7 +160,8 @@ function world(over: Partial<World> = {}) {
   const deps: OrderDeps = {
     now: () => w.now,
     receiptDir: dir,
-    plan: (ctx) => planPayment(planDeps, { service: ctx.service, body: ctx.body, payer: ctx.payer }),
+    plan: (ctx) =>
+      planPayment(planDeps, { service: ctx.service, body: ctx.body, payer: ctx.payer, ...(ctx.sourceSymbol ? { sourceSymbol: ctx.sourceSymbol } : {}) }),
     swapRunners: { [w.venue]: runner },
     async pay(auth, link): Promise<ExecutionResult> {
       w.calls.pay += 1;
@@ -1027,4 +1028,49 @@ test('recovery: a resolution closes the loop for an order (NOT_SETTLED -> resuma
     assert.equal((await resumeOrder(o.orderId, ctx(), d)).kind, 'refused');
     assert.equal(w.calls.pay, 1);
   }
+});
+
+// ================================================================== user-chosen funding currency
+test('source currency: a user who holds USDT AND cNGN can choose cNGN and gets a convert-then-pay plan; USDT stays direct', async () => {
+  const { w, deps, ctx } = world({ balances: { USDT: 100_000n, cNGN: 1_400_000_000n } });
+  const auto = await planOrder(deps, ctx());
+  assert.equal(auto.route, 'direct', 'unchosen: the planner pays directly');
+
+  const viaCngn = await planOrder(deps, { ...ctx(), sourceSymbol: 'cNGN' });
+  assert.equal(viaCngn.route, 'swap');
+  assert.deepEqual(viaCngn.steps.map((s) => s.kind), ['convert', 'pay']);
+  assert.equal(viaCngn.payment.funding?.kind === 'swap' && viaCngn.payment.funding.sellSymbol, 'cNGN');
+  assert.notEqual(viaCngn.digest, auto.digest, 'the choice changes the plan the approval is bound to');
+
+  const viaUsdt = await planOrder(deps, { ...ctx(), sourceSymbol: 'USDT' });
+  assert.equal(viaUsdt.route, 'direct');
+  assert.equal(w.calls.swap.length, 0, 'planning never converts');
+
+  // and the whole order runs end to end from the chosen currency
+  const done = await executeOrder(viaCngn, ctx(), deps, { approvedBy: 'human:test', approvedDigest: viaCngn.digest });
+  assert.equal(done.kind === 'finished' && done.state, 'COMPLETED');
+  assert.equal(w.calls.swap.length, 1);
+  assert.equal(w.links[0]!.route, 'converted');
+});
+
+test('source currency: an unaffordable chosen currency does NOT silently fall back to another; unsupported ones are refused', async () => {
+  const { deps, ctx } = world({ balances: { USDT: 100_000n, cNGN: 0n } });
+  const noCngn = await planOrder(deps, { ...ctx(), sourceSymbol: 'cNGN' });
+  assert.equal(noCngn.status, 'BLOCKED');
+  assert.equal(noCngn.route, null, 'it did not quietly pay with USDT instead');
+
+  // this fake service accepts only USDT, so USDC is neither accepted nor a conversion source
+  const noUsdc = await planOrder(deps, { ...ctx(), sourceSymbol: 'USDC' });
+  assert.equal(noUsdc.status, 'BLOCKED');
+  assert.ok(noUsdc.payment.blockers.some((b) => b.code === 'SOURCE_NOT_SUPPORTED'));
+
+  // an ACCEPTED asset the wallet does not hold is reported as insufficient funds, not swapped around
+  const accepted = world({ balances: { cNGN: 1_400_000_000n }, discover: required([offer('USDT'), offer('USDC')]) });
+  const noUsdt = await planOrder(accepted.deps, { ...accepted.ctx(), sourceSymbol: 'USDC' });
+  assert.equal(noUsdt.status, 'BLOCKED');
+  assert.ok(noUsdt.payment.blockers.some((b) => b.code === 'NO_FUNDS'));
+
+  const nonsense = await planOrder(deps, { ...ctx(), sourceSymbol: 'DOGE' });
+  assert.equal(nonsense.status, 'BLOCKED');
+  assert.ok(nonsense.payment.blockers.some((b) => b.code === 'SOURCE_NOT_SUPPORTED'));
 });

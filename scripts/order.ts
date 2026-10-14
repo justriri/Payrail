@@ -11,6 +11,7 @@
 //       hex characters). A conversion also asks you to type the digest of the exact transactions (or, for
 //       unattended runs, --auto-confirm --max-sell N --min-receive N). Nothing is spent without --execute.
 //
+//   ... scripts/order.ts --service ... --source cNGN        (pay with the currency you choose; converts if needed)
 //   ... scripts/order.ts --reconcile <orderId>
 //       Rebuilds an interrupted order's state from the swap journal, the chain and the payment journals.
 //       Sends nothing.
@@ -44,6 +45,7 @@ const AUTO = args.includes('--auto-confirm');
 const RESUME = opt('resume');
 const RECONCILE = opt('reconcile');
 const APPROVE_DIGEST = opt('approve-digest');
+const SOURCE = opt('source'); // the currency YOU choose to pay with, e.g. cNGN
 const line = (s = '') => console.log(s);
 function stop(m: string, code = 2): never {
   line(`\n[STOP] ${m}`);
@@ -103,7 +105,10 @@ const deps: OrderDeps = {
   now: () => Date.now(),
   receiptDir: live.receiptDir,
   plan: (c) =>
-    planPayment({ ...live.planDeps, ...(serviceDiscover ? { discover: serviceDiscover } : {}) }, { service: c.service, body: c.body, payer: c.payer }),
+    planPayment(
+      { ...live.planDeps, ...(serviceDiscover ? { discover: serviceDiscover } : {}) },
+      { service: c.service, body: c.body, payer: c.payer, ...(c.sourceSymbol ? { sourceSymbol: c.sourceSymbol } : {}) },
+    ),
   swapRunners: buildSwapRunners({
     makeSwapDeps: swapDepsFor,
     makeMentoVenue: () => createMentoVenue(live.client as never),
@@ -154,7 +159,7 @@ try {
 if (!found) stop(`service "${serviceId}" was not found in any registered provider (or the catalog is unavailable).`, 4);
 const { provider: serviceProvider, service } = found!;
 serviceDiscover = (s, b) => serviceProvider.discover(s, b);
-const ctx = { service, serviceProvider: serviceProvider.id, body, payer: payer! };
+const ctx = { service, serviceProvider: serviceProvider.id, body, payer: payer!, ...(SOURCE ? { sourceSymbol: SOURCE } : {}) };
 const approval = APPROVE_DIGEST ? { approvedBy: 'human:cli --approve-digest', approvedDigest: APPROVE_DIGEST } : {};
 
 try {

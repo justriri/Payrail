@@ -286,6 +286,8 @@ test('Mento route provider: a live quote names the Router as spender; failures a
   assert.equal(await code(new Error('FXMarketClosed()')), 'NO_LIQUIDITY');
   assert.equal(await code(0n), 'NO_LIQUIDITY');
   assert.equal(await code(new Error('socket hang up')), 'PROVIDER_ERROR');
+  const noReason = new Error('The contract function "getAmountsOut" reverted with the following signature:\n\nContract Call:\n  address: 0x4861');
+  assert.equal(await code(noReason), 'CORRIDOR_UNAVAILABLE', 'a reason-less revert from the router means no route for the pair');
   const other = await ok.quoteExactInput!({ chainId: 1, sell: USDM, buy: USDT, sellAmount: SELL });
   assert.equal(other.kind === 'none' && other.code, 'CORRIDOR_UNAVAILABLE');
 });

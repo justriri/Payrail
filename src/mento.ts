@@ -115,6 +115,11 @@ function classify(e: unknown): { code: RouteFailureCode; message: string } {
   if (/PoolDoesNotExist|PoolFactoryDoesNotExist|InvalidPath|InvalidRoute/i.test(text)) {
     return { code: 'CORRIDOR_UNAVAILABLE', message: 'no Mento pool for this pair' };
   }
+  // The Router reverts with NO reason (empty signature) when it has no route for a pair, e.g. cNGN (observed live
+  // 2026-10-14). That is "no corridor", not a provider outage: report it as such so users are not told to retry.
+  if (/reverted with the following signature:\s*($|\n)/i.test(text) || /returned no data|execution reverted\s*$/i.test(text)) {
+    return { code: 'CORRIDOR_UNAVAILABLE', message: 'the Mento router has no route for this pair' };
+  }
   if (/FXMarketClosed/i.test(text)) return { code: 'NO_LIQUIDITY', message: 'the Mento FX market is closed' };
   if (/InsufficientLiquidity|ReservesEmpty|InsufficientAmount/i.test(text)) return { code: 'NO_LIQUIDITY', message: 'the pool cannot fill this amount' };
   return { code: 'PROVIDER_ERROR', message: text.split('\n')[0]!.slice(0, 160) };

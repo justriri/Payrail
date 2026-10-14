@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="payrail-token" content="__PAYRAIL_TOKEN__">
+  <meta name="payrail-mode" content="__PAYRAIL_MODE__">
+  <title>Payrail</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>Payrail</h1>
+    <p class="tagline">Paste an API address. Pay with the money you already hold. Get the response.</p>
+    <div id="banner" class="banner" hidden></div>
+  </header>
+
+  <main>
+    <section class="card" id="wallet-card">
+      <h2>1 · Your wallet</h2>
+      <div id="wallet">Loading…</div>
+      <p class="hint">Payrail never asks for your private key. Payments are signed by the server using a key file you loaded when you started it.</p>
+    </section>
+
+    <section class="card" id="inspect-card">
+      <h2>2 · Which service?</h2>
+      <label for="url">API service URL</label>
+      <input id="url" type="url" placeholder="https://gateway.usebuy.ai/v1/social/x/posts/search" autocomplete="off">
+      <label for="body">Request body (JSON)</label>
+      <textarea id="body" rows="4" spellcheck="false" placeholder="Filled in for you after you inspect the service"></textarea>
+      <div class="row">
+        <button id="inspect-btn" type="button">Inspect service</button>
+        <span id="inspect-msg" class="muted"></span>
+      </div>
+      <div id="problems" class="problems" hidden></div>
+    </section>
+
+    <section class="card" id="plan-card" hidden>
+      <h2>3 · Review and approve</h2>
+      <div id="service-info"></div>
+      <h3>Pay with</h3>
+      <div id="funding" class="funding"></div>
+      <h3>What will happen</h3>
+      <ol id="steps"></ol>
+      <table id="numbers" class="numbers"></table>
+      <div id="plan-problems" class="problems" hidden></div>
+      <div id="approval" class="approval">
+        <label class="check"><input id="agree" type="checkbox"> <span id="agree-text"></span></label>
+        <button id="approve-btn" type="button" disabled>Approve and pay</button>
+      </div>
+    </section>
+
+    <section class="card" id="order-card" hidden>
+      <h2>4 · Progress and result</h2>
+      <ol id="stages" class="stages">
+        <li data-stage="converting">Convert</li>
+        <li data-stage="paying">Pay</li>
+        <li data-stage="completed">Delivered</li>
+      </ol>
+      <div id="order-headline" class="headline"></div>
+      <p id="order-detail"></p>
+      <p id="order-next" class="next"></p>
+      <div id="order-links"></div>
+      <div class="row">
+        <button id="check-btn" type="button" hidden>Check status</button>
+        <button id="resume-btn" type="button" hidden>Resume payment</button>
+      </div>
+      <details id="logs-wrap"><summary>Activity log</summary><pre id="logs"></pre></details>
+      <div id="response-wrap" hidden>
+        <h3>API response</h3>
+        <p class="hint" id="response-meta"></p>
+        <pre id="response"></pre>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Payrail runs on your computer. Nothing is sent anywhere except the service, the conversion venue and Celo.</p>
+  </footer>
+  <script src="/app.js"></script>
+</body>
+</html>

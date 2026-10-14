@@ -94,6 +94,8 @@ export interface OrderContext {
   serviceProvider: string;
   body: string;
   payer: Address;
+  /** The currency the user chose to pay with (planning only; the re-price after a conversion pays from the converted asset). */
+  sourceSymbol?: string;
 }
 
 export interface FundsRequest {
@@ -109,7 +111,7 @@ export interface OrderDeps {
   now(): number;
   receiptDir: string;
   /** Plan the payment for a service (discovery + balances + routing + policy). Read-only. */
-  plan(ctx: { service: Service; body: string; payer: Address }): Promise<PaymentPlan>;
+  plan(ctx: { service: Service; body: string; payer: Address; sourceSymbol?: string }): Promise<PaymentPlan>;
   /**
    * Conversion executors keyed by the provider name a plan can choose (e.g. 'textile-fx-v2', 'mento-router-v3').
    * Each one runs ONE authorized swap, including its own confirmation gates and verification.
@@ -193,7 +195,12 @@ const human = (v: bigint, d: number) => formatUnits(v, d);
 
 /** Build the order plan. Read-only: nothing is signed, requested from a venue, or sent. */
 export async function planOrder(deps: OrderDeps, ctx: OrderContext): Promise<OrderPlan> {
-  const payment = await deps.plan({ service: ctx.service, body: ctx.body, payer: ctx.payer });
+  const payment = await deps.plan({
+    service: ctx.service,
+    body: ctx.body,
+    payer: ctx.payer,
+    ...(ctx.sourceSymbol ? { sourceSymbol: ctx.sourceSymbol } : {}),
+  });
   const blockers: Blocker[] = [...payment.blockers];
   const steps: OrderStep[] = [];
   const explanation: string[] = [...payment.explanation];

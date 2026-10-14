@@ -113,13 +113,31 @@ node --env-file=.env scripts/history.ts
 
 A plan prints the route, the cost, the gas estimate, whether approval is needed, and a **plan digest**.
 
+## Web interface
+
+A local web page lets you paste an API address, see exactly what would happen, approve it, and view the
+response. It runs on your own computer (`127.0.0.1` only) and **never asks for a private key**: signing is done
+by the server using the key file you load when you start it.
+
+```sh
+npm run serve:sim      # SIMULATION: fake balances, conversion and payment. Safe to explore; clearly labelled
+npm run serve          # LIVE, read-only: inspect real services, balances and quotes (no key loaded, cannot pay)
+node --env-file=<your key file> scripts/serve.ts    # LIVE with payments enabled; every payment needs your approval
+```
+
+Then open `http://127.0.0.1:4402/`. The page shows your balances, lets you choose which currency to pay with
+(for example cNGN, which is converted first), shows the rate, fees, the most you could spend and the
+destination, and only runs after you tick the approval box and press **Approve and pay**. It then shows the
+conversion and payment transactions and the service's response. If anything fails or is uncertain, it says
+so plainly and tells you what **not** to do (for example, never pay again while a payment is uncertain).
+
 ## Spending commands (use with care)
 
 These can move real funds and are never run by default:
 
 | Command | What it can do |
 |---|---|
-| `scripts/order.ts --service <id> --execute` | Run an order (pay, or convert then pay) |
+| `scripts/order.ts --service <id> [--source cNGN] --execute` | Run an order (pay, or convert then pay; `--source` picks the currency you pay with) |
 | `scripts/convert.ts --from A --to B --amount N --execute --approve` | A standalone conversion |
 | `scripts/pay-direct.ts --pay` | One direct payment (the original single-payment test tool; `order.ts` is the main flow) |
 | `scripts/register-agent.ts --send` | Register the ERC-8004 agent identity (costs gas) |
@@ -183,7 +201,7 @@ Honest status as of the last audit (see `PROJECT-MASTER-CHECKLIST.md` for the fu
   and the ERC-8004 registration.
 - **Not yet run live (tested with fakes only):** a convert-**then**-pay order, `--reconcile`/`--resume`
   on a real interrupted order, uncertain-payment resolution, paying a service through Mento.
-- **Interface:** command line only; there is no web or chat UI.
+- **Interface:** a local web page and the command line; no hosted/multi-user service, and no fiat on/off-ramp. The web page's live conversion-and-payment path has been exercised with the simulation and read-only live quotes, not yet with a real cNGN conversion.
 - **One service provider** (Buy) is registered, although the provider seam supports more.
 - **No fiat on/off-ramp**, and amounts are shown in token units, not local-currency units.
 - **Public RPC quirk:** some public nodes prune old receipts, so Payrail asks several endpoints and treats

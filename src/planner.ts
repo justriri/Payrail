@@ -121,6 +121,12 @@ export interface PlanRequest {
   payer: Address;
   /** If a firm quote already exists, its expiry is honoured. */
   firmQuote?: { expiresAtMs: number };
+  /**
+   * The currency the USER chose to pay with (e.g. 'cNGN'). When set, ONLY that currency may fund the payment:
+   * an accepted asset is paid directly from it, anything else must be a permitted swap source and is converted.
+   * Unset = the planner picks (direct if possible, else the largest convertible balance).
+   */
+  sourceSymbol?: string;
 }
 
 const DAY_MS = 86_400_000;
@@ -278,8 +284,24 @@ export async function planPayment(deps: PlanDeps, req: PlanRequest): Promise<Pay
     payTo: u.offer.payTo,
   }));
 
-  // 5. DIRECT: any accepted, permitted asset the wallet already holds enough of.
-  const direct1 = usable.find((u) => bal(u.asset) >= u.offer.amountAtomic);
+  // 5. DIRECT: any accepted, permitted asset the wallet already holds enough of (or the one the user chose).
+  const wantSource = req.sourceSymbol;
+  const sourceIsAccepted = wantSource !== undefined && usable.some((u) => u.asset.symbol === wantSource);
+  if (wantSource !== undefined && !sourceIsAccepted && !policy.allowedSwapSources.includes(wantSource)) {
+    block('SOURCE_NOT_SUPPORTED', `${wantSource} cannot be used to pay for this service: it is neither accepted by the service nor a permitted conversion source`);
+    return done('NO_SUPPORTED_ROUTE', `You chose to pay with ${wantSource}, which Payrail cannot use for this service.`);
+  }
+  const direct1 = usable.find(
+    (u) => bal(u.asset) >= u.offer.amountAtomic && (wantSource === undefined || (sourceIsAccepted && u.asset.symbol === wantSource)),
+  );
+  if (!direct1 && sourceIsAccepted) {
+    const chosen = usable.find((u) => u.asset.symbol === wantSource)!;
+    block('NO_FUNDS', `${wantSource} balance is below the price`);
+    return done(
+      'INSUFFICIENT_BALANCE',
+      `The service needs ${human(chosen.offer.amountAtomic, chosen.asset.decimals)} ${wantSource}; the wallet holds ${human(bal(chosen.asset), chosen.asset.decimals)}.`,
+    );
+  }
   if (direct1) {
     const { offer, asset } = direct1;
     plan.payment = {
@@ -317,7 +339,9 @@ export async function planPayment(deps: PlanDeps, req: PlanRequest): Promise<Pay
   }
 
   // 6. SWAP: hold something convertible?
-  const sources = swapSources.filter((a) => bal(a) > 0n).sort((a, b) => (bal(b) > bal(a) ? 1 : -1));
+  const sources = swapSources
+    .filter((a) => bal(a) > 0n && (wantSource === undefined || a.symbol === wantSource))
+    .sort((a, b) => (bal(b) > bal(a) ? 1 : -1));
   const heldAccepted = usable.map((u) => `${human(bal(u.asset), u.asset.decimals)} ${u.asset.symbol}`).join(', ');
   if (sources.length === 0) {
     block('NO_FUNDS', 'no accepted asset and no swappable balance');
