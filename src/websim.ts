@@ -61,6 +61,21 @@ export function createSimulatedRuntime(opts: { scenario?: SimScenario; delayMs?:
           price: { usd: '0.005', atomic: '5000', tokens: ['USDT'] },
           inputSchema: { type: 'object', properties: { query: { type: 'string' }, type: { type: 'string', enum: ['latest', 'top'] } }, required: ['query'] },
         },
+        {
+          id: 'instagram.profile', title: 'Instagram profile (simulated)', method: 'POST', url: 'https://gateway.usebuy.ai/v1/social/instagram/profile', available: true, platform: 'instagram',
+          description: 'Look up a public profile. SIMULATED listing.', price: { usd: '0.005', atomic: '5000', tokens: ['USDT'] },
+          inputSchema: { type: 'object', properties: { username: { type: 'string' } }, required: ['username'] },
+        },
+        {
+          id: 'flights.search', title: 'Flight search (simulated)', method: 'POST', url: 'https://gateway.usebuy.ai/v1/flights/search', available: true, platform: 'flights',
+          description: 'Live flight offers. SIMULATED listing priced above the default per-payment limit.', price: { usd: '0.05', atomic: '50000', tokens: ['USDT'] },
+          inputSchema: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' } }, required: ['from', 'to'] },
+        },
+        {
+          id: 'reddit.posts.search', title: 'Reddit search (simulated, unavailable)', method: 'POST', url: 'https://gateway.usebuy.ai/v1/social/reddit/posts/search', available: false, platform: 'reddit',
+          description: 'Temporarily unavailable. SIMULATED listing.', price: { usd: '0.005', atomic: '5000', tokens: ['USDT'] },
+          inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+        },
       ],
     },
     now(),

@@ -237,10 +237,103 @@ async function loadResponse(orderId, payment) {
     (data.truncated ? ' Display truncated; the full response is saved on disk.' : '');
 }
 
+// ---- browse the catalog
+const BR = { offset: 0, limit: 30, loading: false, timer: null, seq: 0 };
+
+function badge(text, kind) { return el('span', { class: 'badge' + (kind ? ' ' + kind : ''), text }); }
+
+function serviceCard(s) {
+  const verdicts = [];
+  if (!s.available) verdicts.push(badge('Not available', 'bad'));
+  else if (!s.verdict.contactable) verdicts.push(badge('Not supported', 'bad'));
+  else if (!s.verdict.withinLimit) verdicts.push(badge('Above your per-payment limit', 'warn'));
+  else if (s.verdict.autoPay) verdicts.push(badge('Auto-pay allowed', 'ok'));
+  else verdicts.push(badge('Needs your approval each time', ''));
+  const price = s.price
+    ? (s.price.variable ? `${s.price.minUsd} – ${s.price.maxUsd}` : s.price.usd) + (s.price.variable ? ' (varies)' : ' per call')
+    : 'price not listed';
+  const use = el('button', { type: 'button', text: 'Use this service' });
+  if (!s.available || !s.verdict.contactable) use.disabled = true;
+  use.addEventListener('click', () => {
+    $('url').value = s.url;
+    $('body').value = '';
+    source = 'auto';
+    $('inspect-card').scrollIntoView({ behavior: 'smooth' });
+    inspect();
+  });
+  return el('div', { class: 'svc' + (s.available ? '' : ' off') },
+    el('div', { class: 'meta' }, badge(s.platform), el('span', { class: 'price', text: price })),
+    el('h4', { text: s.title }),
+    el('p', { text: s.description }),
+    el('div', {}, ...verdicts),
+    use);
+}
+
+async function loadCatalog(reset) {
+  if (reset) { BR.offset = 0; clear($('browse-list')); }
+  const mine = ++BR.seq;
+  BR.loading = true;
+  $('browse-error').hidden = true;
+  $('browse-retry').hidden = true;
+  $('browse-more').hidden = true;
+  $('browse-status').textContent = BR.offset === 0 ? 'Loading services… (the first load can take about 10 seconds)' : 'Loading more…';
+  const p = new URLSearchParams();
+  if ($('q').value.trim()) p.set('q', $('q').value.trim());
+  if ($('platform').value) p.set('platform', $('platform').value);
+  if ($('f-available').checked) p.set('available', '1');
+  if ($('f-within').checked) p.set('within', '1');
+  p.set('offset', String(BR.offset));
+  p.set('limit', String(BR.limit));
+  let data;
+  try {
+    data = (await api('/api/catalog?' + p.toString())).data;
+  } catch {
+    data = { ok: false, problems: [{ code: 'NETWORK', message: 'Could not reach the Payrail server.' }] };
+  }
+  if (mine !== BR.seq) return; // a newer search replaced this one
+  BR.loading = false;
+  if (!data.ok) {
+    $('browse-status').textContent = '';
+    showProblems($('browse-error'), data.problems, false);
+    $('browse-retry').hidden = false;
+    return;
+  }
+  // platform filter options (kept stable once filled)
+  const sel = $('platform');
+  if (sel.options.length <= 1) {
+    for (const pl of data.platforms) sel.append(el('option', { value: pl.platform, text: `${pl.platform} (${pl.count})` }));
+  }
+  const list = $('browse-list');
+  for (const s of data.items) list.append(serviceCard(s));
+  BR.offset += data.items.length;
+  const shown = Math.min(BR.offset, data.matched);
+  if (data.matched === 0) {
+    $('browse-status').textContent = `No services match your filters (${data.total} listed in total).`;
+  } else {
+    $('browse-status').textContent =
+      `Showing ${shown} of ${data.matched} matching services (${data.total} listed by ${data.source === 'buy-gateway' ? 'the Buy gateway' : data.source})` +
+      (data.stale ? '. This list may be out of date: the catalog could not be refreshed.' : '.') +
+      (data.mode === 'simulated' ? ' SIMULATED catalog.' : '');
+  }
+  $('browse-more').hidden = BR.offset >= data.matched;
+}
+
+function reloadSoon() {
+  if (BR.timer) clearTimeout(BR.timer);
+  BR.timer = setTimeout(() => loadCatalog(true), 300);
+}
+
 // ---- wire up
+$('q').addEventListener('input', reloadSoon);
+$('platform').addEventListener('change', () => loadCatalog(true));
+$('f-available').addEventListener('change', () => loadCatalog(true));
+$('f-within').addEventListener('change', () => loadCatalog(true));
+$('browse-more').addEventListener('click', () => loadCatalog(false));
+$('browse-retry').addEventListener('click', () => loadCatalog(true));
 $('inspect-btn').addEventListener('click', () => { source = 'auto'; inspect(); });
 $('url').addEventListener('keydown', (e) => { if (e.key === 'Enter') { source = 'auto'; inspect(); } });
 $('agree').addEventListener('change', syncApprove);
 $('approve-btn').addEventListener('click', approve);
 if (MODE === 'simulated') $('url').placeholder = 'https://gateway.usebuy.ai/v1/social/x/posts/search  (simulation)';
 loadWallet();
+loadCatalog(true);

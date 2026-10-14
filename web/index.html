@@ -22,8 +22,26 @@
       <p class="hint">Payrail never asks for your private key. Payments are signed by the server using a key file you loaded when you started it.</p>
     </section>
 
+    <section class="card" id="browse-card">
+      <h2>2 · Browse services</h2>
+      <p class="hint">Services listed by the Buy gateway. Prices are indicative; the service's own quote is the real price.</p>
+      <div class="filters">
+        <input id="q" type="search" placeholder="Search (for example: twitter, flights, browser)" autocomplete="off">
+        <select id="platform" aria-label="Platform"><option value="">All platforms</option></select>
+      </div>
+      <label class="check"><input id="f-available" type="checkbox" checked> <span>Available services only</span></label>
+      <label class="check"><input id="f-within" type="checkbox"> <span>Only services within my per-payment limit</span></label>
+      <p id="browse-status" class="muted" role="status">Loading services…</p>
+      <div id="browse-error" class="problems" hidden></div>
+      <div id="browse-list" class="cards"></div>
+      <div class="row">
+        <button id="browse-more" type="button" class="secondary" hidden>Show more</button>
+        <button id="browse-retry" type="button" class="secondary" hidden>Retry</button>
+      </div>
+    </section>
+
     <section class="card" id="inspect-card">
-      <h2>2 · Which service?</h2>
+      <h2>3 · Or paste a service address</h2>
       <label for="url">API service URL</label>
       <input id="url" type="url" placeholder="https://gateway.usebuy.ai/v1/social/x/posts/search" autocomplete="off">
       <label for="body">Request body (JSON)</label>
@@ -36,7 +54,7 @@
     </section>
 
     <section class="card" id="plan-card" hidden>
-      <h2>3 · Review and approve</h2>
+      <h2>4 · Review and approve</h2>
       <div id="service-info"></div>
       <h3>Pay with</h3>
       <div id="funding" class="funding"></div>
@@ -51,7 +69,7 @@
     </section>
 
     <section class="card" id="order-card" hidden>
-      <h2>4 · Progress and result</h2>
+      <h2>5 · Progress and result</h2>
       <ol id="stages" class="stages">
         <li data-stage="converting">Convert</li>
         <li data-stage="paying">Pay</li>

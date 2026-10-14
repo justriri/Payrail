@@ -362,3 +362,109 @@ test('security: wrong Host, cross-site Origin, missing/wrong token and oversize 
     await h.close();
   }
 });
+
+// ------------------------------------------------------------------ browsing the catalog
+test('catalog: the list returns normalized services with a policy verdict; filters, search and paging work', async () => {
+  const h = await start();
+  try {
+    const all = await h.get('/api/catalog');
+    assert.equal(all.status, 200);
+    assert.equal(all.body.ok, true);
+    assert.equal(all.body.source, 'buy-gateway');
+    assert.equal(all.body.total, 4);
+    assert.equal(all.body.matched, 4);
+    assert.deepEqual(all.body.platforms.map((p: any) => p.platform).sort(), ['flights', 'instagram', 'reddit', 'x']);
+    const byId = Object.fromEntries(all.body.items.map((i: any) => [i.id, i]));
+    assert.equal(byId['x.posts.search'].verdict.autoPay, true);
+    assert.equal(byId['x.posts.search'].verdict.withinLimit, true);
+    assert.equal(byId['x.posts.search'].price.usd, '0.005');
+    assert.equal(byId['x.posts.search'].price.variable, false, 'a single listed price is not "variable"');
+    assert.equal(byId['instagram.profile'].verdict.autoPay, false, 'listed and affordable, but needs approval each time');
+    assert.equal(byId['flights.search'].verdict.withinLimit, false, 'above the per-payment limit');
+    assert.equal(byId['reddit.posts.search'].available, false);
+    assert.equal(byId['x.posts.search'].url, URL_OK, 'the card can hand its URL straight to inspect');
+
+    const avail = await h.get('/api/catalog?available=1');
+    assert.equal(avail.body.matched, 3);
+    const within = await h.get('/api/catalog?within=1&available=1');
+    assert.deepEqual(within.body.items.map((i: any) => i.id).sort(), ['instagram.profile', 'x.posts.search']);
+    const plat = await h.get('/api/catalog?platform=flights');
+    assert.deepEqual(plat.body.items.map((i: any) => i.id), ['flights.search']);
+    const q = await h.get('/api/catalog?q=instagram');
+    assert.deepEqual(q.body.items.map((i: any) => i.id), ['instagram.profile']);
+    const none = await h.get('/api/catalog?q=zzzz-nothing');
+    assert.equal(none.body.matched, 0);
+    assert.deepEqual(none.body.items, []);
+    const page = await h.get('/api/catalog?limit=2&offset=2');
+    assert.equal(page.body.items.length, 2);
+    assert.equal(page.body.matched, 4);
+    assert.equal((await h.get('/api/catalog?limit=999999')).body.limit, 200, 'page size is capped');
+  } finally {
+    await h.close();
+  }
+});
+
+test('catalog: a failing catalog is a clear error (502), a cached copy is flagged stale, and the rest of the app still works', async () => {
+  const base = createSimulatedRuntime({ delayMs: 5 });
+  let mode: 'ok' | 'stale' | 'down' = 'down';
+  const rt = {
+    ...base,
+    catalog: async () => {
+      if (mode === 'down') throw new Error('catalog HTTP 500');
+      const c = await base.catalog();
+      return mode === 'stale' ? { ...c, stale: true } : c;
+    },
+  };
+  const { server, token } = createWebServer(rt, { token: 'test-token' });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  void token;
+  try {
+    const down = await fetch(url + '/api/catalog');
+    const d: any = await down.json();
+    assert.equal(down.status, 502);
+    assert.equal(d.ok, false);
+    assert.equal(d.problems[0].code, 'CATALOG_UNAVAILABLE');
+    assert.match(d.problems[0].message, /could not be loaded/);
+    assert.equal((await fetch(url + '/api/status')).status, 200, 'wallet and status are unaffected');
+
+    mode = 'stale';
+    const stale: any = await (await fetch(url + '/api/catalog')).json();
+    assert.equal(stale.ok, true);
+    assert.equal(stale.stale, true);
+    assert.equal(stale.items.length, 4);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
+test('catalog UI: the page has the browse card with search, filters, loading/empty/error/retry states and a "use this service" action', () => {
+  const html = readFileSync(fileURLToPath(new URL('../web/index.html', import.meta.url)), 'utf8');
+  const js = readFileSync(fileURLToPath(new URL('../web/app.js', import.meta.url)), 'utf8');
+  for (const id of ['browse-card', 'q', 'platform', 'f-available', 'f-within', 'browse-status', 'browse-error', 'browse-list', 'browse-more', 'browse-retry']) {
+    assert.ok(html.includes(`id="${id}"`), `index.html has #${id}`);
+  }
+  assert.match(js, /\/api\/catalog\?/);
+  assert.match(js, /Loading services/);
+  assert.match(js, /No services match your filters/);
+  assert.match(js, /may be out of date/);
+  assert.match(js, /Use this service/);
+  assert.match(js, /Above your per-payment limit/);
+  assert.ok(!/innerHTML|outerHTML|insertAdjacentHTML/.test(js), 'service text is never parsed as HTML');
+  assert.match(js, /loadCatalog\(true\);/, 'the catalog loads when the page opens');
+});
+
+test('catalog -> purchase: a card hands its URL to inspect, and the existing approve/pay flow completes (simulated)', async () => {
+  const h = await start();
+  try {
+    const card = (await h.get('/api/catalog?q=x.posts')).body.items[0];
+    const insp = (await h.post('/api/inspect', { url: card.url })).body; // exactly what the card's button does
+    assert.equal(insp.service.id, card.id);
+    assert.equal(insp.canApprove, true);
+    const ap = await h.post('/api/approve', { planId: insp.planId, termsDigest: insp.terms.digest });
+    assert.equal(ap.status, 202);
+    assert.equal((await h.wait(ap.body.orderId)).stage, 'completed');
+  } finally {
+    await h.close();
+  }
+});

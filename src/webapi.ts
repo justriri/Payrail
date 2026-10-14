@@ -20,11 +20,12 @@ import { formatUnits } from 'viem';
 import type { Address } from 'viem';
 import { ASSETS, assetBySymbol, microUsd } from './assets.ts';
 import type { Asset } from './assets.ts';
+import { searchServices } from './catalog.ts';
 import type { Catalog, Service } from './catalog.ts';
 import { executeOrder, loadOrder, planOrder, reconcileOrder, resumeOrder } from './orchestrator.ts';
 import type { OrderContext, OrderDeps, OrderPlan } from './orchestrator.ts';
 import type { OrderRecord } from './orderstore.ts';
-import { formatUsd } from './policy.ts';
+import { assessService, formatUsd } from './policy.ts';
 import type { SpendingPolicy } from './policy.ts';
 
 // ------------------------------------------------------------------ runtime contract
@@ -97,6 +98,46 @@ export interface InspectView {
   problems: Problem[];
   uncertainties: string[];
   explanation: string[];
+}
+
+/** One browsable service. Derived from the catalog; every text field is untrusted display data. */
+export interface CatalogItem {
+  id: string;
+  title: string;
+  description: string;
+  platform: string;
+  method: string;
+  url: string;
+  /** Where the listing comes from. Today only the Buy gateway; seller-listed APIs will be another source. */
+  source: string;
+  available: boolean;
+  /** Indicative only: the service's own 402 challenge is the real price. */
+  price: { usd: string | null; minUsd: string | null; maxUsd: string | null; variable: boolean } | null;
+  verdict: {
+    /** May Payrail contact this endpoint at all (allow-listed host, https, no credentials)? */
+    contactable: boolean;
+    /** Can it be paid without a per-use human approval under the current policy? */
+    autoPay: boolean;
+    /** Is even its cheapest listed price within the per-payment limit? */
+    withinLimit: boolean;
+    reasons: string[];
+  };
+  hasInputSchema: boolean;
+}
+
+export interface CatalogView {
+  ok: true;
+  mode: 'live' | 'simulated';
+  source: string;
+  /** True when this is a cached copy because a refresh failed (it may be out of date). */
+  stale: boolean;
+  fetchedAt: string;
+  total: number;
+  matched: number;
+  offset: number;
+  limit: number;
+  platforms: Array<{ platform: string; count: number }>;
+  items: CatalogItem[];
 }
 
 export interface OrderView {
@@ -358,6 +399,71 @@ export function createWebApp(rt: WebRuntime) {
     return await toInspectView(plan, service, body, source);
   }
 
+  async function catalogList(q: { query?: string; platform?: string; availableOnly?: boolean; withinLimits?: boolean; offset?: number; limit?: number }): Promise<CatalogView | { ok: false; problems: Problem[] }> {
+    let cat: Catalog;
+    try {
+      cat = await rt.catalog();
+    } catch (e) {
+      return {
+        ok: false,
+        problems: [{ code: 'CATALOG_UNAVAILABLE', message: `The service catalog could not be loaded (${e instanceof Error ? e.message.slice(0, 120) : 'error'}). Check your connection and try again.` }],
+      };
+    }
+    const cap = rt.policy.maxPerPaymentMicroUsd;
+    const matched = searchServices(cat.services, {
+      ...(q.query ? { query: q.query.slice(0, 80) } : {}),
+      ...(q.platform ? { platform: q.platform } : {}),
+      availableOnly: q.availableOnly === true,
+      ...(q.withinLimits ? { maxPriceAtomic: cap } : {}),
+    });
+    const limit = Math.min(Math.max(q.limit ?? 60, 1), 200);
+    const offset = Math.max(q.offset ?? 0, 0);
+    const counts = new Map<string, number>();
+    for (const s of cat.services) counts.set(s.platform, (counts.get(s.platform) ?? 0) + 1);
+    const items: CatalogItem[] = matched.slice(offset, offset + limit).map((s) => {
+      const a = assessService(s, rt.policy);
+      const p = s.price;
+      return {
+        id: s.id,
+        title: s.title,
+        description: s.description,
+        platform: s.platform,
+        method: s.method,
+        url: s.url,
+        source: 'buy-gateway',
+        available: s.available,
+        price: p
+          ? {
+              usd: p.usd,
+              minUsd: p.minAtomic === p.maxAtomic ? null : formatUsd(p.minAtomic),
+              maxUsd: p.minAtomic === p.maxAtomic ? null : formatUsd(p.maxAtomic),
+              variable: p.minAtomic !== p.maxAtomic,
+            }
+          : null,
+        verdict: {
+          contactable: a.contactable,
+          autoPay: a.autoPayable,
+          withinLimit: p !== undefined && p.minAtomic <= cap,
+          reasons: a.reasons,
+        },
+        hasInputSchema: s.inputSchema !== undefined,
+      };
+    });
+    return {
+      ok: true,
+      mode: rt.mode,
+      source: 'buy-gateway',
+      stale: cat.stale === true,
+      fetchedAt: new Date(cat.fetchedAt).toISOString(),
+      total: cat.services.length,
+      matched: matched.length,
+      offset,
+      limit,
+      platforms: [...counts.entries()].map(([platform, count]) => ({ platform, count })).sort((x, y) => y.count - x.count || x.platform.localeCompare(y.platform)),
+      items,
+    };
+  }
+
   async function toInspectView(plan: OrderPlan, service: Service, body: string, source: string | undefined): Promise<InspectView> {
     const p = plan.payment;
     const bal = await rt.balances();
@@ -612,7 +718,7 @@ export function createWebApp(rt: WebRuntime) {
     return { ok: true };
   }
 
-  return { status, inspect, approve, orderView, responseBody, checkStatus, resume, isBusy: () => running };
+  return { status, catalogList, inspect, approve, orderView, responseBody, checkStatus, resume, isBusy: () => running };
 }
 
 export type WebApp = ReturnType<typeof createWebApp>;
@@ -681,6 +787,19 @@ export function createWebServer(rt: WebRuntime, opts: { webDir?: string; token?:
       }
 
       if (method === 'GET' && url.pathname === '/api/status') return send(res, 200, await app.status());
+      if (method === 'GET' && url.pathname === '/api/catalog') {
+        const g = url.searchParams;
+        const num = (k: string) => (g.has(k) && /^\d+$/.test(g.get(k) ?? '') ? Number(g.get(k)) : undefined);
+        const r = await app.catalogList({
+          ...(g.get('q') ? { query: g.get('q')! } : {}),
+          ...(g.get('platform') ? { platform: g.get('platform')! } : {}),
+          availableOnly: g.get('available') === '1',
+          withinLimits: g.get('within') === '1',
+          ...(num('offset') !== undefined ? { offset: num('offset')! } : {}),
+          ...(num('limit') !== undefined ? { limit: num('limit')! } : {}),
+        });
+        return send(res, r.ok ? 200 : 502, r);
+      }
 
       let m: RegExpMatchArray | null;
       if (method === 'GET' && (m = url.pathname.match(/^\/api\/order\/([0-9a-f-]{36})$/))) {

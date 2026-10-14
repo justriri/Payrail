@@ -125,7 +125,7 @@ npm run serve          # LIVE, read-only: inspect real services, balances and qu
 node --env-file=<your key file> scripts/serve.ts    # LIVE with payments enabled; every payment needs your approval
 ```
 
-Then open `http://127.0.0.1:4402/`. The page shows your balances, lets you choose which currency to pay with
+Then open `http://127.0.0.1:4402/`. The page lists the services in the Buy catalog (search, platform and "within my limit" filters; the first load can take about 10 seconds) with a **Use this service** button on each card, and also lets you paste an address. It shows your balances, lets you choose which currency to pay with
 (for example cNGN, which is converted first), shows the rate, fees, the most you could spend and the
 destination, and only runs after you tick the approval box and press **Approve and pay**. It then shows the
 conversion and payment transactions and the service's response. If anything fails or is uncertain, it says
