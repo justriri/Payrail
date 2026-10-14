@@ -199,7 +199,13 @@ export class MockChain implements SwapChain {
     if (this.preSwap && blockNumber < 3n) return this.preSwap.get(token.toLowerCase()) ?? 0n;
     return this.balances.get(token.toLowerCase()) ?? 0n;
   }
+  /** Test knob: while > 0, 'latest' allowance reads return 0 (a lagging RPC backend). Exact-block reads are unaffected. */
+  staleAllowanceReads = 0;
   async allowance(token: Address, _o: Address, spender: Address) {
+    if (this.staleAllowanceReads > 0) {
+      this.staleAllowanceReads -= 1;
+      return 0n;
+    }
     return this.allowances.get(`${token}:${spender}`.toLowerCase()) ?? 0n;
   }
   async nativeBalance() {

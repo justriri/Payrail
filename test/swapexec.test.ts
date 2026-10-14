@@ -404,3 +404,28 @@ test('the quote deadlines are recorded in the journal', async () => {
   const o = finished(await runSwap(swapAuth(), h.deps, { confirm: approveNo }));
   assert.ok(o.record.quote.deadlines?.expiresAt, 'expiresAt recorded');
 });
+
+// ------------------------------------------------------------------ found live 2026-10-14: stale allowance read after a mined approval
+test('a mined approval that a lagging node reads back as 0 is verified at the approval block, not "ineffective"', async () => {
+  const chain = new MockChain();
+  const h = harness({ dir: tempDir(), chainObj: chain, allowance: 0n, statuses: ['quoted', 'submitted', 'filled'] });
+  // the first latest-reads (before and right after the approval) hit a node that has not seen the approval
+  h.deps.approvalPhase = 'before-quote'; // the phase used live
+  chain.staleAllowanceReads = 1_000;
+  const o = finished(await runSwap(swapAuth(), h.deps, { confirm: approveYes, confirmApproval: approveYes }));
+  assert.notEqual(o.record.code, 'APPROVAL_INEFFECTIVE', o.record.message);
+  assert.equal(o.state, 'CONFIRMED', o.record.message);
+  assert.deepEqual(h.chain.broadcasts.map((b) => b.kind), ['approve', 'swap']);
+});
+
+test('if the allowance really is insufficient after the approval, it still stops before any quote (fail closed)', async () => {
+  const chain = new MockChain();
+  const h = harness({ dir: tempDir(), chainObj: chain, allowance: 0n });
+  h.deps.approvalPhase = 'before-quote';
+  chain.allowanceAt = async () => 0n; // the chain itself says the approval did not take effect
+  chain.staleAllowanceReads = 1_000;
+  const o = finished(await runSwap(swapAuth(), h.deps, { confirm: approveYes, confirmApproval: approveYes }));
+  assert.equal(o.state, 'FAILED');
+  assert.equal(o.record.code, 'APPROVAL_INEFFECTIVE');
+  assert.equal(h.quotes.requested, 0, 'no firm quote was requested');
+});

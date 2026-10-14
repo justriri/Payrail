@@ -2,8 +2,9 @@
 // (which stamps receipts with the order link), history and evidence.
 //
 // Persisted to receipts/orders/<orderId>.json. Contains public facts only: never keys or claim tokens.
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { replaceFileAtomic } from './fsutil.ts';
 
 export type OrderState = 'CONVERTING' | 'CONVERTED' | 'PAYING' | 'COMPLETED' | 'STOPPED' | 'UNCERTAIN';
 
@@ -103,10 +104,7 @@ export function createOrderFile(dir: string, rec: OrderRecord): boolean {
 
 export function saveOrder(dir: string, rec: OrderRecord, now: Date): void {
   rec.updatedAt = now.toISOString();
-  const f = orderFile(dir, rec.orderId);
-  const tmp = `${f}.tmp-${process.pid}`;
-  writeFileSync(tmp, JSON.stringify(rec, null, 2));
-  renameSync(tmp, f);
+  replaceFileAtomic(orderFile(dir, rec.orderId), JSON.stringify(rec, null, 2));
 }
 
 export function loadOrder(dir: string, id: string): OrderRecord | undefined {

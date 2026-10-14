@@ -165,3 +165,45 @@ test('AMM swap with a lagging node: confirmed once the read catches up; exact-bl
   assert.equal(o.state, 'CONFIRMED', o.record.message);
   assert.equal(o.record.balances.buyAfter, (624_915n + AMM_OUT).toString());
 });
+
+// ------------------------------------------------------------------ a journal that never signed anything
+test('resolve: a journal with NO transaction hash and an untouched sell balance is closed as NEVER_SENT (found live: OneDrive EPERM)', async () => {
+  const dir = tempDir();
+  const chain = new MockChain();
+  const h = harness({ dir, chainObj: chain, allowance: 0n });
+  const { newSwapRecord, saveSwapRecord } = await import('../src/swapjournal.ts');
+  const rec = newSwapRecord({
+    planId: 'never-signed', now: new Date(NOW),
+    route: { sellSymbol: 'cNGN', sellAsset: swapAuth().sell.asset, buySymbol: 'USDT', buyAsset: swapAuth().buy.asset, provider: 'textile-fx-v2' },
+    requestedSell: SELL, minBuy: 5_000n, tag: TAG,
+  });
+  rec.state = 'AWAITING_APPROVAL';
+  rec.balances.sellBefore = (await chain.tokenBalance(swapAuth().sell.asset)).toString();
+  saveSwapRecord(dir, rec, new Date(NOW));
+  assert.equal(listPending(dir).length, 1, 'it blocks everything until resolved');
+
+  const r = await resolveSwapRecord({ dir, planId: 'never-signed', payer: PAYER, chain: h.deps.chain, verifyAttribution: h.deps.verifyAttribution, attributionTag: TAG });
+  assert.equal(r.state, 'FAILED');
+  assert.equal(r.record.code, 'NEVER_SENT');
+  assert.equal(r.record.fundsMayHaveMoved, false);
+  assert.equal(listPending(dir).length, 0, 'unblocked, without hand-deleting any file');
+  assert.equal(loadSwapRecord(dir, 'never-signed')!.state, 'FAILED');
+});
+
+test('resolve: no transaction journaled BUT the sell balance changed -> NOT closed (something unexplained happened)', async () => {
+  const dir = tempDir();
+  const chain = new MockChain();
+  const h = harness({ dir, chainObj: chain, allowance: 0n });
+  const { newSwapRecord, saveSwapRecord } = await import('../src/swapjournal.ts');
+  const rec = newSwapRecord({
+    planId: 'odd', now: new Date(NOW),
+    route: { sellSymbol: 'cNGN', sellAsset: swapAuth().sell.asset, buySymbol: 'USDT', buyAsset: swapAuth().buy.asset, provider: 'textile-fx-v2' },
+    requestedSell: SELL, minBuy: 5_000n, tag: TAG,
+  });
+  rec.state = 'READY_TO_EXECUTE';
+  rec.balances.sellBefore = '999999999999'; // differs from the wallet's real balance
+  saveSwapRecord(dir, rec, new Date(NOW));
+  const r = await resolveSwapRecord({ dir, planId: 'odd', payer: PAYER, chain: h.deps.chain, verifyAttribution: h.deps.verifyAttribution, attributionTag: TAG });
+  assert.equal(r.resolved, false);
+  assert.equal(listPending(dir).length, 1, 'still blocking');
+});

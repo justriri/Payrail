@@ -533,6 +533,32 @@ async function runSwapCore(
 
     const readAllowance = () => deps.chain.allowance(auth.sell.asset, auth.payer, TEXTILE_REACTOR).catch(() => undefined);
 
+    // After an approval mines, the allowance must be read at (or after) the approval's own block: a load-balanced
+    // RPC can answer "latest" from a node that has not seen that block yet and report the OLD value (observed live
+    // 2026-10-14: a mined approval read back as 0). Exact-block read first; then a few bounded re-reads of latest.
+    let lastApprovalBlock: bigint | undefined;
+    const readAllowanceFresh = async (needed: bigint, minBlock: bigint | undefined): Promise<bigint | undefined> => {
+      if (minBlock !== undefined && deps.chain.allowanceAt) {
+        for (let i = 0; i < 4; i++) {
+          try {
+            return await deps.chain.allowanceAt(auth.sell.asset, auth.payer, TEXTILE_REACTOR, minBlock);
+          } catch {
+            await deps.sleep(500);
+          }
+        }
+      }
+      // No approval of ours is in play: a single plain read (waiting would only burn the quote's lifetime).
+      if (minBlock === undefined) return readAllowance();
+      // We sent an approval but cannot read at its block: bounded re-reads of 'latest' until it shows up.
+      let v: bigint | undefined;
+      for (let i = 0; i < 6; i++) {
+        v = await readAllowance();
+        if (v !== undefined && v >= needed) return v;
+        await deps.sleep(800);
+      }
+      return v;
+    };
+
     // ================= phase A (optional): approval BEFORE the quote =================
     if ((deps.approvalPhase ?? 'with-quote') === 'before-quote') {
       const current = await readAllowance();
@@ -593,14 +619,17 @@ async function runSwapCore(
         rec.code = 'READY_TO_EXECUTE';
         rec.message = 'approval confirmed; sending the approval transaction(s) before any quote is requested';
         persist();
+        let approvalBlock: bigint | undefined;
         for (const step of pre.steps) {
           const r = await execStep(step);
           if (!r.ok) return r.outcome;
+          approvalBlock = r.receipt.blockNumber;
         }
-        const after = await readAllowance();
+        lastApprovalBlock = approvalBlock;
+        const after = await readAllowanceFresh(auth.sell.sellAmountAtomic, approvalBlock);
         rec.residualAllowance = after?.toString();
         if (after === undefined || after < auth.sell.sellAmountAtomic) {
-          return end('FAILED', 'APPROVAL_INEFFECTIVE', 'the approval mined but the allowance is still insufficient; no quote was requested');
+          return end('FAILED', 'APPROVAL_INEFFECTIVE', 'the approval mined but the allowance is still insufficient (read at the approval block); no quote was requested');
         }
         rec.state = 'PLANNED';
         rec.code = 'APPROVED_BEFORE_QUOTE';
@@ -651,8 +680,9 @@ async function runSwapCore(
     rec.message = 'firm quote validated against the authorization and the verified reactor interface';
     persist();
 
-    // ---- build the tagged sequence from the CURRENT allowance
-    const allowance = await readAllowance();
+    // ---- build the tagged sequence from the CURRENT allowance (read at/after the last approval's block: a stale
+    // 'latest' answer of 0 would otherwise trigger a redundant second approval)
+    const allowance = await readAllowanceFresh(quote.takerPays, lastApprovalBlock);
     if (allowance === undefined) return end('FAILED', 'ALLOWANCE_UNREADABLE', 'cannot read the current allowance. No swap transaction was sent.');
     let seq: SequencePlan;
     try {
@@ -773,7 +803,7 @@ async function runSwapCore(
           rec.residualAllowance = (await readAllowance())?.toString();
           return end('EXPIRED', 'QUOTE_EXPIRED_BEFORE_SWAP', 'the quote expired before the swap could be sent; the approval (if any) remains. Nothing was swapped.');
         }
-        const now = await readAllowance();
+        const now = await readAllowanceFresh(quote.takerPays, lastApprovalBlock);
         rec.residualAllowance = now?.toString();
         if (now === undefined || now < quote.takerPays) {
           return end('FAILED', 'ALLOWANCE_INSUFFICIENT', 'the allowance does not cover the swap; nothing was swapped');
@@ -793,7 +823,8 @@ async function runSwapCore(
       const receipt = r.receipt;
 
       if (!isSwap && step.kind === 'approve') {
-        const after = await readAllowance();
+        lastApprovalBlock = receipt.blockNumber;
+        const after = await readAllowanceFresh(quote.takerPays, receipt.blockNumber);
         rec.residualAllowance = after?.toString();
         if (after === undefined || after < quote.takerPays) {
           return end('FAILED', 'APPROVAL_INEFFECTIVE', 'the approval mined but the allowance is still insufficient; the swap was not sent');
@@ -968,6 +999,31 @@ export async function runAmmSwap(
     const execStep = createStepExecutor({ deps, lim, rec, lock, payer: auth.payer, persist, end });
     const readAllowance = () => deps.chain.allowance(auth.sell.asset, auth.payer, venue.router).catch(() => undefined);
 
+    // After an approval mines, the allowance must be read at (or after) the approval's own block: a load-balanced
+    // RPC can answer "latest" from a node that has not seen that block yet and report the OLD value (observed live
+    // 2026-10-14: a mined approval read back as 0). Exact-block read first; then a few bounded re-reads of latest.
+    const readAllowanceFresh = async (needed: bigint, minBlock: bigint | undefined): Promise<bigint | undefined> => {
+      if (minBlock !== undefined && deps.chain.allowanceAt) {
+        for (let i = 0; i < 4; i++) {
+          try {
+            return await deps.chain.allowanceAt(auth.sell.asset, auth.payer, venue.router, minBlock);
+          } catch {
+            await deps.sleep(500);
+          }
+        }
+      }
+      // No approval of ours is in play: a single plain read (waiting would only burn the quote's lifetime).
+      if (minBlock === undefined) return readAllowance();
+      // We sent an approval but cannot read at its block: bounded re-reads of 'latest' until it shows up.
+      let v: bigint | undefined;
+      for (let i = 0; i < 6; i++) {
+        v = await readAllowance();
+        if (v !== undefined && v >= needed) return v;
+        await deps.sleep(800);
+      }
+      return v;
+    };
+
     // ---------------- approval (its own confirmed step; an AMM quote does not expire like a firm quote)
     const current = await readAllowance();
     if (current === undefined) return end('FAILED', 'ALLOWANCE_UNREADABLE', 'cannot read the current allowance. Nothing was sent.');
@@ -1023,11 +1079,13 @@ export async function runAmmSwap(
       rec.code = 'READY_TO_EXECUTE';
       rec.message = 'approval confirmed; sending the approval transaction(s)';
       persist();
+      let approvalBlock: bigint | undefined;
       for (const step of pre.steps) {
         const r = await execStep(step);
         if (!r.ok) return r.outcome;
+        approvalBlock = r.receipt.blockNumber;
       }
-      const after = await readAllowance();
+      const after = await readAllowanceFresh(auth.sell.sellAmountAtomic, approvalBlock);
       rec.residualAllowance = after?.toString();
       if (after === undefined || after < auth.sell.sellAmountAtomic) {
         return end('FAILED', 'APPROVAL_INEFFECTIVE', 'the approval mined but the allowance is still insufficient; the swap was not sent');
@@ -1218,7 +1276,27 @@ export async function resolveSwapRecord(args: {
   };
 
   const stepsWithHash = rec.steps.filter((s) => s.hash);
-  if (stepsWithHash.length === 0) return keep('the journal has no transaction hash to verify');
+  if (stepsWithHash.length === 0) {
+    // A step's transaction hash is journaled BEFORE it is broadcast, and a failed journal write stops the run
+    // before anything is sent. So a journal with NO hash on any step cannot have broadcast a transaction.
+    // Corroborate with the chain before closing it: the sell balance must be untouched.
+    const neverSigned = ['PLANNED', 'QUOTED', 'AWAITING_APPROVAL', 'READY_TO_EXECUTE'].includes(rec.state);
+    if (!neverSigned) return keep('the journal has no transaction hash to verify');
+    const before = rec.balances.sellBefore;
+    if (before === undefined) return keep('no transaction was journaled, but there is no recorded balance to corroborate that nothing was sent');
+    let nowSell: bigint;
+    try {
+      nowSell = await args.chain.tokenBalance(rec.route.sellAsset as Address, args.payer);
+    } catch (e) {
+      return keep(`cannot read the sell balance to corroborate that nothing was sent: ${msg(e)}`);
+    }
+    if (nowSell !== BigInt(before)) {
+      return keep(`no transaction was journaled, but the sell balance changed (${before} -> ${nowSell}); not closing this journal`);
+    }
+    notes.push(`no step has a transaction hash and the sell balance is unchanged (${nowSell}): nothing was signed or sent`);
+    rec.fundsMayHaveMoved = false;
+    return save('FAILED', 'NEVER_SENT', 'recovery: this swap was never signed or broadcast (no transaction hash was journaled and the sell balance is unchanged). Nothing was spent.');
+  }
   const sellAsset = rec.route.sellAsset as Address;
   const buyAsset = rec.route.buyAsset as Address;
 

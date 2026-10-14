@@ -7,6 +7,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { assetBySymbol, microUsd } from './assets.ts';
+import { replaceFileAtomic } from './fsutil.ts';
 
 export type SwapState =
   | 'PLANNED'
@@ -101,9 +102,8 @@ function resolvedFile(dir: string, planId: string): string {
 }
 
 function atomicWrite(file: string, contents: string): void {
-  const tmp = `${file}.tmp-${process.pid}`;
-  writeFileSync(tmp, contents);
-  renameSync(tmp, file); // atomic replace on the same volume
+  // temp file + rename (atomic); retried when a sync client transiently blocks it, and it THROWS if it cannot be done
+  replaceFileAtomic(file, contents);
 }
 
 /** Persist the record. Throws on failure; callers treat that as "do not proceed" (fail closed). */
