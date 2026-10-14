@@ -6,6 +6,7 @@
 // and unresolved items are listed separately, never counted as proof.
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { acknowledgementRefusal, readAcknowledgements } from './ack.ts';
 import { assetBySymbol } from './assets.ts';
 import { readResolutionFiles } from './history.ts';
 import { readOrders } from './orderstore.ts';
@@ -124,6 +125,11 @@ export interface EvidenceOrder {
   /** Ledger sequence numbers of the real transactions that belong to this order. */
   ledger: number[];
   needsAttention: boolean;
+  /**
+   * Set when a human acknowledgement note exists AND the order is eligible for one (stopped, nothing paid). The
+   * order record itself is unchanged: `needsAttention` above still reflects what the order file says.
+   */
+  acknowledged?: { at: string; by: string; note: string; facts: Array<{ statement: string; evidence: string }> };
   /** Cross-checks of the order record against the receipts and swap journals it points at. */
   consistency: string[];
   /** Filled by --verify: every linked transaction was found on-chain and succeeded. */
@@ -282,6 +288,23 @@ export function buildEvidencePack(dir: string, now: Date = new Date(), opts: { w
   // ---- orders (receipts/orders): link each to its swap journal and payment receipt
   const ordersRead = readOrders(dir);
   for (const w of ordersRead.warnings) warnings.push(w);
+  const ackRead = readAcknowledgements(dir);
+  for (const w of ackRead.warnings) warnings.push(w);
+  /** An acknowledgement counts only for an eligible order; otherwise it is reported and IGNORED (never trusted). */
+  const effectiveAck = (o: { orderId: string } & Parameters<typeof acknowledgementRefusal>[0]) => {
+    const a = ackRead.acks.get(o.orderId);
+    if (!a) return undefined;
+    const why = acknowledgementRefusal(o);
+    if (why) {
+      warnings.push(`acknowledgement for order ${o.orderId} is ignored: ${why}`);
+      return undefined;
+    }
+    if (a.facts.some((f) => !f.verified)) {
+      warnings.push(`acknowledgement for order ${o.orderId} is ignored: it contains unverified facts`);
+      return undefined;
+    }
+    return a;
+  };
   const orderOfSwap = new Map<string, string>();
   for (const o of ordersRead.orders) {
     if (o.conversion?.swapPlanId) orderOfSwap.set(o.conversion.swapPlanId, o.orderId);
@@ -487,11 +510,19 @@ export function buildEvidencePack(dir: string, now: Date = new Date(), opts: { w
         : null,
       ledger: ledgerSeq,
       needsAttention: o.needsAttention,
+      ...(() => {
+        const a = effectiveAck(o);
+        return a
+          ? { acknowledged: { at: a.acknowledgedAt, by: a.acknowledgedBy, note: a.note, facts: a.facts.map((f) => ({ statement: f.statement, evidence: f.evidence })) } }
+          : {};
+      })(),
       consistency,
     };
   });
   for (const o of ordersRead.orders) {
-    if (o.state === 'UNCERTAIN' || o.needsAttention) unresolved.push(`order ${o.orderId} is ${o.state} (${o.code}) and needs a human`);
+    if ((o.state === 'UNCERTAIN' || o.needsAttention) && effectiveAck(o) === undefined) {
+      unresolved.push(`order ${o.orderId} is ${o.state} (${o.code}) and needs a human`);
+    }
   }
 
   return {
@@ -542,7 +573,13 @@ export function renderEvidenceMarkdown(p: EvidencePack): string {
     L.push(`- **Ledger entries:** ${o.ledger.length > 0 ? o.ledger.map((n) => `#${n}`).join(', ') : 'none'}`);
     for (const c of o.consistency) L.push(`- _Cross-check:_ ${c}`);
     if (o.onChainVerified !== undefined) L.push(`- **On-chain re-check:** every linked transaction found and successful: ${o.onChainVerified}`);
-    if (o.needsAttention) L.push('- **NEEDS A HUMAN:** value may have moved, or converted funds are unpaid');
+    if (o.acknowledged) {
+      L.push(`- **Acknowledged** (${o.acknowledged.at}, by ${o.acknowledged.by}). The order record still says "needs attention"; this note explains why it is understood and safe:`);
+      L.push(`  - _Note:_ ${o.acknowledged.note}`);
+      for (const f of o.acknowledged.facts) L.push(`  - _Verified:_ ${f.statement} (${f.evidence})`);
+    } else if (o.needsAttention) {
+      L.push('- **NEEDS A HUMAN:** value may have moved, or converted funds are unpaid');
+    }
     L.push('');
   }
   L.push('', '## Transaction ledger (every real on-chain transaction)', '');

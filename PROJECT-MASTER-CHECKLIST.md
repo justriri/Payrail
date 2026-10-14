@@ -10,8 +10,8 @@
 | Check | Result |
 |---|---|
 | `tsc` type check | exit 0 |
-| Full test suite | **330 tests, 330 pass, 0 fail** (~80 s) |
-| Evidence regeneration (`scripts/evidence.ts --verify`) | 10 transactions, 4 orders, 3 payments, 7 conversion records, **0 warnings, 1 unresolved** (attempt-2 order flagged "needs a human"; see B10) |
+| Full test suite | **334 tests, 334 pass, 0 fail** (~80 s) |
+| Evidence regeneration (`scripts/evidence.ts --verify`) | 10 transactions, 4 orders, 3 payments, 7 conversion records, **0 warnings, 0 unresolved** (attempt-2 order has a verified acknowledgement note; see B10) |
 | Git | 2 local commits, 78 tracked files, **no remote**, working tree clean |
 | Loops entry (`loops project get`) | tag `celo_b2fff2ac9413`, agent wallet `0x652C…D2a4`, **`hasIdentity: true`**, **project not yet created** |
 
@@ -81,7 +81,7 @@
 | B7 | Cosmetic: `scripts/register-agent.ts` line 32 comment says 0.05 CELO, value is 0.15 | Low | Wrong comment, correct value |
 | B8 | Occasional unexplained failure in the multi-process lock test (seen once earlier) | Low | Hardened (diagnostics + Windows `EPERM` tolerance); did not recur in the last 4 full runs; cause unconfirmed |
 | B9 | Mento paying for a *service* (`findRoute`) never run live | Low | Standalone Mento swap is verified; service-payment route is MOCK |
-| B10 | Attempt-2 order `d9c24dc8-…` still shows "needs a human" in evidence | Low | Its approval tx was sent but no swap followed; that approval was later consumed by the successful order (allowance now 0). There is no acknowledgement mechanism; records were not edited. Needs a decision: add an additive acknowledgement note, or explain it in the submission |
+| B10 | ~~Attempt-2 order `d9c24dc8-…` flagged "needs a human"~~ **Resolved by an additive acknowledgement** (`receipts/acknowledgements/d9c24dc8-….json`, written by `scripts/acknowledge-order.ts` only after re-verifying six facts from the chain and journals: approval mined; stale post-approval read; stopped before any quote; no swap/payment; approval reused by the successful order; allowance now 0). The order record, swap journal, receipts and transactions are untouched (hashes compared). An uncertain or paid order can never be acknowledged | — | Resolved |
 | B11 | The web page's own approve button has been exercised via the API only, not clicked in a browser by us | Medium | Drive it once in your browser (`node --env-file=<key file> scripts/serve.ts`) |
 | B12 | Standing cost of the test: ≈0.056 CELO gas total (0.373 → 0.317 CELO) | Info | Approval ≈0.0114 + swap ≈0.0450; x402 gas is paid by the gateway |
 
