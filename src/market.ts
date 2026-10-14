@@ -28,6 +28,9 @@ import { buyerStatement, quoteFor, receiptFor, sellerStatement } from './billing
 import { agentExecutionIds, agentUsage } from './agents.ts';
 import type { PayoutPolicy } from './payouts.ts';
 import { EscrowError, executeEscrowRequest } from './escrow.ts';
+import { FundingOpError, approveFunding, fundingEvents, fundingView, getFundingOp, listFundingOps, requestFundingQuote, verifyAndCredit } from './marketfunding.ts';
+import type { FundingConfig as ConversionFundingConfig } from './marketfunding.ts';
+import { SIM_SCENARIOS } from './simfunding.ts';
 import type { EscrowClient } from './escrow.ts';
 
 /** Test credits live in their own ledger asset so they can never mix with real funds. */
@@ -53,6 +56,8 @@ export interface MarketRuntime {
   buySimulated?: boolean;
   /** enable sandbox sellers (server-derived test wallets, in-process sandbox hosts). Test-credit mode only. */
   sandbox?: boolean;
+  /** marketplace funding through the Textile conversion (simulated unless real-funds mode is on) */
+  funding?: ConversionFundingConfig;
   /** real-funds mode. Absent = test credits only and every real-money route answers LIVE_DISABLED. */
   live?: { funding: FundingConfig; payout: PayoutPolicy };
   /** alternative settlement through the on-chain escrow contract (testnet-verified only) */
@@ -232,7 +237,7 @@ export function grantTestCredits(rt: MarketRuntime, buyerId: string, amount: big
 function sumGranted(db: Db, buyerId: string): bigint {
   const r = queryOne<{ s: bigint | null }>(
     db,
-    "SELECT SUM(e.amount) AS s FROM ledger_entries e JOIN ledger_transactions t ON t.id = e.tx_id JOIN ledger_accounts a ON a.id = e.account_id WHERE t.kind = 'deposit' AND a.owner_id = ? AND a.kind = 'buyer_available' AND e.asset = ?",
+    "SELECT SUM(e.amount) AS s FROM ledger_entries e JOIN ledger_transactions t ON t.id = e.tx_id JOIN ledger_accounts a ON a.id = e.account_id WHERE t.kind = 'deposit' AND t.ref LIKE 'testcredit:%' AND a.owner_id = ? AND a.kind = 'buyer_available' AND e.asset = ?",
     buyerId,
     TEST_ASSET,
   );
@@ -331,13 +336,14 @@ function mapError(e: unknown): MarketResponse {
   if (e instanceof ApiError) return { status: e.status, body: { ok: false, code: e.code, message: e.message, retryable: e.status >= 500 || e.status === 429 } };
   const code = (e as { code?: string }).code ?? 'ERROR';
   const message = (e as Error).message;
-  const known = e instanceof LedgerError || e instanceof SellerError || e instanceof VaultError || e instanceof ContractError || e instanceof GatewayError || e instanceof TesterError || e instanceof FundingError || e instanceof PayoutError || e instanceof AgentError || e instanceof EscrowError;
+  const known = e instanceof LedgerError || e instanceof SellerError || e instanceof VaultError || e instanceof ContractError || e instanceof GatewayError || e instanceof TesterError || e instanceof FundingError || e instanceof PayoutError || e instanceof AgentError || e instanceof EscrowError || e instanceof FundingOpError;
   if (!known) return { status: 500, body: { ok: false, code: 'INTERNAL_ERROR', message: 'Something went wrong on our side.' } };
   const status: Record<string, number> = {
     SESSION_INVALID: 401, NOT_OWNER: 403, NOT_FOUND: 404, INSUFFICIENT_CREDITS: 402, IDEMPOTENCY_CONFLICT: 409, WRONG_STATE: 409, HOST_CLAIMED: 409,
     LISTING_NOT_PUBLISHED: 409, CONTRACT_NOT_APPROVED: 409, RATE_LIMITED: 429, DOMAIN_PROOF_FAILED: 422, BAD_SIGNATURE: 422,
     WALLET_TAKEN: 409, NO_FUNDING_WALLET: 409, TX_NOT_FOUND: 404, TX_REVERTED: 422, NOT_ENOUGH_CONFIRMATIONS: 409, NO_MATCHING_TRANSFER: 422, OVER_LIMIT: 422, READ_FAILED: 502,
     KEY_INVALID: 401, LISTING_NOT_ALLOWED: 403, PER_REQUEST_CAP: 403, DAILY_CAP: 403, INSUFFICIENT_EARNINGS: 409, NO_WALLET: 409, TEST_ASSET: 422, NO_SELLER_WALLET: 409, HOLD_FAILED: 502,
+    BAD_AMOUNT: 400, BELOW_MINIMUM: 422, ABOVE_MAXIMUM: 422, DAILY_LIMIT: 429, TOO_MANY_OPEN: 409, QUOTE_UNAVAILABLE: 502, QUOTE_EXPIRED: 409, DIGEST_MISMATCH: 409, SIGNING_UNAVAILABLE: 409, NOT_ALLOWED: 403,
   };
   const s = status[code] ?? 400;
   const hints: Record<string, string> = {
@@ -596,6 +602,64 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
     }
     if (method === 'GET' && path === '/agent/executions') {
       return ok({ executions: agentExecutionIds(db, agent.id).map((id) => { const r = receiptFor(db, id)!; return { receiptId: r.receiptId, at: r.createdAt, listing: r.listing, outcome: r.outcome, charged: r.charged.display, asset: r.asset }; }) });
+    }
+  }
+
+  // ---- marketplace funding: cNGN -> (Textile) -> USDT -> marketplace balance
+  if (path.startsWith('/fund/')) {
+    const id = buyer();
+    const f = rt.funding;
+    if (!f) throw new ApiError(409, 'FUNDING_DISABLED', 'marketplace funding is not configured on this server');
+    // defence in depth: a live converter is never used unless real-funds mode was explicitly enabled
+    if (f.converter.mode === 'live' && !rt.live) throw new ApiError(409, 'LIVE_DISABLED', 'live conversion is disabled: real-funds mode is not enabled');
+    const dec = (v: bigint) => formatAtomic(v);
+    if (method === 'GET' && path === '/fund/config') {
+      const sim = f.converter.mode === 'simulated';
+      return ok({
+        enabled: true,
+        mode: f.converter.mode,
+        simulated: sim,
+        banner: sim ? 'SIMULATED conversion: no real cNGN is spent and no real USDT is received. Credits are test credits.' : 'LIVE conversion of real cNGN into real USDT.',
+        sell: f.converter.sellSymbol,
+        buy: f.converter.buySymbol,
+        creditAsset: f.creditAsset,
+        creditLabel: sim ? 'test credits (simulated funding)' : 'USDT',
+        limits: { min: dec(f.limits.minSellAtomic), max: dec(f.limits.maxSellAtomic), perDay: dec(f.limits.maxPerDaySellAtomic), openOperations: f.limits.maxOpenOps },
+        minConfirmations: f.minConfirmations,
+        scenarios: sim ? SIM_SCENARIOS : [],
+        recipient: f.converter.recipient,
+        steps: ['Enter a cNGN amount and get a quote (nothing is converted yet)', 'Review the rate, fees, minimum and what will be credited, then approve', 'The conversion is verified on-chain before your balance is credited'],
+      });
+    }
+    if (method === 'GET' && path === '/fund/ops') {
+      const ops = listFundingOps(db, id).map((o) => fundingView(o, now()));
+      return ok({
+        operations: ops,
+        balances: { asset: f.creditAsset, available: formatAtomic(balance(db, id, 'buyer_available', f.creditAsset)), held: formatAtomic(balance(db, id, 'buyer_held', f.creditAsset)) },
+      });
+    }
+    if (method === 'GET' && (m = path.match(/^\/fund\/ops\/([\w-]{1,80})$/))) {
+      const o = getFundingOp(db, m[1]!);
+      if (!o || o.buyerId !== id) throw new ApiError(404, 'NOT_FOUND', 'no such funding operation');
+      return ok({ operation: fundingView(o, now()), events: fundingEvents(db, o.id) });
+    }
+    if (method === 'POST' && path === '/fund/quote') {
+      const sell = parseAtomic(body.amount);
+      const key = typeof body.idempotencyKey === 'string' && /^[\w.:-]{8,100}$/.test(body.idempotencyKey) ? body.idempotencyKey : `q-${randomBytes(12).toString('hex')}`;
+      const scenario = f.converter.mode === 'simulated' && typeof body.scenario === 'string' && (SIM_SCENARIOS as readonly string[]).includes(body.scenario) ? body.scenario : undefined;
+      const o = await requestFundingQuote(db, f, { buyerId: id, sellAtomic: sell, idempotencyKey: key, ...(scenario ? { scenario } : {}) }, now);
+      return ok({ operation: fundingView(o, now()) }, 201);
+    }
+    if (method === 'POST' && path === '/fund/approve') {
+      const o = await approveFunding(db, f, { opId: str(body.opId, 'opId', 80), buyerId: id, digest: str(body.digest, 'digest', 100) }, now);
+      return ok({ operation: fundingView(o, now()), events: fundingEvents(db, o.id) });
+    }
+    if (method === 'POST' && path === '/fund/check') {
+      const opId = str(body.opId, 'opId', 80);
+      const cur = getFundingOp(db, opId);
+      if (!cur || cur.buyerId !== id) throw new ApiError(404, 'NOT_FOUND', 'no such funding operation');
+      const o = await verifyAndCredit(db, f, opId, now);
+      return ok({ operation: fundingView(o, now()), events: fundingEvents(db, o.id) });
     }
   }
 

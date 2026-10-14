@@ -80,3 +80,9 @@ escrow settlement are reported separately; unresolved amounts are shown as held,
 **Not done / needs approval:** converting a buyer's cNGN to USDT *to fund the marketplace* (the conversion pipeline is
 attached to the Buy order flow; funding a marketplace deposit with it would move real funds and needs a new executor
 path); automatic or live payouts (operator CLI only, unchanged); mainnet escrow.
+
+## Marketplace funding through Textile (simulation)
+
+See [MARKETPLACE-FUNDING.md](MARKETPLACE-FUNDING.md). Quote -> explicit approval -> independent on-chain verification ->
+once-only ledger credit. **Simulation and automated tests only: no testnet (Textile has no configured testnet), no real
+funds.** The live adapter is built but intentionally not wired; the readiness checklist lists what real funding needs.

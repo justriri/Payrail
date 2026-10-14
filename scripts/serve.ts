@@ -32,6 +32,10 @@ import { policyFromEnv } from '../src/policy.ts';
 import { runAmmSwap, runSwap } from '../src/swapexec.ts';
 import { createDemoNetwork, createSandboxNetwork, seedDemo } from '../src/demoapis.ts';
 import { createTestnetEscrow } from '../src/escrowtestnet.ts';
+import { createSimFunding } from '../src/simfunding.ts';
+import { recoverFunding } from '../src/marketfunding.ts';
+import type { FundingConfig as MarketFundingConfig } from '../src/marketfunding.ts';
+import { TEXTILE_REACTOR } from '../src/config.ts';
 import { recoverExecutions } from '../src/execute.ts';
 import { openDb } from '../src/db.ts';
 import { createViemReader } from '../src/funding.ts';
@@ -254,6 +258,21 @@ if (args.includes('--escrow-testnet')) {
   line(`Testnet escrow enabled: ${escrow.testnet!.escrow} on Celo Sepolia (mock token, no real value).`);
 }
 const limiter = () => new RateLimiter(60, 10);
+// Marketplace funding: SIMULATED conversion in test-credit mode (credits the test asset, labelled simulated).
+// A live Textile converter exists (src/livefunding.ts) but is deliberately NOT wired here: it needs real-funds mode.
+const usdtAddress = ASSETS.find((a) => a.symbol === 'USDT')!.address;
+const simFunding = createSimFunding({ usdt: usdtAddress, reactor: TEXTILE_REACTOR, autoAdvanceOnRead: true });
+const fundingCfg: MarketFundingConfig = {
+  converter: simFunding.converter,
+  reader: simFunding.reader,
+  usdt: usdtAddress,
+  reactor: TEXTILE_REACTOR,
+  chainId: 42220,
+  minConfirmations: 3,
+  limits: { minSellAtomic: 100_000_000n, maxSellAtomic: 7_000_000_000n, maxPerDaySellAtomic: 14_000_000_000n, maxOpenOps: 3 },
+  creditAsset: 'TESTUSDT',
+};
+await recoverFunding(marketDb, fundingCfg);
 const market: MarketRuntime = {
   db: marketDb,
   keys: [vaultKey],
@@ -264,6 +283,7 @@ const market: MarketRuntime = {
     call: { limiter: limiter(), fetchOptions: { resolver: sandbox.resolver, transport: sandbox.transport, timeoutMs: 8_000 } },
     demoCall: { limiter: limiter(), fetchOptions: { resolver: demoNet.resolver, transport: demoNet.transport, timeoutMs: 3_000 } },
   },
+  funding: fundingCfg,
   testCall: { limiter: limiter(), fetchOptions: { resolver: sandbox.resolver, transport: sandbox.transport, timeoutMs: 8_000 } },
   domain: { txt: sandbox.txt, fetchOptions: { resolver: sandbox.resolver, transport: sandbox.transport } },
   buyCatalog: () => runtime.catalog(),

@@ -279,6 +279,58 @@ const V6 = `
 ALTER TABLE executions ADD COLUMN settlement TEXT NOT NULL DEFAULT 'ledger' CHECK (settlement IN ('ledger','escrow'));
 `;
 
+/** Version 7: marketplace funding through the Textile conversion (cNGN -> USDT). Immutable event log + one-claim-per-tx table. */
+const V7 = `
+CREATE TABLE funding_ops (
+  id TEXT PRIMARY KEY,
+  buyer_id TEXT NOT NULL REFERENCES accounts(id),
+  idempotency_key TEXT NOT NULL,
+  mode TEXT NOT NULL CHECK (mode IN ('simulated','live')),
+  state TEXT NOT NULL CHECK (state IN ('QUOTED','EXPIRED','CONVERTING','VERIFYING','CREDITED','FAILED','UNRESOLVED','REVIEW','CANCELLED')),
+  sell_symbol TEXT NOT NULL,
+  sell_atomic INTEGER NOT NULL CHECK (sell_atomic > 0),
+  buy_symbol TEXT NOT NULL,
+  expected_atomic INTEGER NOT NULL,
+  min_atomic INTEGER NOT NULL,
+  fee_atomic INTEGER NOT NULL,
+  rate TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  quote_id TEXT NOT NULL,
+  quote_expires_at TEXT NOT NULL,
+  approval_digest TEXT NOT NULL,
+  approved_at TEXT,
+  credit_asset TEXT NOT NULL,
+  received_atomic INTEGER,
+  credited_atomic INTEGER,
+  credit_ref TEXT,
+  swap_tx TEXT,
+  approve_txs TEXT,
+  failure_code TEXT,
+  failure_message TEXT,
+  scenario TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (buyer_id, idempotency_key)
+) STRICT;
+CREATE INDEX funding_ops_buyer ON funding_ops (buyer_id, created_at);
+CREATE TABLE funding_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  op_id TEXT NOT NULL REFERENCES funding_ops(id),
+  at TEXT NOT NULL,
+  state TEXT NOT NULL,
+  note TEXT NOT NULL,
+  detail_json TEXT
+) STRICT;
+CREATE TRIGGER funding_events_no_update BEFORE UPDATE ON funding_events BEGIN SELECT RAISE(ABORT, 'funding events are append-only'); END;
+CREATE TRIGGER funding_events_no_delete BEFORE DELETE ON funding_events BEGIN SELECT RAISE(ABORT, 'funding events are append-only'); END;
+CREATE TABLE funding_tx_claims (
+  tx_hash TEXT PRIMARY KEY,
+  op_id TEXT NOT NULL REFERENCES funding_ops(id),
+  buyer_id TEXT NOT NULL REFERENCES accounts(id),
+  claimed_at TEXT NOT NULL
+) STRICT;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'accounts, listings, contracts, ledger, executions, audit', sql: V1 },
   { version: 2, name: 'encrypted seller credentials', sql: V2 },
@@ -286,6 +338,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 4, name: 'demo listings flag', sql: V4 },
   { version: 5, name: 'payouts, chain deposits, funding wallets, agents', sql: V5, rebuild: true },
   { version: 6, name: 'execution settlement mode', sql: V6 },
+  { version: 7, name: 'marketplace funding operations', sql: V7 },
 ];
 
 /** Open (creating the file and folder if needed) and bring the schema up to date. ':memory:' for tests. */

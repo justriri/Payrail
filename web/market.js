@@ -61,7 +61,7 @@ async function quickStart() {
   session.buyer = d.token; store.set('payrail.buyer', d.token);
   const c = await api('/credits', { body: { amount: '5' }, bearer: session.buyer });
   if (!c.ok) flash($('buyer'), fail(c), true);
-  await renderBuyer(); renderHistory(); renderAgents(); renderEscrow();
+  await renderBuyer(); renderHistory(); renderAgents(); renderEscrow(); renderAddFunds();
 }
 async function renderBuyer() {
   const box = $('buyer');
@@ -195,6 +195,7 @@ $('run-btn').addEventListener('click', async () => {
   out.append(el('p', { class: 'notice', text: 'Qualified means the response matched the agreed structure, types and freshness. It does not prove the data is true.' }));
   await showReceipt(rec, r.executionId);
   renderBuyer(); renderHistory(); renderEscrow();
+  if (!fund.op) renderAddFunds();
   if (session.seller) renderSeller();
 });
 
@@ -226,6 +227,128 @@ async function renderHistory() {
     det.addEventListener('toggle', () => { if (det.open && !loaded) { loaded = true; showReceipt(det, e.id); } });
     return det;
   })));
+}
+
+
+// ------------------------------------------------------------------ buyer: add funds (cNGN -> Textile -> USDT -> balance)
+const fund = { op: null, timer: null, cfg: null, tick: null };
+const FUND_BADGE = { CREDITED: 'ok', FAILED: 'bad', REVIEW: 'bad', UNRESOLVED: 'warn', VERIFYING: 'warn', CONVERTING: 'warn', QUOTED: '', EXPIRED: '', CANCELLED: '' };
+
+function stopFundTimers() { if (fund.timer) { clearInterval(fund.timer); fund.timer = null; } if (fund.tick) { clearInterval(fund.tick); fund.tick = null; } }
+
+async function renderAddFunds() {
+  const box = $('fund');
+  stopFundTimers();
+  clear(box);
+  if (!session.buyer) { box.append(el('p', { class: 'muted', text: 'Start testing first (Buyer card above).' })); return; }
+  const cfgR = await api('/fund/config', { bearer: session.buyer });
+  if (!cfgR.ok) { box.append(el('p', { class: 'muted', text: cfgR.code === 'FUNDING_DISABLED' ? 'Funding is not configured on this server.' : fail(cfgR) })); return; }
+  fund.cfg = cfgR;
+  const ops = await api('/fund/ops', { bearer: session.buyer });
+  const sim = cfgR.simulated;
+  box.append(el('div', { class: sim ? 'banner sim' : 'banner live', text: cfgR.banner }));
+  if (ops.ok) {
+    box.append(el('p', {}, el('strong', { text: `Available: ${ops.balances.available} ${ops.balances.asset}` }), `  ·  held for pending requests: ${ops.balances.held}  `, el('span', { class: 'badge', text: sim ? 'SIMULATED / TEST' : 'REAL USDT' })));
+  }
+  box.append(el('p', { class: 'muted', text: `Limits per operation: ${cfgR.limits.min}–${cfgR.limits.max} cNGN; ${cfgR.limits.perDay} cNGN per rolling 24 hours. ${cfgR.steps.join('. ')}.` }));
+
+  const amount = el('input', { value: '1364', 'aria-label': 'cNGN amount', inputmode: 'decimal' });
+  const scen = sim ? el('select', { 'aria-label': 'Simulation outcome' }, ...cfgR.scenarios.map((s) => el('option', { value: s, text: s }))) : null;
+  const msg = el('p', { class: 'muted', role: 'status' });
+  box.append(
+    el('label', { text: 'Amount of cNGN to convert' }), amount,
+    sim && el('label', { text: 'Simulation outcome (testing only)' }), scen,
+    el('div', { class: 'row' },
+      el('button', { type: 'button', text: 'Get a quote (converts nothing)', onclick: async () => {
+        msg.textContent = 'Requesting a quote…';
+        const r = await api('/fund/quote', { body: { amount: amount.value.trim(), ...(scen ? { scenario: scen.value } : {}) }, bearer: session.buyer });
+        if (!r.ok) { msg.textContent = fail(r); msg.className = 'problem'; return; }
+        fund.op = r.operation; renderFundOp(box);
+      } }), msg),
+  );
+  const opBox = el('div', { id: 'fund-op' });
+  box.append(opBox);
+  // keep showing the latest unfinished operation after a reload
+  if (!fund.op && ops.ok) fund.op = ops.operations.find((o) => ['QUOTED', 'CONVERTING', 'VERIFYING', 'UNRESOLVED'].includes(o.state)) || null;
+  if (fund.op) renderFundOp(box);
+  box.append(el('h3', { text: 'Funding history' }));
+  if (ops.ok && ops.operations.length) {
+    box.append(el('ul', {}, ...ops.operations.map((o) => el('li', {},
+      `${o.createdAt.slice(0, 19).replace('T', ' ')}  ${o.sell.display} cNGN  `, el('span', { class: `badge ${FUND_BADGE[o.state] || ''}`, text: o.state }), ' ',
+      o.simulated && el('span', { class: 'badge o-sim', text: 'SIMULATED' }), ` ${o.statusText}`,
+      o.credited ? ` · credited ${o.credited} ${o.creditAsset}` : '', o.failure ? ` · ${o.failure.message || o.failure.code}` : ''))));
+  } else box.append(el('p', { class: 'muted', text: 'No funding operations yet.' }));
+}
+
+function renderFundOp(box) {
+  const holder = box.querySelector('#fund-op') || el('div', { id: 'fund-op' });
+  if (!holder.parentNode) box.append(holder);
+  clear(holder);
+  stopFundTimers();
+  const op = fund.op;
+  if (!op) return;
+  const rows = [
+    ['You convert', `${op.sell.display} cNGN`],
+    ['Exchange rate', `${op.rate} (${op.provider})`],
+    ['Conversion fee (inside the amount)', `${op.fee.display} cNGN`],
+    ['Estimated USDT received', `${op.estimatedReceive.display} USDT`],
+    ['Guaranteed minimum', `${op.minimumReceive.display} USDT (anything lower is never credited)`],
+    ['Credited to your marketplace balance', op.willBeCredited.display + ` ${op.creditAsset}`],
+  ];
+  const card = el('div', { class: 'notice' },
+    el('h3', { text: op.simulated ? 'Quote summary (SIMULATED)' : 'Quote summary' }),
+    el('table', { class: 'quote' }, ...rows.map(([k, v]) => el('tr', {}, el('th', { text: k }), el('td', { class: 'v', text: v })))));
+  holder.append(card);
+  const status = el('p', { class: 'headline', text: op.statusText });
+  card.append(status);
+  if (op.state === 'QUOTED') {
+    const exp = el('p', { class: 'muted' });
+    const upd = () => {
+      const left = Math.max(0, Math.round((Date.parse(op.quoteExpiresAt) - Date.now()) / 1000));
+      exp.textContent = left > 0 ? `Quote valid for ${left}s. Nothing has been converted.` : 'This quote has expired. Request a new one.';
+      if (left === 0) approveBtn.disabled = true;
+    };
+    const approveBtn = el('button', { type: 'button', text: `Approve and convert ${op.sell.display} cNGN`, onclick: async () => {
+      approveBtn.disabled = true;
+      status.textContent = 'Converting…';
+      const r = await api('/fund/approve', { body: { opId: op.id, digest: op.approvalDigest }, bearer: session.buyer });
+      if (!r.ok) { status.textContent = fail(r); approveBtn.disabled = false; return; }
+      fund.op = r.operation; afterFundChange(box);
+    } });
+    card.append(exp, el('div', { class: 'row' }, approveBtn, el('button', { type: 'button', class: 'secondary', text: 'Discard quote', onclick: () => { fund.op = null; renderAddFunds(); } })));
+    upd(); fund.tick = setInterval(upd, 1000);
+    return;
+  }
+  if (op.txs.swap) card.append(el('p', { class: 'muted', text: `Conversion transaction: ${op.txs.swap}${op.simulated ? ' (simulated, not on a real chain)' : ''}` }));
+  if (op.received) card.append(el('p', { text: `Verified received: ${op.received} USDT` }));
+  if (op.failure) card.append(el('p', { class: 'problem', text: `${op.failure.code}: ${op.failure.message || ''}` }));
+  if (['VERIFYING', 'UNRESOLVED', 'CONVERTING'].includes(op.state)) {
+    card.append(el('p', { class: 'muted', text: 'This is NOT spendable yet. It is credited only after the transaction is verified on-chain.' }),
+      el('button', { type: 'button', class: 'secondary', text: 'Check status now', onclick: () => checkFund(box) }));
+    fund.timer = setInterval(() => checkFund(box), 4000);
+  }
+  if (['CREDITED', 'FAILED', 'REVIEW', 'EXPIRED'].includes(op.state)) {
+    card.append(el('button', { type: 'button', class: 'secondary', text: 'Done', onclick: () => { fund.op = null; renderAddFunds(); } }));
+  }
+}
+
+async function checkFund(box) {
+  if (!fund.op) return;
+  const r = await api('/fund/check', { body: { opId: fund.op.id }, bearer: session.buyer });
+  if (r.ok) { fund.op = r.operation; afterFundChange(box); }
+}
+function afterFundChange(box) {
+  renderFundOp(box);
+  renderBuyer();
+  if (fund.op && fund.op.state === 'CREDITED') { renderHistory(); renderAddFundsHistoryOnly(); }
+}
+async function renderAddFundsHistoryOnly() {
+  // refresh the balance line and history without losing the operation panel
+  const keep = fund.op;
+  await renderAddFunds();
+  fund.op = keep;
+  const box = $('fund');
+  if (keep) renderFundOp(box);
 }
 
 // ------------------------------------------------------------------ buyer: agents, escrow, real funds
@@ -669,13 +792,13 @@ function applyView() {
   window.scrollTo(0, 0);
   document.title = `Payrail ${v === 'buyer' ? 'Buyer' : 'Seller'}`;
   if (v === 'seller') renderSeller();
-  else { loadCatalog(); renderBuyer(); renderHistory(); }
+  else { loadCatalog(); renderBuyer(); renderHistory(); if (!fund.op) renderAddFunds(); }
 }
 window.addEventListener('hashchange', applyView);
 
 $('q').addEventListener('input', () => { clearTimeout(window.__t); window.__t = setTimeout(loadCatalog, 250); });
 (async () => {
   await loadConfig();
-  loadCatalog(); renderBuyer(); renderHistory(); renderAgents(); renderEscrow(); renderFunding(); renderSeller();
+  loadCatalog(); renderBuyer(); renderHistory(); renderAgents(); renderEscrow(); renderFunding(); renderSeller(); renderAddFunds();
   applyView();
 })();
