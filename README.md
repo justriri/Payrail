@@ -121,7 +121,7 @@ These can move real funds and are never run by default:
 |---|---|
 | `scripts/order.ts --service <id> --execute` | Run an order (pay, or convert then pay) |
 | `scripts/convert.ts --from A --to B --amount N --execute --approve` | A standalone conversion |
-| `scripts/pay-direct.ts --pay` | One direct payment (rehearsal tool) |
+| `scripts/pay-direct.ts --pay` | One direct payment (the original single-payment test tool; `order.ts` is the main flow) |
 | `scripts/register-agent.ts --send` | Register the ERC-8004 agent identity (costs gas) |
 
 Spending commands need the key file loaded with `--env-file`, an interactive confirmation (or explicit
