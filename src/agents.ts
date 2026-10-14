@@ -75,6 +75,17 @@ export function listAgents(db: Db, ownerId: string, now: () => number = Date.now
   });
 }
 
+export function agentUsage(db: Db, agent: Agent, now: () => number = Date.now): { spentLast24hAtomic: bigint; remainingDailyAtomic: bigint } {
+  const spent = spentSince(db, agent.id, now() - 86_400_000);
+  const left = agent.dailyCapAtomic - spent;
+  return { spentLast24hAtomic: spent, remainingDailyAtomic: left > 0n ? left : 0n };
+}
+
+/** The agent's own executions only (never another buyer's, never the owner's other activity). */
+export function agentExecutionIds(db: Db, agentId: string, limit = 50): string[] {
+  return query(db, 'SELECT id FROM executions WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?', agentId, limit).map((r) => String(r.id));
+}
+
 export function revokeAgent(db: Db, ownerId: string, agentId: string, now: () => number = Date.now): Agent {
   const r = queryOne(db, 'SELECT * FROM agents WHERE id = ?', agentId);
   if (!r) throw new AgentError('NOT_FOUND', 'no such agent');

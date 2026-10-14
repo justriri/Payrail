@@ -4,13 +4,13 @@
 import type { Db } from './db.ts';
 import { safeFetch, EgressError, RateLimiter } from './egress.ts';
 import type { FetchOptions } from './egress.ts';
-import { openForGateway, redact } from './vault.ts';
+import { VaultError, openForGateway, redact } from './vault.ts';
 import type { MasterKey } from './vault.ts';
 import { getListing } from './seller.ts';
 import type { UpstreamResult } from './contracts.ts';
 
 export class GatewayError extends Error {
-  code: 'NOT_FOUND' | 'LISTING_NOT_VERIFIED' | 'BAD_INPUT' | 'RATE_LIMITED' | 'UPSTREAM_UNREACHABLE' | 'UPSTREAM_TIMEOUT' | 'EGRESS_BLOCKED';
+  code: 'NOT_FOUND' | 'LISTING_NOT_VERIFIED' | 'BAD_INPUT' | 'RATE_LIMITED' | 'UPSTREAM_UNREACHABLE' | 'UPSTREAM_TIMEOUT' | 'EGRESS_BLOCKED' | 'CREDENTIAL_UNREADABLE';
   constructor(code: GatewayError['code'], message: string) {
     super(message);
     this.name = 'GatewayError';
@@ -65,7 +65,14 @@ export async function callUpstream(db: Db, keys: readonly MasterKey[], listingId
   const clean = cleanInput(input);
   if (!(opts.limiter ?? limiter).take(listingId)) throw new GatewayError('RATE_LIMITED', 'too many calls to this listing');
 
-  const creds = openForGateway(db, keys, listingId, opts.purpose, now);
+  let creds: ReturnType<typeof openForGateway>;
+  try {
+    creds = openForGateway(db, keys, listingId, opts.purpose, now);
+  } catch (e) {
+    // nothing has been sent: the stored credential cannot be decrypted with the keys this server has loaded
+    if (e instanceof VaultError) throw new GatewayError('CREDENTIAL_UNREADABLE', 'The stored API credential cannot be decrypted with the vault key currently loaded. The seller must re-enter it.');
+    throw e;
+  }
   const secrets = creds.map((c) => c.value);
   const headers: Record<string, string> = { accept: 'application/json', 'user-agent': 'payrail-gateway/1' };
   for (const c of creds) headers[c.headerName.toLowerCase()] = c.value;
@@ -91,7 +98,7 @@ export async function callUpstream(db: Db, keys: readonly MasterKey[], listingId
     } catch {
       json = undefined;
     }
-    return { status: r.status, contentType: r.headers['content-type'], json, elapsedMs: r.elapsedMs, bodyText: text, truncated: false, connectedTo: r.connectedTo };
+    return { status: r.status, contentType: r.headers['content-type'], json, elapsedMs: r.elapsedMs, bodyBytes: r.body.length, bodyText: text, truncated: false, connectedTo: r.connectedTo };
   } catch (e) {
     if (e instanceof EgressError) {
       const m = redact(e.message, secrets);

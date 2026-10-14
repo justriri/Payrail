@@ -134,7 +134,7 @@ export async function executeRequest(
       return view(db, settled, false);
     }
     // the request provably never left Payrail -> nothing happened upstream -> release
-    const neverSent = ['EGRESS_BLOCKED', 'RATE_LIMITED', 'BAD_INPUT', 'LISTING_NOT_VERIFIED', 'NOT_FOUND'].includes(e.code);
+    const neverSent = ['EGRESS_BLOCKED', 'RATE_LIMITED', 'BAD_INPUT', 'LISTING_NOT_VERIFIED', 'NOT_FOUND', 'CREDENTIAL_UNREADABLE'].includes(e.code);
     const stored: Stored = { checks: [], upstream: null, failure: { code: e.code, message: e.message.slice(0, 200) } };
     settled = settleExecution(
       db,

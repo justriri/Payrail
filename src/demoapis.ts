@@ -137,6 +137,9 @@ export function seedDemo(db: Db, mk: MasterKey, now: () => number = Date.now): {
   };
   const priceListingId = find(DEMO_PRICE_HOST) ?? make(DEMO_PRICE_HOST, '/v1/price', 'GET', 'Demo token price (fresh within 60s)', 'DEMO: a controlled in-process API. Returns a token price with a timestamp; stale or malformed answers are not charged.', 20_000n, PRICE_CONTRACT, true);
   const echoListingId = find(DEMO_ECHO_HOST) ?? make(DEMO_ECHO_HOST, '/v1/echo', 'POST', 'Demo text echo', 'DEMO: a controlled in-process API with failure injection (scenario input).', 5_000n, ECHO_CONTRACT, false);
+  // if the vault key changed since seeding (e.g. an ephemeral key was replaced by a persistent one), re-store the demo credential
+  const active = db.prepare("SELECT key_id FROM credentials WHERE listing_id = ? AND status = 'active'").get(priceListingId) as { key_id: string } | undefined;
+  if (!active || active.key_id !== mk.id) putCredential(db, mk, { listingId: priceListingId, label: 'api-key', headerName: 'X-Api-Key', value: DEMO_PRICE_KEY, actor: 'system' }, now);
   return { sellerId: seller, priceListingId, echoListingId };
 }
 

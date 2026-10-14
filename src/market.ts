@@ -24,6 +24,8 @@ import { FundingError, confirmDeposit, fundingMessage, fundingWallets, registerF
 import type { FundingConfig } from './funding.ts';
 import { PayoutError, cancelPayout, payoutsOf, requestPayout } from './payouts.ts';
 import { publishReadiness, updateListingDetails } from './seller.ts';
+import { buyerStatement, quoteFor, receiptFor, sellerStatement } from './billing.ts';
+import { agentExecutionIds, agentUsage } from './agents.ts';
 import type { PayoutPolicy } from './payouts.ts';
 import { EscrowError, executeEscrowRequest } from './escrow.ts';
 import type { EscrowClient } from './escrow.ts';
@@ -90,6 +92,43 @@ export const ORIGIN_LABELS: Record<MarketItem['origin'], string> = {
 
 /** a sandbox account is derived from a per-session seed; the seed is the random label embedded in the account */
 const sandboxSeed = (mk: MasterKey, seed: string): `0x${string}` => `0x${createHmac('sha256', mk.key).update(`sandbox-seed:${seed}`).digest('hex')}`;
+
+/** Machine-readable description of the agent API, served at GET /api/market/agent/spec (no key needed). */
+export const AGENT_SPEC = {
+  name: 'Payrail agent API',
+  version: 1,
+  base: '/api/market',
+  auth: 'Authorization: Bearer <agent key>  (keys start with "pra_"; created by the buyer account owner; shown once)',
+  endpoints: [
+    { method: 'GET', path: '/agent/me', purpose: 'Your limits, rolling 24h usage and the owner credits you can spend' },
+    { method: 'GET', path: '/agent/catalog', purpose: 'Available APIs with price, response requirements, freshness and availability' },
+    { method: 'GET', path: '/agent/listing/{id}', purpose: 'Inspect one API (quote and conditions) before buying' },
+    { method: 'POST', path: '/agent/execute', body: { listingId: 'string', idempotencyKey: 'string 8-50 chars [A-Za-z0-9_.:-]', input: 'flat object' }, purpose: 'Run one request. Charged only if the response qualifies' },
+    { method: 'GET', path: '/agent/receipt/{receiptId}', purpose: 'Receipt for one of your own requests' },
+    { method: 'GET', path: '/agent/executions', purpose: 'Your recent requests' },
+  ],
+  outcomes: {
+    QUALIFIED: 'Response met the contract; the amount was charged.',
+    NOT_QUALIFIED: 'Response failed validation or was never sent; nothing charged.',
+    UNRESOLVED: 'Outcome unknown; amount held, not charged; do not retry with a new key.',
+    RELEASED_UNRESOLVED: 'Unknown outcome expired; released; nothing charged.',
+    IN_PROGRESS: 'Still running; retry with the same idempotencyKey to read the stored outcome.',
+  },
+  errors: {
+    KEY_INVALID: { http: 401, meaning: 'Missing, malformed or revoked agent key' },
+    INSUFFICIENT_CREDITS: { http: 402, meaning: 'The owner has fewer credits than the price' },
+    BAD_INPUT: { http: 400, meaning: 'Invalid input or idempotency key' },
+    NOT_FOUND: { http: 404, meaning: 'Unknown listing or receipt' },
+    LISTING_NOT_PUBLISHED: { http: 409, meaning: 'The API is not currently available' },
+    CONTRACT_NOT_APPROVED: { http: 409, meaning: 'The API has no approved response contract' },
+    LISTING_NOT_ALLOWED: { http: 403, meaning: 'Outside this key allow-list' },
+    PER_REQUEST_CAP: { http: 403, meaning: 'Price exceeds the per-request limit' },
+    DAILY_CAP: { http: 403, meaning: 'Rolling 24-hour limit reached' },
+    IDEMPOTENCY_CONFLICT: { http: 409, meaning: 'Key already used for a different request' },
+    RATE_LIMITED: { http: 429, meaning: 'Too many calls to this API' },
+  },
+  validationNote: 'Responses are validated structurally against the approved contract. A valid response is not guaranteed to be true.',
+} as const;
 
 class ApiError extends Error {
   status: number;
@@ -202,7 +241,7 @@ function sumGranted(db: Db, buyerId: string): bigint {
 
 // ------------------------------------------------------------------ views
 
-function listingView(db: Db, l: Listing, forOwner: boolean) {
+function listingView(db: Db, l: Listing, forOwner: boolean, keyIds: readonly string[] = []) {
   const c = currentContract(db, l.id);
   const base = {
     id: l.id,
@@ -243,7 +282,7 @@ function listingView(db: Db, l: Listing, forOwner: boolean) {
     verifiedAt: l.verifiedAt,
     challenge: ch,
     contracts: contracts.map((v) => ({ id: v.id, version: v.version, status: v.status, rules: v.body.success })),
-    credentials: listCredentials(db, l.id),
+    credentials: listCredentials(db, l.id).map((c) => ({ ...c, usable: keyIds.includes(c.keyId) })),
     tests: recentTests(db, l.id, 5),
     displayStatus,
     public: l.status === 'published',
@@ -289,7 +328,7 @@ const str = (v: unknown, what: string, max = 500): string => {
 };
 
 function mapError(e: unknown): MarketResponse {
-  if (e instanceof ApiError) return { status: e.status, body: { ok: false, code: e.code, message: e.message } };
+  if (e instanceof ApiError) return { status: e.status, body: { ok: false, code: e.code, message: e.message, retryable: e.status >= 500 || e.status === 429 } };
   const code = (e as { code?: string }).code ?? 'ERROR';
   const message = (e as Error).message;
   const known = e instanceof LedgerError || e instanceof SellerError || e instanceof VaultError || e instanceof ContractError || e instanceof GatewayError || e instanceof TesterError || e instanceof FundingError || e instanceof PayoutError || e instanceof AgentError || e instanceof EscrowError;
@@ -300,7 +339,18 @@ function mapError(e: unknown): MarketResponse {
     WALLET_TAKEN: 409, NO_FUNDING_WALLET: 409, TX_NOT_FOUND: 404, TX_REVERTED: 422, NOT_ENOUGH_CONFIRMATIONS: 409, NO_MATCHING_TRANSFER: 422, OVER_LIMIT: 422, READ_FAILED: 502,
     KEY_INVALID: 401, LISTING_NOT_ALLOWED: 403, PER_REQUEST_CAP: 403, DAILY_CAP: 403, INSUFFICIENT_EARNINGS: 409, NO_WALLET: 409, TEST_ASSET: 422, NO_SELLER_WALLET: 409, HOLD_FAILED: 502,
   };
-  return { status: status[code] ?? 400, body: { ok: false, code, message } };
+  const s = status[code] ?? 400;
+  const hints: Record<string, string> = {
+    INSUFFICIENT_CREDITS: 'Add credits to the buyer account, then retry with a NEW idempotency key.',
+    IDEMPOTENCY_CONFLICT: 'This idempotency key was already used for a different request. Use a new key for a new request.',
+    DAILY_CAP: 'The rolling 24-hour limit for this agent is used up. Wait, or ask the owner to raise the limit.',
+    PER_REQUEST_CAP: 'This listing costs more than the agent per-request limit.',
+    LISTING_NOT_ALLOWED: 'This agent is restricted to an allow-list of listings.',
+    LISTING_NOT_PUBLISHED: 'The listing is not currently available.',
+    KEY_INVALID: 'Check the agent key; keys are shown once at creation and cannot be recovered.',
+    RATE_LIMITED: 'Slow down and retry shortly.',
+  };
+  return { status: s, body: { ok: false, code, message, retryable: s === 429 || s >= 500, ...(hints[code] ? { hint: hints[code] } : {}) } };
 }
 
 export async function handleMarket(rt: MarketRuntime, req: MarketRequest): Promise<MarketResponse> {
@@ -341,7 +391,14 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
   if (method === 'GET' && (m = path.match(/^\/listing\/([\w-]{1,80})$/))) {
     const l = getListing(db, m[1]!);
     if (!l || l.status !== 'published') throw new ApiError(404, 'NOT_FOUND', 'no such listing');
-    return ok({ listing: listingView(db, l, false) });
+    return ok({ listing: listingView(db, l, false), quote: quoteFor(db, l.id, { escrowEnabled: Boolean(rt.escrow) }) });
+  }
+  if (method === 'GET' && (m = path.match(/^\/quote\/([\w-]{1,80})$/))) {
+    const q = quoteFor(db, m[1]!, { escrowEnabled: Boolean(rt.escrow) });
+    if (!q) throw new ApiError(404, 'NOT_FOUND', 'no such listing');
+    const l = getListing(db, m[1]!);
+    if (!l || l.status !== 'published') throw new ApiError(404, 'NOT_FOUND', 'no such listing');
+    return ok({ quote: q });
   }
 
   // ---- buyer
@@ -377,6 +434,16 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
     }
     const r = await executeRequest(db, rt.keys, { buyerId: id, listingId: str(body.listingId, 'listingId', 80), idempotencyKey: str(body.idempotencyKey, 'idempotencyKey', 100), input: body.input ?? {} }, rt.execute ?? {});
     return ok({ result: r }, r.replay ? 200 : 201);
+  }
+  if (method === 'GET' && path === '/me/statement') {
+    const id = buyer();
+    return ok({ statement: buyerStatement(db, id) });
+  }
+  if (method === 'GET' && (m = path.match(/^\/receipt\/([\w-]{1,80})$/))) {
+    const id = buyer();
+    const e = queryOne(db, 'SELECT buyer_id FROM executions WHERE id = ?', m[1]!);
+    if (!e || String(e.buyer_id) !== id) throw new ApiError(404, 'NOT_FOUND', 'no such receipt');
+    return ok({ receipt: receiptFor(db, m[1]!) });
   }
   if (method === 'GET' && path === '/executions') {
     const id = buyer();
@@ -457,16 +524,79 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
     return ok({ agent: { id: m[1], status: revokeAgent(db, id, m[1]!, now).status } });
   }
   // ---- agents (the agent itself; authenticated by its own key, which a browser never holds)
-  if (method === 'POST' && path === '/agent/execute') {
+  if (method === 'GET' && path === '/agent/spec') return ok({ spec: AGENT_SPEC });
+  if (path.startsWith('/agent/')) {
     if (!req.bearer) throw new AgentError('KEY_INVALID', 'send the agent key as a Bearer token');
     const agent = authenticateAgent(db, req.bearer);
-    const r = await executeAsAgent(db, rt.keys, agent, { listingId: str(body.listingId, 'listingId', 80), idempotencyKey: str(body.idempotencyKey, 'idempotencyKey', 50), input: body.input ?? {} }, rt.execute ?? {});
-    return ok({ result: r }, r.replay ? 200 : 201);
-  }
-  if (method === 'GET' && path === '/agent/catalog') {
-    if (!req.bearer) throw new AgentError('KEY_INVALID', 'send the agent key as a Bearer token');
-    authenticateAgent(db, req.bearer);
-    return ok({ items: payrailItems(db) });
+    const usage = () => agentUsage(db, agent, now);
+    const listingFor = (id: string) => {
+      const q = quoteFor(db, id, { escrowEnabled: false });
+      const l = getListing(db, id);
+      if (!q || !l || l.status !== 'published') return undefined;
+      const allowed = !agent.allowedListings || agent.allowedListings.includes(id);
+      const price = BigInt(q.buyerPays.atomic);
+      const withinCap = price <= agent.perRequestCapAtomic;
+      const withinDaily = price <= usage().remainingDailyAtomic;
+      return {
+        id,
+        name: q.name,
+        description: q.description,
+        method: l.method,
+        asset: q.asset,
+        available: q.available,
+        unavailableReason: q.unavailableReason,
+        price: q.buyerPays,
+        platformFee: q.platformFee,
+        sellerReceives: q.sellerReceives,
+        responseRequirements: q.chargedOnlyIf,
+        freshness: q.freshness,
+        maxLatencyMs: q.maxLatencyMs,
+        contract: q.contract,
+        input: { type: 'object', rules: 'flat object of short string, number or boolean values (max 20 fields)', via: l.method === 'GET' ? 'query string' : 'JSON body' },
+        notCharged: q.notCharged,
+        validationNote: q.validationNote,
+        forThisAgent: { allowed, withinPerRequestCap: withinCap, withinDailyBudget: withinDaily, canExecute: q.available && allowed && withinCap && withinDaily },
+        origin: l.demo ? 'payrail-demo' : isSandboxHost(l.host) ? 'payrail-sandbox' : 'payrail-seller',
+      };
+    };
+    if (method === 'GET' && path === '/agent/me') {
+      const u = usage();
+      return ok({
+        agent: { id: agent.id, name: agent.name, status: agent.status },
+        limits: { perRequest: formatAtomic(agent.perRequestCapAtomic), daily: formatAtomic(agent.dailyCapAtomic), allowedListings: agent.allowedListings },
+        usage: { spentLast24h: formatAtomic(u.spentLast24hAtomic), remainingDaily: formatAtomic(u.remainingDailyAtomic) },
+        credits: [TEST_ASSET, ...(rt.live ? [LIVE_ASSET] : [])].map((asset) => ({ asset, available: formatAtomic(balance(db, agent.ownerId, 'buyer_available', asset)) })),
+      });
+    }
+    if (method === 'GET' && path === '/agent/catalog') {
+      const items = query(db, "SELECT id FROM listings WHERE status = 'published' ORDER BY created_at, name").map((r) => listingFor(String(r.id))).filter((x) => x !== undefined);
+      return ok({ count: items.length, items });
+    }
+    if (method === 'GET' && (m = path.match(/^\/agent\/listing\/([\w-]{1,80})$/))) {
+      const item = listingFor(m[1]!);
+      if (!item) throw new ApiError(404, 'LISTING_NOT_PUBLISHED', 'no such available listing');
+      return ok({ listing: item });
+    }
+    if (method === 'POST' && path === '/agent/execute') {
+      const r = await executeAsAgent(db, rt.keys, agent, { listingId: str(body.listingId, 'listingId', 80), idempotencyKey: str(body.idempotencyKey, 'idempotencyKey', 50), input: body.input ?? {} }, rt.execute ?? {});
+      const receipt = receiptFor(db, r.executionId)!;
+      const advice =
+        r.state === 'QUALIFIED' ? 'Charged. Use result.body.'
+          : r.state === 'NOT_QUALIFIED' ? 'Not charged. The response failed validation or the request was not sent. Use a new idempotencyKey to try again.'
+            : r.state === 'HELD' ? 'In progress. Retry with the SAME idempotencyKey to read the stored outcome; never a new key.'
+              : r.state === 'UNRESOLVED' ? 'Outcome unknown. Nothing is charged. Poll GET /agent/receipt/{executionId}; the hold is released to the owner if it stays unresolved. Do not retry with a new key.'
+                : 'Released to the owner. Not charged.';
+      return ok({ outcome: receipt.outcome, charged: r.charged, result: r, receipt, advice }, r.replay ? 200 : 201);
+    }
+    if (method === 'GET' && (m = path.match(/^\/agent\/receipt\/([\w-]{1,80})$/))) {
+      const e = queryOne(db, 'SELECT agent_id FROM executions WHERE id = ?', m[1]!);
+      // an agent can only ever read receipts of requests made with its own key
+      if (!e || String(e.agent_id ?? '') !== agent.id) throw new ApiError(404, 'NOT_FOUND', 'no such receipt');
+      return ok({ receipt: receiptFor(db, m[1]!) });
+    }
+    if (method === 'GET' && path === '/agent/executions') {
+      return ok({ executions: agentExecutionIds(db, agent.id).map((id) => { const r = receiptFor(db, id)!; return { receiptId: r.receiptId, at: r.createdAt, listing: r.listing, outcome: r.outcome, charged: r.charged.display, asset: r.asset }; }) });
+    }
   }
 
   // ---- configuration the screens use to explain themselves
@@ -530,7 +660,7 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
   // ---- seller
   if (method === 'GET' && path === '/seller/listings') {
     const id = seller();
-    return ok({ listings: listingsOf(db, id).map((l) => listingView(db, l, true)) });
+    return ok({ listings: listingsOf(db, id).map((l) => listingView(db, l, true, rt.keys.map((k) => k.id))) });
   }
   if (method === 'POST' && path === '/seller/listings') {
     const id = seller();
@@ -541,7 +671,7 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
       { name: str(body.name, 'name', 80), description: typeof body.description === 'string' ? body.description : '', endpointUrl: str(body.endpointUrl, 'endpointUrl', 500), method: meth, priceAtomic: parseAtomic(body.price), asset: body.live === true ? liveOnly().asset : TEST_ASSET },
       now,
     );
-    return ok({ listing: listingView(db, r.listing, true) }, 201);
+    return ok({ listing: listingView(db, r.listing, true, rt.keys.map((k) => k.id)) }, 201);
   }
   if ((m = path.match(/^\/seller\/listing\/([\w-]{1,80})(?:\/([a-z-]+))?$/))) {
     const id = seller();
@@ -549,7 +679,7 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
     const action = m[2];
     const l = getListing(db, lid);
     if (!l || l.sellerId !== id) throw new ApiError(404, 'NOT_FOUND', 'no such listing');
-    const view = () => ok({ listing: listingView(db, getListing(db, lid)!, true) });
+    const view = () => ok({ listing: listingView(db, getListing(db, lid)!, true, rt.keys.map((k) => k.id)) });
     if (method === 'GET' && !action) return view();
     if (method === 'POST') {
       switch (action) {
@@ -622,6 +752,10 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
     const v = approveContract(db, m[1]!, id, now);
     const c = getContract(db, v.id)!;
     return ok({ contract: { id: c.id, version: c.version, status: c.status } });
+  }
+  if (method === 'GET' && path === '/seller/statement') {
+    const id = seller();
+    return ok({ statement: sellerStatement(db, id) });
   }
   if (method === 'GET' && path === '/seller/earnings') {
     const id = seller();

@@ -118,6 +118,8 @@ export interface UpstreamResult {
   /** parsed JSON body, or undefined when the body was not valid JSON */
   json: unknown;
   elapsedMs: number;
+  /** size of the (redacted) body in bytes, when known; an empty body is reported explicitly */
+  bodyBytes?: number;
 }
 export interface Check {
   name: string;
@@ -156,6 +158,7 @@ export function evaluate(body: ContractBody, r: UpstreamResult, nowMs: number): 
   const checks: Check[] = [];
   const add = (name: string, ok: boolean, detail: string) => checks.push({ name, ok, detail });
   add('status', c.statuses.includes(r.status), `HTTP ${r.status}; allowed ${c.statuses.join(',')}`);
+  if (r.bodyBytes !== undefined) add('non-empty-body', r.bodyBytes > 0, r.bodyBytes > 0 ? `${r.bodyBytes} bytes` : 'the response body was empty');
   const ct = (r.contentType ?? '').split(';')[0]!.trim().toLowerCase();
   add('content-type', ct === c.contentType, `got "${ct || 'none'}"`);
   add('latency', r.elapsedMs <= c.maxLatencyMs, `${r.elapsedMs}ms; limit ${c.maxLatencyMs}ms`);
@@ -198,6 +201,25 @@ export function evaluate(body: ContractBody, r: UpstreamResult, nowMs: number): 
   }
   const failed = checks.filter((x) => !x.ok);
   return { qualified: failed.length === 0, reasons: failed.map((x) => `${x.name}: ${x.detail}`), checks };
+}
+
+/** The contract in plain language: exactly what a response must satisfy to be charged. */
+export function describeContract(body: ContractBody): string[] {
+  const c = body.success;
+  const out: string[] = [];
+  out.push(`HTTP status must be ${c.statuses.join(' or ')}`);
+  out.push('The response must be a non-empty JSON object (not HTML, text or an empty body)');
+  out.push(`It must arrive within ${c.maxLatencyMs} ms`);
+  for (const f of c.fields) {
+    const range = f.type === 'number' && (f.min !== undefined || f.max !== undefined) ? ` between ${f.min ?? '-∞'} and ${f.max ?? '∞'}` : '';
+    out.push(`Field "${f.path}" must be present and be a ${f.type}${range}`);
+  }
+  for (const p of c.nonEmpty ?? []) out.push(`Field "${p}" must not be empty`);
+  if (c.freshness) {
+    const fmt = c.freshness.format === 'iso' ? 'an ISO timestamp' : c.freshness.format === 'unix' ? 'a Unix time in seconds' : 'a Unix time in milliseconds';
+    out.push(`Freshness: "${c.freshness.path}" (${fmt}) must be no older than ${c.freshness.maxAgeSeconds} seconds`);
+  }
+  return out;
 }
 
 /** Suggest a contract from observed successful sample responses. A SUGGESTION: the seller edits and approves it. */

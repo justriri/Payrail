@@ -212,7 +212,7 @@ export async function executeEscrowRequest(
   } catch (e) {
     const code = e instanceof GatewayError ? e.code : 'INTERNAL';
     ev.failure = { code, message: (e as Error).message.slice(0, 200) };
-    const neverSent = ['EGRESS_BLOCKED', 'RATE_LIMITED', 'BAD_INPUT', 'LISTING_NOT_VERIFIED', 'NOT_FOUND'].includes(code);
+    const neverSent = ['EGRESS_BLOCKED', 'RATE_LIMITED', 'BAD_INPUT', 'LISTING_NOT_VERIFIED', 'NOT_FOUND', 'CREDENTIAL_UNREADABLE'].includes(code);
     verdict = neverSent ? { qualified: false, reason: `the request was not sent (${code})` } : { unknown: `the API did not answer in time or the connection failed (${code}); outcome unknown` };
   }
 

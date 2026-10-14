@@ -126,10 +126,7 @@ async function select(it) {
   selected = d.listing;
   $('run-card').hidden = false;
   $('run-title').textContent = `Run: ${selected.name}`;
-  const r = selected.contract ? selected.contract.rules : null;
-  $('run-terms').textContent = `You pay ${selected.price.usd} ${selected.price.asset} only if the response meets contract v${selected.contract ? selected.contract.version : '?'}`
-    + (r ? ` (status ${r.statuses.join('/')}, JSON, within ${r.maxLatencyMs} ms, fields: ${r.fields.map((f) => `${f.path}:${f.type}`).join(', ')}${r.freshness ? `, ${r.freshness.path} no older than ${r.freshness.maxAgeSeconds}s` : ''}).` : '.')
-    + ` Platform fee ${selected.feePercent}% comes out of the seller's share, not on top of your price.`;
+  renderQuote(d.quote);
   const hint = selected.method === 'POST' ? '{"text":"hello"}' : '{"id":"eth"}';
   $('run-input').value = selected.demo || selected.sandbox ? hint : '{}';
   $('run-hint').textContent = selected.demo || selected.sandbox
@@ -139,6 +136,38 @@ async function select(it) {
   $('run-result').replaceChildren();
   $('run-card').scrollIntoView({ behavior: 'smooth' });
 }
+function renderQuote(q) {
+  const box = $('run-quote');
+  clear(box);
+  if (!q) return;
+  box.append(
+    el('table', { class: 'quote' },
+      el('tr', {}, el('th', { text: 'You pay (only if the response qualifies)' }), el('td', { class: 'v', text: `${q.buyerPays.display} ${q.asset}` })),
+      el('tr', {}, el('th', { text: `Platform fee (${q.platformFee.percent}%, taken from the seller's share)` }), el('td', { class: 'v', text: `${q.platformFee.display} ${q.asset}` })),
+      el('tr', {}, el('th', { text: 'Seller earns' }), el('td', { class: 'v', text: `${q.sellerReceives.display} ${q.asset}` }))),
+    el('h3', { text: `A response qualifies only if (contract v${q.contract ? q.contract.version : '?'})` }),
+    el('ul', {}, ...q.chargedOnlyIf.map((c) => el('li', { text: c }))),
+    el('details', {}, el('summary', { text: 'What happens if it does not qualify, or the outcome is unknown?' }), el('ul', {}, ...q.notCharged.map((c) => el('li', { text: c })))),
+    el('p', { class: 'notice', text: q.validationNote }),
+  );
+}
+
+async function showReceipt(box, id) {
+  const d = await api(`/receipt/${encodeURIComponent(id)}`, { bearer: session.buyer });
+  if (!d.ok) { box.append(el('p', { class: 'problem', text: fail(d) })); return; }
+  const r = d.receipt;
+  const rows = [
+    ['Receipt', r.receiptId], ['Outcome', r.outcome], ['Charged', `${r.charged.display} ${r.asset}`], ['Held (not charged)', `${r.held.display} ${r.asset}`],
+    ['Returned to you', `${r.returned.display} ${r.asset}`], ['Platform fee', r.platformFee ? `${r.platformFee.display} ${r.asset}` : '—'], ['Seller earned', r.sellerEarned ? `${r.sellerEarned.display} ${r.asset}` : '—'],
+    ['Settlement', r.settlement === 'escrow' ? 'on-chain escrow (testnet)' : 'Payrail ledger (test credits)'], ['Contract', r.contract ? `v${r.contract.version}` : '—'],
+    ['Response hash', r.validation.responseSha256 || '—'], ['Idempotency key', r.idempotencyKey],
+  ];
+  box.append(el('table', { class: 'quote' }, ...rows.map(([k, v]) => el('tr', {}, el('th', { text: k }), el('td', { class: 'v', text: String(v) })))));
+  if (r.ledger.length) box.append(el('p', { class: 'muted', text: 'Ledger entries: ' + r.ledger.map((t) => `#${t.id} ${t.kind}`).join(', ') }));
+  if (r.escrow) box.append(el('p', { class: 'muted', text: `Escrow hold ${r.escrow.holdId || '—'} · ` + Object.entries(r.escrow.txs).map(([k, v]) => `${k}: ${v}`).join(' · ') }));
+  box.append(el('p', { class: 'muted', text: r.validation.note }));
+}
+
 $('run-btn').addEventListener('click', async () => {
   if (!session.buyer) return ($('run-msg').textContent = 'Click "Start testing" in the Buyer card first.');
   let input;
@@ -161,18 +190,42 @@ $('run-btn').addEventListener('click', async () => {
     d.settlement === 'escrow' && el('p', { class: 'notice', text: 'Settled through the Celo Sepolia TESTNET escrow contract (mock token).' }));
   if (r.checks.length) out.append(el('ul', {}, ...r.checks.map((c) => el('li', { text: `${c.ok ? '✓' : '✗'} ${c.name} — ${c.detail}` }))));
   if (r.body !== undefined) out.append(el('pre', { text: JSON.stringify(r.body, null, 2) }));
+  const rec = el('details', { open: '' }, el('summary', { text: 'Receipt' }));
+  out.append(rec);
+  out.append(el('p', { class: 'notice', text: 'Qualified means the response matched the agreed structure, types and freshness. It does not prove the data is true.' }));
+  await showReceipt(rec, r.executionId);
   renderBuyer(); renderHistory(); renderEscrow();
   if (session.seller) renderSeller();
 });
 
+const STATE_TEXT = (e) => (e.state === 'QUALIFIED' ? `charged ${e.price} ${e.asset}` : e.state === 'UNRESOLVED' || e.state === 'HELD' ? `held ${e.price} ${e.asset} (outcome unknown, not charged)` : e.state === 'RELEASED_UNRESOLVED' ? 'released: outcome never established, not charged' : 'not charged');
 async function renderHistory() {
   const box = $('history');
-  clear(box);
+  const st = $('statement');
+  clear(box); clear(st);
   if (!session.buyer) { box.textContent = 'Start testing first.'; return; }
-  const d = await api('/executions', { bearer: session.buyer });
+  const [d, sm] = await Promise.all([api('/executions', { bearer: session.buyer }), api('/me/statement', { bearer: session.buyer })]);
+  if (sm.ok) {
+    for (const b of sm.statement.balances) {
+      st.append(el('table', { class: 'quote' },
+        el('tr', {}, el('th', { text: `Account summary (${b.asset})` }), el('td', {})),
+        el('tr', {}, el('th', { text: 'Deposited / granted' }), el('td', { class: 'v', text: b.deposited.display })),
+        el('tr', {}, el('th', { text: 'Charged for qualifying responses' }), el('td', { class: 'v', text: b.charged.display })),
+        el('tr', {}, el('th', { text: 'Returned (non-qualifying or expired)' }), el('td', { class: 'v', text: b.returned.display })),
+        el('tr', {}, el('th', { text: 'Held (outcome unknown)' }), el('td', { class: 'v', text: b.held.display })),
+        el('tr', {}, el('th', { text: 'Available' }), el('td', { class: 'v', text: b.available.display }))));
+    }
+    const esc = sm.statement.buckets.filter((x) => x.settlement === 'escrow');
+    if (esc.length) st.append(el('p', { class: 'muted', text: 'Escrow-settled requests are kept separate (funds are in the testnet escrow contract, not your Payrail balance): ' + esc.map((x) => `${x.requests} request(s), ${x.gross.display} ${x.asset} charged`).join('; ') }));
+  }
   if (!d.ok) { box.textContent = fail(d); return; }
   if (!d.executions.length) { box.textContent = 'No requests yet.'; return; }
-  box.append(el('ul', {}, ...d.executions.map((e) => el('li', { text: `${e.at.slice(0, 19).replace('T', ' ')}  ${e.listing}  ${e.state === 'QUALIFIED' ? `charged ${e.price} ${e.asset}` : e.state === 'UNRESOLVED' ? `held ${e.price} ${e.asset} (outcome unknown)` : `not charged (${e.state})`}${e.reason && e.state !== 'QUALIFIED' ? ` — ${e.reason}` : ''}` }))));
+  box.append(el('div', {}, ...d.executions.map((e) => {
+    const det = el('details', {}, el('summary', { text: `${e.at.slice(0, 19).replace('T', ' ')}  ${e.listing}: ${STATE_TEXT(e)}${e.reason && e.state !== 'QUALIFIED' ? ` — ${e.reason}` : ''}` }));
+    let loaded = false;
+    det.addEventListener('toggle', () => { if (det.open && !loaded) { loaded = true; showReceipt(det, e.id); } });
+    return det;
+  })));
 }
 
 // ------------------------------------------------------------------ buyer: agents, escrow, real funds
@@ -257,9 +310,10 @@ const memSecrets = {};
 let renderToken = 0;
 
 function sellerRoute() {
-  const m = /^#\/seller(?:\/(new|api\/([\w-]{1,80})))?$/.exec(location.hash);
+  const m = /^#\/seller(?:\/(new|earnings|api\/([\w-]{1,80})))?$/.exec(location.hash);
   if (!m || !m[1]) return { page: 'apis' };
   if (m[1] === 'new') return { page: 'new' };
+  if (m[1] === 'earnings') return { page: 'earnings' };
   return { page: 'edit', id: m[2] };
 }
 const go = (hash) => { if (location.hash === hash) renderSeller(); else location.hash = hash; };
@@ -337,14 +391,49 @@ async function renderSeller() {
     el('nav', { class: 'subtabs', 'aria-label': 'Seller sections' },
       el('a', { class: `subtab${route.page === 'apis' ? ' active' : ''}`, href: '#/seller', text: `My APIs (${listings.length})` }),
       el('a', { class: `subtab${route.page === 'new' ? ' active' : ''}`, href: '#/seller/new', text: 'New listing' }),
+      el('a', { class: `subtab${route.page === 'earnings' ? ' active' : ''}`, href: '#/seller/earnings', text: 'Earnings & payouts' }),
       route.page === 'edit' && el('span', { class: 'subtab active', text: 'Manage API' })),
   );
-  if (route.page === 'new') box.append(newListingPage());
+  if (route.page === 'earnings') {
+    const sm = await api('/seller/statement', { bearer: session.seller });
+    if (mine !== renderToken) return;
+    box.append(sm.ok ? earningsPage(sm.statement) : el('p', { class: 'problem', text: fail(sm) }));
+  } else if (route.page === 'new') box.append(newListingPage());
   else if (route.page === 'edit') {
     const l = listings.find((x) => x.id === route.id);
     if (!l) { box.append(el('p', { class: 'problem', text: 'That listing was not found in your account.' }), el('a', { href: '#/seller', text: 'Back to My APIs' })); }
     else box.append(editorPage(l));
   } else box.append(myApisPage(listings, earn));
+}
+
+// ---- Earnings & payouts (derived from persisted executions, ledger and payouts)
+function earningsPage(sm) {
+  const wrap = el('div', {});
+  wrap.append(el('p', { class: 'notice', text: 'Every figure below is computed from saved requests, ledger entries and payouts. Direct (ledger) and escrow settlement are shown separately because they are paid out differently.' }));
+  if (!sm.buckets.length) wrap.append(el('p', { class: 'muted', text: 'No requests yet.' }));
+  for (const b of sm.buckets) {
+    wrap.append(el('h3', { text: `${b.settlement === 'escrow' ? 'Escrow settlement (testnet)' : 'Direct settlement (Payrail ledger)'} · ${b.asset}` }),
+      el('table', { class: 'quote' },
+        el('tr', {}, el('th', { text: 'Requests' }), el('td', { class: 'v', text: `${b.requests} (${b.qualified} qualified, ${b.notCharged} not charged, ${b.unresolvedOpen} unresolved, ${b.releasedUnresolved} released)` })),
+        el('tr', {}, el('th', { text: 'Gross sales (buyers charged)' }), el('td', { class: 'v', text: b.gross.display })),
+        el('tr', {}, el('th', { text: 'Platform fees (3%)' }), el('td', { class: 'v', text: b.platformFees.display })),
+        el('tr', {}, el('th', { text: 'Your earnings' }), el('td', { class: 'v', text: b.sellerEarnings.display })),
+        el('tr', {}, el('th', { text: 'Returned to buyers (refunds)' }), el('td', { class: 'v', text: b.refunded.display })),
+        el('tr', {}, el('th', { text: 'Held while outcome is unknown' }), el('td', { class: 'v', text: b.heldOpen.display }))));
+  }
+  for (const l of sm.ledgerBalances) {
+    wrap.append(el('p', { text: `${l.asset}: available to pay out ${l.available.display} · payout pending ${l.pendingPayout.display}` }));
+  }
+  for (const t of sm.payoutTotals) wrap.append(el('p', { text: `${t.asset} payouts: pending ${t.pending.display} · completed ${t.completed.display}` }));
+  wrap.append(el('h3', { text: 'Payouts' }));
+  if (!sm.payouts.length) wrap.append(el('p', { class: 'muted', text: config.realFunds ? 'No payouts yet.' : 'Payouts are disabled in test-credit mode: test credits cannot be paid out.' }));
+  else wrap.append(el('ul', {}, ...sm.payouts.map((p) => el('li', { text: `${p.requestedAt.slice(0, 19).replace('T', ' ')}  ${p.amount.display} ${p.asset}  ${p.state}${p.txHash ? '  tx ' + p.txHash : ''}` }))));
+  wrap.append(el('h3', { text: 'Recent sales' }));
+  if (!sm.recentSales.length) wrap.append(el('p', { class: 'muted', text: 'No qualifying sales yet.' }));
+  else wrap.append(el('table', {}, el('tr', {}, ...['When', 'API', 'Gross', 'Fee', 'You earned', 'Path'].map((h) => el('th', { text: h }))),
+    ...sm.recentSales.map((r) => el('tr', {}, el('td', { text: r.at.slice(0, 19).replace('T', ' ') }), el('td', { text: r.listing }), el('td', { text: r.gross }), el('td', { text: r.fee }), el('td', { text: r.earned }), el('td', { text: r.settlement })))));
+  wrap.append(el('ul', { class: 'muted' }, ...sm.notes.map((n) => el('li', { text: n }))));
+  return wrap;
 }
 
 // ---- My APIs (private management view)
@@ -487,6 +576,7 @@ function editorPage(l) {
       page.append(el('div', {},
         el('h3', { text: '2. Credentials (optional)' }),
         el('p', { class: 'muted', text: `Stored encrypted, never shown again, sent only to your verified host. Active: ${l.credentials.filter((x) => x.status === 'active').map((x) => `${x.headerName} v${x.version}`).join(', ') || 'none'}` }),
+        l.credentials.some((x) => x.status === 'active' && x.usable === false) && el('p', { class: 'problem', text: 'A saved credential can no longer be decrypted (it was stored under a vault key this server no longer has). Requests that need it will not be sent. Save the credential again below.' }),
         hdr, cred,
         el('button', { type: 'button', class: 'secondary', text: 'Save credential', onclick: async () => {
           const d = await act('/credential', { label: 'api-key', headerName: hdr.value, value: memSecrets[l.id] || '' }, 'Credential stored encrypted.');

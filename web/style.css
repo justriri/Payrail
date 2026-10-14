@@ -106,3 +106,8 @@ a.btn.secondary { background:#fff; color: var(--brand); border:1px solid var(--b
 .badge.warn { background:#fff4e5; color: var(--warn); }
 .badge.bad { background:#fef3f2; color: var(--bad); }
 .editor input { width:100%; padding:10px; border:1px solid var(--line); border-radius:8px; font: inherit; }
+
+table.quote { width:100%; margin: 8px 0; }
+table.quote th { font-weight:600; color: var(--muted); font-size:14px; }
+table.quote td.v { text-align:right; font-variant-numeric: tabular-nums; font-weight:700; }
+details > summary { cursor:pointer; padding:4px 0; }

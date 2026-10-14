@@ -206,6 +206,15 @@ test('testnet escrow helper: deposit funds the buyer, a request settles through 
     assert.equal(run.body.settlement, 'escrow');
     assert.equal(run.body.result.charged, true);
     assert.equal(h.esc.holds.get(holdIdFor(run.body.result.executionId))!.state, 'Captured');
+    // the receipt for an escrow-settled request points at the on-chain hold, not at ledger entries
+    const rc = (await h.call('GET', `/receipt/${run.body.result.executionId}`, bt)).body.receipt;
+    assert.equal(rc.settlement, 'escrow');
+    assert.equal(rc.escrow.holdId, holdIdFor(run.body.result.executionId));
+    assert.deepEqual([rc.escrow.txs.hold, rc.escrow.txs.settle], ['0xhold', '0xcapture']);
+    assert.deepEqual(rc.ledger, []);
+    // and it is reported in its own bucket of the buyer statement
+    const sm = (await h.call('GET', '/me/statement', bt)).body.statement;
+    assert.ok(sm.buckets.some((b: any) => b.settlement === 'escrow' && b.qualified === 1));
     assert.equal((await h.call('GET', '/escrow', bt)).body.available, '0.08');
 
     // a second buyer cannot reuse the same testnet wallet

@@ -62,3 +62,21 @@ node scripts/serve.ts --demo --env-file=.env           # live Buy flow read-only
 node scripts/payouts.ts --db data/marketplace.db --list
 ```
 Set `PAYRAIL_VAULT_KEY` (32 bytes, hex or base64) so seller credentials survive restarts.
+
+## Outcome-based billing, settlement accounting and agent access (added)
+
+| Area | Where | Verified |
+|---|---|---|
+| Quote before purchase (buyer pays / platform fee / seller earns / conditions) | `src/billing.ts` `quoteFor`, `GET /quote/{id}` | T, L, browser |
+| Per-request receipt (outcome, amounts, ledger or escrow references, validation checks, response hash) | `receiptFor`, `GET /receipt/{id}`, `/agent/receipt/{id}` | T, L, browser |
+| Buyer / seller / platform statements; payout pending and completed | `buyerStatement`, `sellerStatement`, `platformStatement`, `scripts/ledger-report.ts` | T, L |
+| Seller "Earnings & payouts" and buyer account summary screens | `web/market.js` | browser |
+| Agent API: catalog, inspect, execute, receipts, structured errors | `src/market.ts`, [AGENT-API.md](AGENT-API.md) | T, L |
+
+Accounting rules the tests enforce: gross = platform fees + seller earnings; a buyer's deposits = available + held +
+charged; seller ledger balance and platform fee balance equal the sums over qualifying requests; direct (ledger) and
+escrow settlement are reported separately; unresolved amounts are shown as held, never as charged or refunded.
+
+**Not done / needs approval:** converting a buyer's cNGN to USDT *to fund the marketplace* (the conversion pipeline is
+attached to the Buy order flow; funding a marketplace deposit with it would move real funds and needs a new executor
+path); automatic or live payouts (operator CLI only, unchanged); mainnet escrow.
