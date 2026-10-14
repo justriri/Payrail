@@ -56,7 +56,8 @@ export interface Execution {
   updatedAt: string;
 }
 
-type Kind = 'buyer_available' | 'buyer_held' | 'seller_earnings' | 'platform_fee' | 'external_funding';
+type Kind = 'buyer_available' | 'buyer_held' | 'seller_earnings' | 'platform_fee' | 'external_funding' | 'payout_pending';
+export type TxKind = 'deposit' | 'hold' | 'capture' | 'release' | 'payout_request' | 'payout_confirm' | 'payout_cancel';
 export type Clock = () => number;
 const iso = (now: Clock) => new Date(now()).toISOString();
 
@@ -93,7 +94,8 @@ export function balance(db: Db, owner: string, kind: Kind, asset: string): bigin
   return BigInt(r?.s ?? 0n);
 }
 
-function post(db: Db, kind: 'deposit' | 'hold' | 'capture' | 'release', executionId: string | null, ref: string | null, memo: string, lines: Array<{ owner: string; kind: Kind; asset: string; amount: bigint }>, now: Clock): void {
+/** Post one balanced transaction. Callers must already be inside a transaction. */
+export function post(db: Db, kind: TxKind, executionId: string | null, ref: string | null, memo: string, lines: Array<{ owner: string; kind: Kind; asset: string; amount: bigint }>, now: Clock): void {
   const sums = new Map<string, bigint>();
   for (const l of lines) sums.set(l.asset, (sums.get(l.asset) ?? 0n) + l.amount);
   for (const [asset, s] of sums) if (s !== 0n) throw new Error(`unbalanced ledger transaction for ${asset}: ${s}`);
@@ -333,6 +335,33 @@ export function verifyLedger(db: Db): { ok: boolean; problems: string[] } {
     if (String(e.state) === 'QUALIFIED' && (e.fee_atomic === null || e.seller_atomic === null || BigInt(e.fee_atomic) + BigInt(e.seller_atomic) !== BigInt(e.price_atomic))) {
       problems.push(`execution ${e.id}: fee + seller does not equal the price`);
     }
+  }
+  // pending payouts must equal the payouts that are still open, per seller and asset
+  const pend = new Map<string, bigint>();
+  for (const r of query<{ owner_id: string; asset: string; s: bigint }>(
+    db,
+    `SELECT a.owner_id, a.asset, SUM(e.amount) AS s FROM ledger_entries e JOIN ledger_accounts a ON a.id = e.account_id WHERE a.kind = 'payout_pending' GROUP BY a.id`,
+  )) pend.set(`${r.owner_id}|${r.asset}`, BigInt(r.s));
+  const openPayouts = new Map<string, bigint>();
+  for (const r of query<{ seller_id: string; asset: string; s: bigint }>(
+    db,
+    `SELECT seller_id, asset, SUM(amount_atomic) AS s FROM payouts WHERE state IN ('requested','approved','sent') GROUP BY seller_id, asset`,
+  )) openPayouts.set(`${r.seller_id}|${r.asset}`, BigInt(r.s));
+  for (const k of new Set([...pend.keys(), ...openPayouts.keys()])) {
+    if ((pend.get(k) ?? 0n) !== (openPayouts.get(k) ?? 0n)) problems.push(`pending payout balance for ${k} is ${pend.get(k) ?? 0n} but open payouts total ${openPayouts.get(k) ?? 0n}`);
+  }
+  // each payout has exactly the ledger transactions its state requires
+  for (const p of query<{ id: string; state: string }>(db, 'SELECT id, state FROM payouts')) {
+    const kinds = query<{ kind: string }>(db, "SELECT kind FROM ledger_transactions WHERE ref = ? AND kind LIKE 'payout_%' ORDER BY id", p.id).map((r) => String(r.kind));
+    const want: Record<string, string[]> = {
+      requested: ['payout_request'],
+      approved: ['payout_request'],
+      sent: ['payout_request'],
+      confirmed: ['payout_request', 'payout_confirm'],
+      cancelled: ['payout_request', 'payout_cancel'],
+      failed: ['payout_request', 'payout_cancel'],
+    };
+    if (JSON.stringify(kinds) !== JSON.stringify(want[String(p.state)])) problems.push(`payout ${p.id} is ${p.state} but has ledger transactions [${kinds.join(',')}]`);
   }
   return { ok: problems.length === 0, problems };
 }

@@ -90,7 +90,7 @@ function view(db: Db, e: Execution, replay: boolean): ExecutionResult {
 export async function executeRequest(
   db: Db,
   keys: readonly MasterKey[],
-  a: { buyerId: string; listingId: string; idempotencyKey: string; input: unknown },
+  a: { buyerId: string; listingId: string; idempotencyKey: string; input: unknown; agentId?: string },
   opts: ExecuteOptions = {},
 ): Promise<ExecutionResult> {
   const now = opts.now ?? Date.now;
@@ -107,6 +107,7 @@ export async function executeRequest(
     { buyerId: a.buyerId, listingId: a.listingId, contractVersionId: contract.id, idempotencyKey: a.idempotencyKey, requestHash: sha256(canonical({ l: a.listingId, i: input })) },
     now,
   );
+  if (!replay && a.agentId) db.prepare('UPDATE executions SET agent_id = ? WHERE id = ?').run(a.agentId, execution.id);
   // a replay never re-calls the seller: it reports what is already known (HELD means "in progress or interrupted")
   if (replay) return view(db, getExecution(db, execution.id)!, true);
 

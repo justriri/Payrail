@@ -27,7 +27,7 @@ function setup(credits = 1_000_000n) {
   const db = openDb(':memory:');
   const demo = seedDemo(db, mk, () => T0);
   const buyer = createAccount(db, { kind: 'buyer', displayName: 'B' }, () => T0);
-  deposit(db, { buyerId: buyer, asset: 'USDT', amountAtomic: credits, ref: 'test-credit-1' }, () => T0);
+  deposit(db, { buyerId: buyer, asset: 'TESTUSDT', amountAtomic: credits, ref: 'test-credit-1' }, () => T0);
   const net = createDemoNetwork(() => T0);
   let calls = 0;
   const transport: Transport = (r) => (calls++, net.transport(r));
@@ -35,7 +35,7 @@ function setup(credits = 1_000_000n) {
   return { db, demo, buyer, opts, calls: () => calls };
 }
 const run = (s: ReturnType<typeof setup>, listingId: string, input: unknown, key: string) => executeRequest(s.db, [mk], { buyerId: s.buyer, listingId, idempotencyKey: key, input }, s.opts);
-const seller = (s: ReturnType<typeof setup>) => balance(s.db, s.demo.sellerId, 'seller_earnings', 'USDT');
+const seller = (s: ReturnType<typeof setup>) => balance(s.db, s.demo.sellerId, 'seller_earnings', 'TESTUSDT');
 
 test('qualifying response: the buyer is charged once, the seller gets price minus 3%, the body is returned, the ledger is sound', async () => {
   const s = setup();
@@ -47,10 +47,10 @@ test('qualifying response: the buyer is charged once, the seller gets price minu
   assert.equal(r.feeAtomic, '600');
   assert.equal(r.sellerAtomic, '19400');
   assert.deepEqual({ id: (r.body as any).id, price: (r.body as any).price }, { id: 'eth', price: 2450.17 });
-  assert.equal(balance(s.db, s.buyer, 'buyer_available', 'USDT'), 980_000n);
-  assert.equal(balance(s.db, s.buyer, 'buyer_held', 'USDT'), 0n);
+  assert.equal(balance(s.db, s.buyer, 'buyer_available', 'TESTUSDT'), 980_000n);
+  assert.equal(balance(s.db, s.buyer, 'buyer_held', 'TESTUSDT'), 0n);
   assert.equal(seller(s), 19_400n);
-  assert.equal(balance(s.db, 'platform', 'platform_fee', 'USDT'), 600n);
+  assert.equal(balance(s.db, 'platform', 'platform_fee', 'TESTUSDT'), 600n);
   assert.deepEqual(verifyLedger(s.db), { ok: true, problems: [] });
   assert.ok(r.checks.length >= 5 && r.checks.every((c) => c.ok));
   assert.equal(r.contractVersion, 1);
@@ -58,7 +58,7 @@ test('qualifying response: the buyer is charged once, the seller gets price minu
 
 test('every kind of non-qualifying answer costs the buyer nothing and withholds the body', async () => {
   const s = setup();
-  const before = balance(s.db, s.buyer, 'buyer_available', 'USDT');
+  const before = balance(s.db, s.buyer, 'buyer_available', 'TESTUSDT');
   let n = 0;
   for (const scenario of ['stale', 'http500', 'html', 'empty', 'wrongtype', 'missing', 'badkey']) {
     const r = await run(s, s.demo.priceListingId, { id: 'eth', scenario }, `req-bad-${n++}`);
@@ -67,8 +67,8 @@ test('every kind of non-qualifying answer costs the buyer nothing and withholds 
     assert.equal(r.body, undefined, scenario);
     assert.ok(r.reason && r.reason.length > 0, scenario);
   }
-  assert.equal(balance(s.db, s.buyer, 'buyer_available', 'USDT'), before);
-  assert.equal(balance(s.db, s.buyer, 'buyer_held', 'USDT'), 0n);
+  assert.equal(balance(s.db, s.buyer, 'buyer_available', 'TESTUSDT'), before);
+  assert.equal(balance(s.db, s.buyer, 'buyer_held', 'TESTUSDT'), 0n);
   assert.equal(seller(s), 0n);
   assert.deepEqual(verifyLedger(s.db), { ok: true, problems: [] });
   // the failure reasons name the rule
@@ -93,8 +93,8 @@ test('a timeout is UNRESOLVED: funds stay held (not charged, not silently refund
   assert.equal(r.state, 'UNRESOLVED');
   assert.equal(r.charged, false);
   assert.equal(r.held, true);
-  assert.equal(balance(s.db, s.buyer, 'buyer_held', 'USDT'), 20_000n);
-  assert.equal(balance(s.db, s.buyer, 'buyer_available', 'USDT'), 980_000n);
+  assert.equal(balance(s.db, s.buyer, 'buyer_held', 'TESTUSDT'), 20_000n);
+  assert.equal(balance(s.db, s.buyer, 'buyer_available', 'TESTUSDT'), 980_000n);
   assert.equal(seller(s), 0n);
   assert.deepEqual(verifyLedger(s.db), { ok: true, problems: [] });
   // replay: still unresolved, no second call
@@ -109,8 +109,8 @@ test('a timeout is UNRESOLVED: funds stay held (not charged, not silently refund
   const after = executionResult(s.db, r.executionId)!;
   assert.equal(after.state, 'RELEASED_UNRESOLVED');
   assert.equal(after.charged, false);
-  assert.equal(balance(s.db, s.buyer, 'buyer_available', 'USDT'), 1_000_000n);
-  assert.equal(balance(s.db, s.buyer, 'buyer_held', 'USDT'), 0n);
+  assert.equal(balance(s.db, s.buyer, 'buyer_available', 'TESTUSDT'), 1_000_000n);
+  assert.equal(balance(s.db, s.buyer, 'buyer_held', 'TESTUSDT'), 0n);
   assert.equal(seller(s), 0n);
   assert.deepEqual(verifyLedger(s.db), { ok: true, problems: [] });
 });
@@ -124,7 +124,7 @@ test('idempotency: a repeated key returns the stored result without a second cal
   assert.equal(b.replay, true);
   assert.equal(b.executionId, a.executionId);
   assert.deepEqual(b.body, a.body, 'the paid response is still available on replay');
-  assert.equal(balance(s.db, s.buyer, 'buyer_available', 'USDT'), 980_000n, 'charged once');
+  assert.equal(balance(s.db, s.buyer, 'buyer_available', 'TESTUSDT'), 980_000n, 'charged once');
   assert.equal(await code(run(s, s.demo.priceListingId, { id: 'eth' }, 'req-idem-01')), 'IDEMPOTENCY_CONFLICT');
   assert.equal(await code(run(s, s.demo.echoListingId, { id: 'btc' }, 'req-idem-01')), 'IDEMPOTENCY_CONFLICT');
 });
@@ -134,7 +134,7 @@ test('concurrent duplicates: one upstream call, one charge', async () => {
   const rs = await Promise.all([1, 2, 3].map(() => run(s, s.demo.priceListingId, { id: 'celo' }, 'req-race-001')));
   assert.equal(s.calls(), 1);
   assert.equal(rs.filter((r) => !r.replay).length, 1);
-  assert.equal(balance(s.db, s.buyer, 'buyer_available', 'USDT'), 980_000n);
+  assert.equal(balance(s.db, s.buyer, 'buyer_available', 'TESTUSDT'), 980_000n);
   assert.deepEqual(verifyLedger(s.db), { ok: true, problems: [] });
 });
 
@@ -142,7 +142,7 @@ test('insufficient credits and bad input are refused BEFORE anything is held or 
   const poor = setup(10_000n);
   assert.equal(await code(run(poor, poor.demo.priceListingId, { id: 'eth' }, 'req-poor-001')), 'INSUFFICIENT_CREDITS');
   assert.equal(poor.calls(), 0);
-  assert.equal(balance(poor.db, poor.buyer, 'buyer_held', 'USDT'), 0n);
+  assert.equal(balance(poor.db, poor.buyer, 'buyer_held', 'TESTUSDT'), 0n);
 
   const s = setup();
   for (const [bad, key] of [[[1, 2], 'req-bad-in-1'], [{ 'a b': 1 }, 'req-bad-in-2'], [{ a: { x: 1 } }, 'req-bad-in-3']] as const) {
@@ -158,7 +158,7 @@ test('an execution interrupted mid-call (crash) becomes UNRESOLVED and then rele
   // simulate a crash after the hold: create the hold via the normal path, but never settle
   const lst = s.db.prepare('SELECT id FROM contract_versions WHERE listing_id = ?').get(s.demo.priceListingId) as { id: string };
   s.db.prepare(
-    "INSERT INTO executions (id, buyer_id, listing_id, contract_version_id, idempotency_key, request_hash, state, price_atomic, asset, fee_bps, created_at, updated_at) VALUES ('exec_crash', ?, ?, ?, 'crash-key-1', 'h', 'HELD', 20000, 'USDT', 300, ?, ?)",
+    "INSERT INTO executions (id, buyer_id, listing_id, contract_version_id, idempotency_key, request_hash, state, price_atomic, asset, fee_bps, created_at, updated_at) VALUES ('exec_crash', ?, ?, ?, 'crash-key-1', 'h', 'HELD', 20000, 'TESTUSDT', 300, ?, ?)",
   ).run(s.buyer, s.demo.priceListingId, lst.id, new Date(T0).toISOString(), new Date(T0).toISOString());
   // (the hold entries are posted by startExecution; here we only check state handling of a stuck HELD row)
   const rec = recoverExecutions(s.db, { staleHeldMs: 60_000, unresolvedMs: 600_000 }, () => T0 + 120_000);

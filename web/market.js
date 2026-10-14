@@ -54,7 +54,7 @@ async function renderBuyer() {
     return renderBuyer();
   }
   box.append(
-    el('p', {}, el('strong', { text: `${me.available} ${me.asset}` }), ' available · ', `${me.held} held`, el('span', { class: 'badge', text: 'TEST CREDITS' })),
+    el('p', {}, el('strong', { text: `${me.available} ${me.asset}` }), ' available · ', `${me.held} held `, el('span', { class: 'badge', text: 'TEST CREDITS' })),
     el('div', { class: 'row' },
       el('button', { type: 'button', class: 'secondary', text: 'Add 1 test credit', onclick: async () => {
         const d = await api('/credits', { body: { amount: '1' }, bearer: session.buyer });
@@ -77,15 +77,15 @@ async function loadCatalog() {
   for (const it of d.items) {
     const price = !it.pricing ? 'price on request'
       : it.pricing.kind === 'fixed' ? `${it.pricing.usd} ${it.pricing.asset}`
-        : `${it.pricing.minUsd}–${it.pricing.maxUsd} (indicative)`;
+        : (it.pricing.minUsd === it.pricing.maxUsd ? `${it.pricing.minUsd} (indicative)` : `${it.pricing.minUsd}–${it.pricing.maxUsd} (indicative)`);
     const card = el('div', { class: 'svc' },
       el('div', {}, el('strong', { text: it.title }), ' ', it.demo && el('span', { class: 'badge', text: 'DEMO' })),
       el('div', { class: 'muted', text: it.description.slice(0, 160) }),
       el('div', { class: 'price', text: price }),
-      el('div', {}, el('span', { class: 'badge', text: it.execution === 'payrail-gateway' ? 'Pay only if it qualifies' : 'Direct x402 (Buy gateway)' })),
+      el('div', {}, el('span', { class: 'badge', text: it.execution === 'payrail-gateway' ? 'Pay only if it qualifies' : 'Direct x402 (Buy gateway)' }), ' ', !it.available && el('span', { class: 'badge', text: 'Unavailable' })),
     );
     if (it.execution === 'payrail-gateway') card.append(el('button', { type: 'button', text: 'Try it', onclick: () => select(it) }));
-    else card.append(el('a', { href: '/', text: 'Pay with the Buy flow' }));
+    else if (it.available) card.append(el('a', { href: '/', text: 'Pay with the Buy flow' }));
     list.append(card);
   }
 }
@@ -130,7 +130,7 @@ async function renderHistory() {
   const d = await api('/executions', { bearer: session.buyer });
   if (!d.ok) { box.textContent = fail(d); return; }
   if (!d.executions.length) { box.textContent = 'No requests yet.'; return; }
-  box.append(el('ul', {}, ...d.executions.map((e) => el('li', { text: `${e.at.slice(0, 19)}  ${e.listing}  ${e.state}  ${e.price} ${e.asset}${e.reason ? ` — ${e.reason}` : ''}` }))));
+  box.append(el('ul', {}, ...d.executions.map((e) => el('li', { text: `${e.at.slice(0, 19).replace('T', ' ')}  ${e.listing}  ${e.state === 'QUALIFIED' ? `charged ${e.price} ${e.asset}` : e.state === 'UNRESOLVED' ? `held ${e.price} ${e.asset} (outcome unknown)` : `not charged (${e.state})`}${e.reason && e.state !== 'QUALIFIED' ? ` — ${e.reason}` : ''}` }))));
 }
 
 // ------------------------------------------------------------------ seller

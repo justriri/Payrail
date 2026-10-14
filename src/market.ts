@@ -18,7 +18,9 @@ import { VaultError, listCredentials, putCredential, revokeCredential } from './
 import type { MasterKey } from './vault.ts';
 import { randomBytes, createHash } from 'node:crypto';
 
-export const ASSET = 'USDT';
+/** Test credits live in their own ledger asset so they can never mix with real funds. */
+export const TEST_ASSET = 'TESTUSDT';
+export const LIVE_ASSET = 'USDT';
 export const DECIMALS = 6;
 /** a buyer may hold at most this many test credits in total granted (atomic, 6 decimals) */
 export const TEST_CREDIT_CAP = 5_000_000n;
@@ -142,16 +144,17 @@ export function createBuyer(rt: MarketRuntime): { accountId: string; token: stri
 export function grantTestCredits(rt: MarketRuntime, buyerId: string, amount: bigint): { granted: bigint; total: bigint } {
   const total = sumGranted(rt.db, buyerId);
   if (amount <= 0n) throw bad('amount must be positive');
-  if (total + amount > TEST_CREDIT_CAP) throw new ApiError(409, 'TEST_CREDIT_CAP', `test credits are capped at ${formatAtomic(TEST_CREDIT_CAP)} ${ASSET} per buyer`);
+  if (total + amount > TEST_CREDIT_CAP) throw new ApiError(409, 'TEST_CREDIT_CAP', `test credits are capped at ${formatAtomic(TEST_CREDIT_CAP)} ${TEST_ASSET} per buyer`);
   const n = Number(queryOne<{ n: bigint }>(rt.db, "SELECT COUNT(*) AS n FROM ledger_transactions WHERE kind = 'deposit' AND ref LIKE ?", `testcredit:${buyerId}:%`)!.n);
-  deposit(rt.db, { buyerId, asset: ASSET, amountAtomic: amount, ref: `testcredit:${buyerId}:${n + 1}`, memo: 'TEST CREDITS (not real money)' }, rt.now ?? Date.now);
+  deposit(rt.db, { buyerId, asset: TEST_ASSET, amountAtomic: amount, ref: `testcredit:${buyerId}:${n + 1}`, memo: 'TEST CREDITS (not real money)' }, rt.now ?? Date.now);
   return { granted: amount, total: total + amount };
 }
 function sumGranted(db: Db, buyerId: string): bigint {
   const r = queryOne<{ s: bigint | null }>(
     db,
-    "SELECT SUM(e.amount) AS s FROM ledger_entries e JOIN ledger_transactions t ON t.id = e.tx_id JOIN ledger_accounts a ON a.id = e.account_id WHERE t.kind = 'deposit' AND a.owner_id = ? AND a.kind = 'buyer_available'",
+    "SELECT SUM(e.amount) AS s FROM ledger_entries e JOIN ledger_transactions t ON t.id = e.tx_id JOIN ledger_accounts a ON a.id = e.account_id WHERE t.kind = 'deposit' AND a.owner_id = ? AND a.kind = 'buyer_available' AND e.asset = ?",
     buyerId,
+    TEST_ASSET,
   );
   return BigInt(r?.s ?? 0n);
 }
@@ -275,13 +278,13 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
   if (method === 'GET' && path === '/me') {
     const id = account();
     const kind = kindOf(id);
-    const out: Record<string, unknown> = { accountId: id, kind, mode: 'test-credits', asset: ASSET };
+    const out: Record<string, unknown> = { accountId: id, kind, mode: 'test-credits', asset: TEST_ASSET };
     if (kind === 'buyer') {
-      out.available = formatAtomic(balance(db, id, 'buyer_available', ASSET));
-      out.held = formatAtomic(balance(db, id, 'buyer_held', ASSET));
+      out.available = formatAtomic(balance(db, id, 'buyer_available', TEST_ASSET));
+      out.held = formatAtomic(balance(db, id, 'buyer_held', TEST_ASSET));
       out.creditCap = formatAtomic(TEST_CREDIT_CAP);
     } else {
-      out.earnings = formatAtomic(balance(db, id, 'seller_earnings', ASSET));
+      out.earnings = formatAtomic(balance(db, id, 'seller_earnings', TEST_ASSET));
     }
     return ok(out);
   }
@@ -325,7 +328,7 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
     const r = submitListing(
       db,
       id,
-      { name: str(body.name, 'name', 80), description: typeof body.description === 'string' ? body.description : '', endpointUrl: str(body.endpointUrl, 'endpointUrl', 500), method: meth, priceAtomic: parseAtomic(body.price), asset: ASSET },
+      { name: str(body.name, 'name', 80), description: typeof body.description === 'string' ? body.description : '', endpointUrl: str(body.endpointUrl, 'endpointUrl', 500), method: meth, priceAtomic: parseAtomic(body.price), asset: TEST_ASSET },
       now,
     );
     return ok({ listing: listingView(db, r.listing, true) }, 201);
@@ -394,8 +397,8 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
     const states = query(db, 'SELECT e.state, COUNT(*) AS n, SUM(COALESCE(e.seller_atomic, 0)) AS s FROM executions e JOIN listings l ON l.id = e.listing_id WHERE l.seller_id = ? GROUP BY e.state', id);
     const recent = query(db, 'SELECT e.*, l.name FROM executions e JOIN listings l ON l.id = e.listing_id WHERE l.seller_id = ? ORDER BY e.created_at DESC LIMIT 30', id);
     return ok({
-      asset: ASSET,
-      earnings: formatAtomic(balance(db, id, 'seller_earnings', ASSET)),
+      asset: TEST_ASSET,
+      earnings: formatAtomic(balance(db, id, 'seller_earnings', TEST_ASSET)),
       byState: states.map((r) => ({ state: String(r.state), count: Number(r.n), sellerAtomic: formatAtomic(BigInt(r.s as bigint)) })),
       recent: recent.map(executionRow),
       note: 'Test credits. Settlement of real funds is not enabled.',

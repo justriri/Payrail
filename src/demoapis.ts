@@ -124,7 +124,7 @@ export function seedDemo(db: Db, mk: MasterKey, now: () => number = Date.now): {
     const id = `lst_demo_${randomUUID().slice(0, 8)}`;
     const at = new Date(now()).toISOString();
     db.prepare(
-      "INSERT INTO listings (id, seller_id, name, status, price_atomic, asset, created_at, endpoint_url, http_method, description, host, verified_at, demo) VALUES (?, ?, ?, 'verified', ?, 'USDT', ?, ?, ?, ?, ?, ?, 1)",
+      "INSERT INTO listings (id, seller_id, name, status, price_atomic, asset, created_at, endpoint_url, http_method, description, host, verified_at, demo) VALUES (?, ?, ?, 'verified', ?, 'TESTUSDT', ?, ?, ?, ?, ?, ?, 1)",
     ).run(id, seller, name, price, at, `https://${host}${path}`, method, description, host, at);
     audit(db, 'system', 'demo.seeded', id, { host }, new Date(now()));
     if (cred) putCredential(db, mk, { listingId: id, label: 'api-key', headerName: 'X-Api-Key', value: DEMO_PRICE_KEY, actor: 'system' }, now);

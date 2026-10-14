@@ -15,6 +15,8 @@ import type { SQLInputValue } from 'node:sqlite';
 export type Db = DatabaseSync;
 
 export interface Migration {
+  /** true when the migration rebuilds tables that other tables reference: runs with foreign keys off, then re-checks them */
+  rebuild?: boolean;
   version: number;
   name: string;
   sql: string;
@@ -193,11 +195,91 @@ const V4 = `
 ALTER TABLE listings ADD COLUMN demo INTEGER NOT NULL DEFAULT 0;
 `;
 
+/** Version 5: payouts, on-chain deposits, funding wallets, agent keys. Rebuilds the ledger tables to allow the new kinds. */
+const V5 = `
+CREATE TABLE ledger_accounts_new (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  owner_id TEXT NOT NULL REFERENCES accounts(id),
+  kind TEXT NOT NULL CHECK (kind IN ('buyer_available','buyer_held','seller_earnings','platform_fee','external_funding','payout_pending')),
+  asset TEXT NOT NULL,
+  UNIQUE (owner_id, kind, asset)
+) STRICT;
+INSERT INTO ledger_accounts_new (id, owner_id, kind, asset) SELECT id, owner_id, kind, asset FROM ledger_accounts;
+DROP TABLE ledger_accounts;
+ALTER TABLE ledger_accounts_new RENAME TO ledger_accounts;
+
+DROP TRIGGER IF EXISTS ledger_tx_no_update;
+DROP TRIGGER IF EXISTS ledger_tx_no_delete;
+CREATE TABLE ledger_transactions_new (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL CHECK (kind IN ('deposit','hold','capture','release','payout_request','payout_confirm','payout_cancel')),
+  execution_id TEXT REFERENCES executions(id),
+  ref TEXT,
+  memo TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE (kind, execution_id),
+  UNIQUE (kind, ref)
+) STRICT;
+INSERT INTO ledger_transactions_new (id, kind, execution_id, ref, memo, created_at) SELECT id, kind, execution_id, ref, memo, created_at FROM ledger_transactions;
+DROP TABLE ledger_transactions;
+ALTER TABLE ledger_transactions_new RENAME TO ledger_transactions;
+CREATE TRIGGER ledger_tx_no_update BEFORE UPDATE ON ledger_transactions BEGIN SELECT RAISE(ABORT, 'ledger transactions are immutable'); END;
+CREATE TRIGGER ledger_tx_no_delete BEFORE DELETE ON ledger_transactions BEGIN SELECT RAISE(ABORT, 'ledger transactions are immutable'); END;
+
+CREATE TABLE funding_wallets (
+  address TEXT PRIMARY KEY,
+  buyer_id TEXT NOT NULL REFERENCES accounts(id),
+  signature TEXT NOT NULL,
+  verified_at TEXT NOT NULL
+) STRICT;
+CREATE TABLE chain_deposits (
+  ref TEXT PRIMARY KEY,
+  buyer_id TEXT NOT NULL REFERENCES accounts(id),
+  tx_hash TEXT NOT NULL,
+  log_index INTEGER NOT NULL,
+  from_address TEXT NOT NULL,
+  amount_atomic INTEGER NOT NULL CHECK (amount_atomic > 0),
+  asset TEXT NOT NULL,
+  block_number INTEGER NOT NULL,
+  credited_at TEXT NOT NULL
+) STRICT;
+CREATE TABLE payouts (
+  id TEXT PRIMARY KEY,
+  seller_id TEXT NOT NULL REFERENCES accounts(id),
+  asset TEXT NOT NULL,
+  amount_atomic INTEGER NOT NULL CHECK (amount_atomic > 0),
+  destination TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('requested','approved','sent','confirmed','cancelled','failed')),
+  tx_hash TEXT,
+  requested_at TEXT NOT NULL,
+  approved_at TEXT,
+  approved_by TEXT,
+  sent_at TEXT,
+  settled_at TEXT,
+  note TEXT
+) STRICT;
+CREATE INDEX payouts_seller ON payouts (seller_id, state);
+CREATE TABLE agents (
+  id TEXT PRIMARY KEY,
+  owner_id TEXT NOT NULL REFERENCES accounts(id),
+  name TEXT NOT NULL,
+  key_hash TEXT NOT NULL UNIQUE,
+  per_request_cap INTEGER NOT NULL CHECK (per_request_cap > 0),
+  daily_cap INTEGER NOT NULL CHECK (daily_cap > 0),
+  allowed_listings TEXT,
+  status TEXT NOT NULL CHECK (status IN ('active','revoked')),
+  created_at TEXT NOT NULL,
+  revoked_at TEXT
+) STRICT;
+ALTER TABLE executions ADD COLUMN agent_id TEXT;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'accounts, listings, contracts, ledger, executions, audit', sql: V1 },
   { version: 2, name: 'encrypted seller credentials', sql: V2 },
   { version: 3, name: 'sign-in, listing endpoints, ownership challenges, test runs', sql: V3 },
   { version: 4, name: 'demo listings flag', sql: V4 },
+  { version: 5, name: 'payouts, chain deposits, funding wallets, agents', sql: V5, rebuild: true },
 ];
 
 /** Open (creating the file and folder if needed) and bring the schema up to date. ':memory:' for tests. */
@@ -216,10 +298,19 @@ export function migrate(db: Db, migrations: readonly Migration[]): number[] {
   const applied: number[] = [];
   for (const m of [...migrations].sort((a, b) => a.version - b.version)) {
     if (done.has(m.version)) continue;
-    inTransaction(db, () => {
-      db.exec(m.sql);
-      db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(m.version, m.name, new Date().toISOString());
-    });
+    if (m.rebuild) db.exec('PRAGMA foreign_keys = OFF;');
+    try {
+      inTransaction(db, () => {
+        db.exec(m.sql);
+        if (m.rebuild) {
+          const broken = db.prepare('PRAGMA foreign_key_check').all();
+          if (broken.length) throw new Error(`migration ${m.version} left ${broken.length} broken foreign key(s)`);
+        }
+        db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(m.version, m.name, new Date().toISOString());
+      });
+    } finally {
+      if (m.rebuild) db.exec('PRAGMA foreign_keys = ON;');
+    }
     applied.push(m.version);
   }
   return applied;
