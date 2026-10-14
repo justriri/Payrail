@@ -142,9 +142,56 @@ CREATE TABLE credentials (
 CREATE INDEX credentials_listing ON credentials (listing_id, status);
 `;
 
+/** Version 3: wallet sign-in, sessions, listing endpoint details, ownership challenges, seller test runs. */
+const V3 = `
+ALTER TABLE accounts ADD COLUMN wallet_address TEXT;
+CREATE UNIQUE INDEX accounts_wallet ON accounts (wallet_address) WHERE wallet_address IS NOT NULL;
+ALTER TABLE listings ADD COLUMN endpoint_url TEXT;
+ALTER TABLE listings ADD COLUMN http_method TEXT NOT NULL DEFAULT 'GET';
+ALTER TABLE listings ADD COLUMN description TEXT NOT NULL DEFAULT '';
+ALTER TABLE listings ADD COLUMN host TEXT;
+ALTER TABLE listings ADD COLUMN verified_at TEXT;
+CREATE TABLE login_nonces (
+  nonce TEXT PRIMARY KEY,
+  wallet TEXT NOT NULL,
+  message TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  used_at TEXT
+) STRICT;
+CREATE TABLE sessions (
+  token_hash TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id),
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  revoked_at TEXT
+) STRICT;
+CREATE TABLE ownership_challenges (
+  listing_id TEXT PRIMARY KEY REFERENCES listings(id),
+  token TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  wallet_signature TEXT,
+  wallet_verified_at TEXT,
+  domain_method TEXT CHECK (domain_method IN ('dns_txt','well_known')),
+  domain_verified_at TEXT
+) STRICT;
+CREATE TABLE test_runs (
+  id TEXT PRIMARY KEY,
+  listing_id TEXT NOT NULL REFERENCES listings(id),
+  created_at TEXT NOT NULL,
+  input_json TEXT NOT NULL,
+  outcome TEXT NOT NULL,
+  http_status INTEGER,
+  elapsed_ms INTEGER,
+  report_json TEXT NOT NULL
+) STRICT;
+CREATE TRIGGER contract_body_immutable BEFORE UPDATE OF body_json, body_hash, version, listing_id ON contract_versions BEGIN SELECT RAISE(ABORT, 'contract versions are immutable'); END;
+CREATE TRIGGER contract_no_delete BEFORE DELETE ON contract_versions BEGIN SELECT RAISE(ABORT, 'contract versions cannot be deleted'); END;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'accounts, listings, contracts, ledger, executions, audit', sql: V1 },
   { version: 2, name: 'encrypted seller credentials', sql: V2 },
+  { version: 3, name: 'sign-in, listing endpoints, ownership challenges, test runs', sql: V3 },
 ];
 
 /** Open (creating the file and folder if needed) and bring the schema up to date. ':memory:' for tests. */
