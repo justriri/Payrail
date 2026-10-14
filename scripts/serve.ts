@@ -235,6 +235,8 @@ if (args.includes('--escrow-testnet')) {
     process.exit(1);
   }
   escrow = createTestnetEscrow({ operatorKey: k as `0x${string}` });
+  // the demo seller needs a payee address on the testnet escrow path: use the testnet operator (it can claim)
+  marketDb.prepare("UPDATE accounts SET wallet_address = ? WHERE id = 'seller_demo' AND wallet_address IS NULL").run(escrow.testnet!.wallet.toLowerCase());
   line(`Testnet escrow enabled: ${escrow.testnet!.escrow} on Celo Sepolia (mock token, no real value).`);
 }
 const limiter = () => new RateLimiter(60, 10);

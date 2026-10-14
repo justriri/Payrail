@@ -15,6 +15,9 @@ function el(tag, attrs, ...kids) {
   return e;
 }
 const clear = (n) => { while (n.firstChild) n.removeChild(n.firstChild); };
+// conditional children (cond && el(...)) may be false/null: never render them as text
+const _append = Element.prototype.append;
+Element.prototype.append = function (...kids) { return _append.apply(this, kids.filter((k) => k !== false && k !== null && k !== undefined)); };
 
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -159,6 +162,7 @@ $('run-btn').addEventListener('click', async () => {
   if (r.checks.length) out.append(el('ul', {}, ...r.checks.map((c) => el('li', { text: `${c.ok ? '✓' : '✗'} ${c.name} — ${c.detail}` }))));
   if (r.body !== undefined) out.append(el('pre', { text: JSON.stringify(r.body, null, 2) }));
   renderBuyer(); renderHistory(); renderEscrow();
+  if (session.seller) renderSeller();
 });
 
 async function renderHistory() {
@@ -333,6 +337,7 @@ function listingPanel(l, box) {
     if (!d.ok) { flash(box, fail(d), true); return d; }
     if (okText) flash(box, okText);
     renderSeller();
+    loadCatalog();
     return d;
   };
   const c = l.challenge;
@@ -398,7 +403,7 @@ function listingPanel(l, box) {
       result,
       el('ul', {}, ...l.contracts.map((x) => el('li', {}, `contract v${x.version} ${x.status} `, x.status === 'proposed' && el('button', { type: 'button', class: 'secondary', text: 'Approve', onclick: async () => {
         const d = await api(`/seller/contract/${x.id}/approve`, { body: {}, bearer: session.seller });
-        flash(box, d.ok ? 'Contract approved.' : fail(d), !d.ok); renderSeller();
+        flash(box, d.ok ? 'Contract approved.' : fail(d), !d.ok); renderSeller(); loadCatalog();
       } })))),
     ));
   }
