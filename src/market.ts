@@ -31,7 +31,7 @@ import { buyerStatement, quoteFor, receiptFor, sellerStatement } from './billing
 import { agentExecutionIds, agentUsage } from './agents.ts';
 import type { PayoutPolicy } from './payouts.ts';
 import { EscrowError, executeEscrowRequest } from './escrow.ts';
-import { FundingOpError, approveFunding, fundingEvents, fundingView, getFundingOp, listFundingOps, requestFundingQuote, verifyAndCredit } from './marketfunding.ts';
+import { FundingOpError, approveFunding, fundingEvents, fundingView, getFundingOp, listFundingOps, recordClientTx, requestFundingQuote, verifyAndCredit } from './marketfunding.ts';
 import type { FundingConfig as ConversionFundingConfig } from './marketfunding.ts';
 import { SIM_SCENARIOS } from './simfunding.ts';
 import { fundingConfigFor, fundingConfigForOp, routeLimits } from './multifunding.ts';
@@ -716,7 +716,7 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
         enabled: true, multiAsset: true, mode: c.simulated ? 'simulated' : 'live', simulated: c.simulated,
         banner: c.simulated ? 'SIMULATED conversion: no real assets are spent and no real USDT is received. Credits are test credits.' : 'LIVE conversion into USDT.',
         buy: 'USDT', creditAsset: c.creditAsset, creditLabel: c.simulated ? 'test credits (simulated funding)' : 'USDT',
-        depositAddress: c.depositAddress, minConfirmations: c.minConfirmations,
+        depositAddress: c.depositAddress, minConfirmations: c.minConfirmations, usdt: c.usdt, buyerSigned: Boolean(c.buyerSwap && !c.simulated && rt.live), chainId: c.chainId,
         steps: ['Pick an asset and an amount and get a quote (nothing is converted yet)', 'Review the rate, fee, minimum and what will be credited, then approve', 'Your wallet converts, then deposits the USDT; each step is verified on-chain before your balance is credited'],
         scenarios: c.simulated ? SIM_FUNDING_SCENARIOS : [],
       });
@@ -755,6 +755,35 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
       const o = path === '/fund/approve'
         ? await approveFunding(db, cfg, { opId, buyerId: id, digest: str(body.digest, 'digest', 100) }, now)
         : await verifyAndCredit(db, cfg, opId, now);
+      return ok({ operation: fundingView(o, now()), events: fundingEvents(db, o.id) });
+    }
+    // ---- buyer-signed conversion: the server prepares VALIDATED steps; the buyer's own wallet signs and sends them
+    if (method === 'POST' && path === '/fund/prepare') {
+      if (!c.buyerSwap || c.simulated || !rt.live) throw new ApiError(409, 'NOT_ENABLED', 'buyer-signed conversion is not enabled on this server');
+      const opId = str(body.opId, 'opId', 80);
+      const cur = getFundingOp(db, opId);
+      if (!cur || cur.buyerId !== id) throw new ApiError(404, 'NOT_FOUND', 'no such funding operation');
+      if (cur.state !== 'CONVERTING' || cur.stage !== 'client') throw new ApiError(409, 'WRONG_STATE', 'approve the quote first; this operation is not waiting for your wallet');
+      const w = walletOf(id);
+      if (!w || !cur.taker || w.toLowerCase() !== cur.taker.toLowerCase()) throw new ApiError(409, 'NO_FUNDING_WALLET', 'the verified wallet does not match this operation');
+      const issued = Number(body.issuedAt);
+      const nonce = str(body.nonce, 'nonce', 70) as `0x${string}`;
+      const signature = str(body.signature, 'signature', 400) as `0x${string}`;
+      if (!Number.isFinite(issued) || Math.abs(now() - issued) > 5 * 60_000) throw new ApiError(422, 'PROOF_EXPIRED', 'the authorization is stale; sign again');
+      if (!(await verifyTakerProof({ taker: w as `0x${string}`, chainId: c.chainId, nonce, issuedAtMs: issued, signature }))) throw new ApiError(422, 'BAD_SIGNATURE', 'the signature was not made by your verified wallet');
+      const sell = { chainId: cur.sellChainId ?? c.chainId, address: cur.sellAddress ?? '', symbol: cur.sellSymbol, decimals: cur.sellDecimals };
+      const prepared = await c.buyerSwap.prepare({ op: cur, wallet: w, sell, proof: { nonce, issuedAt: issued, signature } });
+      audit(db, id, 'funding.prepared', cur.id, { result: prepared.kind }, new Date(now()));
+      return ok({ prepared, chainId: c.chainId, note: 'These are the only transactions your wallet should send for this conversion. Check the destination in your wallet before confirming.' });
+    }
+    if (method === 'POST' && path === '/fund/tx') {
+      if (!c.buyerSwap || c.simulated || !rt.live) throw new ApiError(409, 'NOT_ENABLED', 'buyer-signed conversion is not enabled on this server');
+      const opId = str(body.opId, 'opId', 80);
+      const kind = body.kind === 'approve' || body.kind === 'swap' || body.kind === 'deposit' ? body.kind : undefined;
+      if (!kind) throw bad('kind must be approve, swap or deposit');
+      const cur = getFundingOp(db, opId);
+      if (!cur || cur.buyerId !== id) throw new ApiError(404, 'NOT_FOUND', 'no such funding operation');
+      const o = await recordClientTx(db, fundingConfigForOp(c, cur), { opId, buyerId: id, kind, txHash: str(body.txHash, 'txHash', 80) }, now);
       return ok({ operation: fundingView(o, now()), events: fundingEvents(db, o.id) });
     }
   }

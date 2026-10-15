@@ -435,6 +435,72 @@ async function renderAddFunds() {
   } else box.append(el('p', { class: 'muted', text: 'No funding operations yet.' }));
 }
 
+
+// BUYER-SIGNED conversion: every transaction below is sent by the buyer's OWN wallet. Payrail only prepares validated
+// steps and verifies the chain afterwards; nothing is credited until the deposit to the marketplace address is verified.
+function buyerSignedPanel(card, op) {
+  const msg = el('p', { class: 'muted', role: 'status' });
+  const say2 = (t, bad) => { msg.textContent = t; msg.className = bad ? 'problem' : 'muted'; };
+  const report = async (kind, hash) => {
+    const r = await api('/fund/tx', { body: { opId: op.id, kind, txHash: hash }, bearer: session.buyer });
+    if (!r.ok) throw new Error(fail(r));
+    fund.op = r.operation; return r.operation;
+  };
+  const send = async (to, data) => window.ethereum.request({ method: 'eth_sendTransaction', params: [{ from: op.taker, to, data, value: '0x0' }] });
+  const wallet = async () => {
+    if (!window.ethereum) throw new Error('No browser wallet found.');
+    const [acct] = await window.ethereum.request({ method: 'eth_requestAccounts' });
+    if (acct.toLowerCase() !== String(op.taker).toLowerCase()) throw new Error('Switch your wallet to ' + op.taker + ' (the wallet you verified).');
+    const chain = parseInt(await window.ethereum.request({ method: 'eth_chainId' }), 16);
+    if (chain !== fund.cfg.chainId) throw new Error('Switch your wallet to chain ' + fund.cfg.chainId + '.');
+  };
+  const row = el('div', { class: 'row' });
+  const awaitingConversion = op.state === 'CONVERTING' && op.stage === 'client';
+  const awaitingDeposit = op.stage === 'deposit' && !op.txs.deposit && op.receivedAtomic;
+  if (awaitingConversion) {
+    row.append(el('button', { type: 'button', text: 'Sign and send the conversion from my wallet', onclick: async (e) => {
+      e.target.disabled = true;
+      try {
+        await wallet();
+        say2('Step 1: sign the authorization (no transaction, no funds move)…');
+        const a = await api('/fund/wallet/authorization-check', { body: {}, bearer: session.buyer });
+        if (!a.ok) throw new Error(fail(a));
+        const td = a.typedData;
+        const typed = JSON.stringify({ domain: td.domain, types: { EIP712Domain: [{ name: 'name', type: 'string' }, { name: 'version', type: 'string' }, { name: 'chainId', type: 'uint256' }], ...td.types }, primaryType: td.primaryType, message: td.message });
+        const signature = await window.ethereum.request({ method: 'eth_signTypedData_v4', params: [op.taker, typed] });
+        say2('Step 2: asking for a firm quote and validating it…');
+        const p = await api('/fund/prepare', { body: { opId: op.id, nonce: a.nonce, issuedAt: a.issuedAt, signature }, bearer: session.buyer });
+        if (!p.ok) throw new Error(fail(p));
+        const pr = p.prepared;
+        if (pr.kind !== 'ready') throw new Error(pr.kind === 'no_quote' ? 'No market maker is quoting this route right now. Nothing was sent.' : 'The quote failed validation and was not used: ' + pr.problems.join('; ') + '. Nothing was sent.');
+        const left = Math.round((pr.expiresAtMs - Date.now()) / 1000);
+        say2('Step 3: confirm each transaction in your wallet (quote valid for about ' + left + 's)…');
+        for (const st of pr.steps) {
+          const h = await send(st.to, st.data);
+          if (st.kind === 'swap') { await report('swap', h); say2('Conversion sent. Verifying on-chain; this can take about a minute…'); }
+          else { await report('approve', h); say2('Approval sent; waiting for it to be mined…'); await new Promise((r) => setTimeout(r, 6000)); }
+        }
+        renderAddFundsHistoryOnly();
+      } catch (err) { say2(err.message, true); e.target.disabled = false; }
+    } }));
+  } else if (awaitingDeposit) {
+    row.append(el('button', { type: 'button', text: 'Send the USDT to the marketplace from my wallet', onclick: async (e) => {
+      e.target.disabled = true;
+      try {
+        await wallet();
+        const amt = BigInt(op.receivedAtomic).toString(16).padStart(64, '0');
+        const to = fund.cfg.depositAddress.toLowerCase().replace(/^0x/, '').padStart(64, '0');
+        const h = await send(fund.cfg.usdt, '0xa9059cbb' + to + amt);
+        await report('deposit', h);
+        say2('Deposit sent. Verifying; it is credited only after enough confirmations.');
+        renderAddFundsHistoryOnly();
+      } catch (err) { say2(err.message, true); e.target.disabled = false; }
+    } }));
+  }
+  if (row.childNodes.length) card.append(el('p', { class: 'muted', text: 'Your own wallet signs and sends every transaction. Payrail never holds your keys and never sends funds for you.' }), row);
+  card.append(msg);
+}
+
 function renderFundOp(box) {
   const holder = box.querySelector('#fund-op') || el('div', { id: 'fund-op' });
   if (!holder.parentNode) box.append(holder);
@@ -458,6 +524,7 @@ function renderFundOp(box) {
   holder.append(card);
   const status = el('p', { class: 'headline', text: op.statusText });
   card.append(status);
+  if (!op.simulated && fund.cfg && fund.cfg.buyerSigned && ['CONVERTING', 'VERIFYING'].includes(op.state)) buyerSignedPanel(card, op);
   if (op.state === 'QUOTED') {
     const exp = el('p', { class: 'muted' });
     const upd = () => {

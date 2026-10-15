@@ -22,7 +22,7 @@ import { LedgerError, deposit } from './ledger.ts';
 export class FundingOpError extends Error {
   code:
     | 'BAD_AMOUNT' | 'BELOW_MINIMUM' | 'ABOVE_MAXIMUM' | 'DAILY_LIMIT' | 'TOO_MANY_OPEN' | 'QUOTE_UNAVAILABLE' | 'NOT_FOUND' | 'NOT_OWNER'
-    | 'WRONG_STATE' | 'QUOTE_EXPIRED' | 'DIGEST_MISMATCH' | 'SIGNING_UNAVAILABLE' | 'IDEMPOTENCY_CONFLICT' | 'NOT_ALLOWED';
+    | 'WRONG_STATE' | 'QUOTE_EXPIRED' | 'DIGEST_MISMATCH' | 'SIGNING_UNAVAILABLE' | 'IDEMPOTENCY_CONFLICT' | 'NOT_ALLOWED' | 'BAD_INPUT' | 'TX_ALREADY_USED' | 'ALREADY_RECORDED';
   constructor(code: FundingOpError['code'], message: string) {
     super(message);
     this.name = 'FundingOpError';
@@ -76,6 +76,12 @@ export interface FundingConverter {
    * recipient parameter). For buyer funding this is the buyer's own wallet.
    */
   recipient: string;
+  /**
+   * The BUYER's own wallet signs and sends every transaction (approve, swap, deposit). This server never signs for the
+   * buyer: `execute` is not called, and the engine waits for the buyer to report transaction hashes, which it then verifies
+   * from the chain exactly like any other conversion.
+   */
+  clientSigned?: boolean;
   /** When set, the USDT must then be transferred from `recipient` to this custody address, and only that transfer is credited. */
   depositAddress?: string;
   quote(req: { sellAtomic: bigint; scenario?: string }): Promise<ConverterQuote>;
@@ -240,7 +246,8 @@ export async function requestFundingQuote(
     if (BigInt(String(prior.sell_atomic)) !== a.sellAtomic) throw new FundingOpError('IDEMPOTENCY_CONFLICT', 'this request key was already used for a different amount');
     return toOp(prior);
   }
-  if (cfg.converter.mode === 'live' && !(cfg.allowedBuyerIds && cfg.allowedBuyerIds.includes(a.buyerId))) {
+  // a live converter that spends the OPERATOR wallet is restricted; a buyer-signed one spends only the buyer's own funds
+  if (cfg.converter.mode === 'live' && !cfg.converter.clientSigned && !(cfg.allowedBuyerIds && cfg.allowedBuyerIds.includes(a.buyerId))) {
     throw new FundingOpError('NOT_ALLOWED', 'live funding converts the operator wallet funds and is restricted to the designated buyer account');
   }
   const L = cfg.limits;
@@ -311,6 +318,10 @@ export async function approveFunding(
   event(db, op0.id, 'CONVERTING', 'buyer approved the exact quote; conversion started', { digest: a.digest }, now());
   audit(db, a.buyerId, 'funding.approved', op0.id, { sell: op0.sellAtomic.toString() }, new Date(now()));
 
+  if (cfg.converter.clientSigned) {
+    setState(db, op0.id, 'CONVERTING', 'waiting for YOUR wallet to sign and send the conversion; nothing has been sent by Payrail', now(), { stage: 'client' });
+    return getFundingOp(db, op0.id)!;
+  }
   let r: ExecuteResult;
   try {
     r = await cfg.converter.execute({ opId: op0.id, quoteId: op0.quoteId, sellAtomic: op0.sellAtomic, minBuyAtomic: op0.minAtomic, digest: op0.approvalDigest, scenario: op0.scenario });
@@ -338,12 +349,63 @@ export async function approveFunding(
   return verifyAndCredit(db, cfg, op0.id, now);
 }
 
+/**
+ * The buyer's wallet reports a transaction it sent. The hash is only a CLAIM: it is recorded once, may not be used by any
+ * other operation, and is then verified from the chain by the same code as every other conversion.
+ */
+export async function recordClientTx(
+  db: Db,
+  cfg: FundingConfig,
+  a: { opId: string; buyerId: string; kind: 'approve' | 'swap' | 'deposit'; txHash: string },
+  now: () => number = Date.now,
+): Promise<FundingOp> {
+  const op = getFundingOp(db, a.opId);
+  if (!op) throw new FundingOpError('NOT_FOUND', 'no such funding operation');
+  if (op.buyerId !== a.buyerId) throw new FundingOpError('NOT_OWNER', 'not your funding operation');
+  if (!cfg.converter.clientSigned) throw new FundingOpError('WRONG_STATE', 'this conversion is not signed by the buyer');
+  if (!/^0x[0-9a-fA-F]{64}$/.test(a.txHash)) throw new FundingOpError('BAD_INPUT', 'a transaction hash (0x + 64 hex characters) is required');
+  // idempotent: re-reporting a transaction that is already settled changes nothing
+  if (op.state === 'CREDITED' && [op.swapTx, op.depositTx, ...op.approveTxs].some((t) => t && lower(t) === a.txHash.toLowerCase())) return op;
+  if (!['CONVERTING', 'VERIFYING'].includes(op.state) || (op.state === 'CONVERTING' && op.stage !== 'client' && !op.swapTx)) {
+    throw new FundingOpError('WRONG_STATE', `a ${op.state} operation cannot take a transaction`);
+  }
+  const tx = a.txHash.toLowerCase();
+  const used = db.prepare(
+    "SELECT id FROM funding_ops WHERE id <> ? AND (lower(swap_tx) = ? OR lower(deposit_tx) = ? OR lower(approve_txs) LIKE ?) LIMIT 1",
+  ).get(op.id, tx, tx, `%${tx}%`) ?? db.prepare('SELECT op_id AS id FROM funding_tx_claims WHERE lower(tx_hash) = ? AND op_id <> ?').get(tx, op.id);
+  if (used) throw new FundingOpError('TX_ALREADY_USED', 'that transaction is already attached to another operation');
+  if (a.kind === 'approve') {
+    if (op.approveTxs.map(lower).includes(tx)) return op;
+    db.prepare('UPDATE funding_ops SET approve_txs = ?, updated_at = ? WHERE id = ?').run(JSON.stringify([...op.approveTxs, tx]), iso(now()), op.id);
+    event(db, op.id, op.state, 'your wallet reported an approval transaction (informational; it is not what gets credited)', { tx }, now());
+    return getFundingOp(db, op.id)!;
+  }
+  if (a.kind === 'swap') {
+    if (op.swapTx) {
+      if (lower(op.swapTx) === tx) return verifyAndCredit(db, cfg, op.id, now);
+      throw new FundingOpError('ALREADY_RECORDED', 'a different swap transaction is already recorded for this operation');
+    }
+    setState(db, op.id, 'VERIFYING', 'your wallet reported the conversion transaction; verifying on-chain before anything is credited', now(), { swap_tx: tx, stage: 'swap' }, { tx });
+  } else {
+    if (!op.swapTx && !cfg.converter.passthrough) throw new FundingOpError('WRONG_STATE', 'the conversion transaction must be reported first');
+    if (op.depositTx) {
+      if (lower(op.depositTx) === tx) return verifyAndCredit(db, cfg, op.id, now);
+      throw new FundingOpError('ALREADY_RECORDED', 'a different deposit transaction is already recorded for this operation');
+    }
+    setState(db, op.id, 'VERIFYING', 'your wallet reported the deposit transaction; verifying on-chain before crediting', now(), { deposit_tx: tx, stage: 'deposit' }, { tx });
+  }
+  audit(db, a.buyerId, 'funding.client_tx', op.id, { kind: a.kind, tx }, new Date(now()));
+  return verifyAndCredit(db, cfg, op.id, now);
+}
+
 /** Read the chain for an operation that has a swap transaction and settle it. Safe to call repeatedly. */
 export async function verifyAndCredit(db: Db, cfg: FundingConfig, opId: string, now: () => number = Date.now): Promise<FundingOp> {
   const op = getFundingOp(db, opId);
   if (!op) throw new FundingOpError('NOT_FOUND', 'no such funding operation');
   if (!['VERIFYING', 'CONVERTING', 'UNRESOLVED'].includes(op.state)) return op;
   const pass = cfg.converter.passthrough === true;
+  // waiting for the buyer's own wallet: nothing exists to verify yet, and that is not a failure
+  if (cfg.converter.clientSigned && !op.swapTx && !op.depositTx && op.state === 'CONVERTING' && op.stage === 'client') return op;
   if (!op.swapTx && !(pass && op.depositTx)) {
     if (op.state === 'CONVERTING') setState(db, op.id, 'UNRESOLVED', 'interrupted before a transaction was recorded; check the wallet before retrying', now(), { failure_code: 'NO_TX_RECORDED' });
     else if (pass && op.state === 'VERIFYING') setState(db, op.id, 'REVIEW', 'no deposit transaction was recorded; nothing was credited', now(), { failure_code: 'DEPOSIT_NOT_RECORDED', stage: 'deposit' });
@@ -401,6 +463,13 @@ export async function verifyAndCredit(db: Db, cfg: FundingConfig, opId: string, 
   // ---- 2. the deposit hop: only USDT that actually reached custody from the buyer's own wallet is credited
   if (!hop || !depositTo) {
     return creditOnce(db, cfg, op, swapReceived!, now);
+  }
+  if (!op.depositTx && cfg.converter.clientSigned && op.state !== 'REVIEW') {
+    // the buyer's wallet still has to send the USDT it received to the marketplace address
+    if (op.stage !== 'deposit' || op.state !== 'VERIFYING') {
+      setState(db, op.id, 'VERIFYING', `conversion verified: ${fmt(swapReceived ?? 0n)} ${op.buySymbol} is in your wallet. Send it to the marketplace address from the same wallet to credit it.`, now(), { received_atomic: swapReceived, stage: 'deposit' });
+    }
+    return getFundingOp(db, opId)!;
   }
   if (!op.depositTx) {
     setState(db, op.id, 'REVIEW', swapReceived !== null
@@ -551,6 +620,7 @@ export function fundingView(op: FundingOp, now: number = Date.now()) {
     creditAsset: op.creditAsset,
     willBeCredited: { asset: op.creditAsset, display: op.creditedAtomic !== null ? fmt(op.creditedAtomic) : `${fmt(op.minAtomic)} to ${fmt(op.expectedAtomic)} (the verified amount received)` },
     received: op.receivedAtomic === null ? null : fmt(op.receivedAtomic),
+    receivedAtomic: op.receivedAtomic === null ? null : op.receivedAtomic.toString(),
     credited: op.creditedAtomic === null ? null : fmt(op.creditedAtomic),
     quoteExpiresAt: op.quoteExpiresAt,
     expiresInSeconds: op.state === 'QUOTED' ? Math.max(0, Math.round((Date.parse(op.quoteExpiresAt) - now) / 1000)) : null,

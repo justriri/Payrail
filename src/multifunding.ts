@@ -11,6 +11,7 @@ import { getFundingOp, parkSimulatedAfterRestart, verifyAndCredit } from './mark
 import type { ChainReader } from './funding.ts';
 import type { SimProvider } from './simconversion.ts';
 import type { PayoutConversionConfig } from './payoutconv.ts';
+import type { BuyerSwapRuntime } from './buyerswap.ts';
 
 export interface ConversionRuntime {
   registry: RouteRegistry;
@@ -28,6 +29,8 @@ export interface ConversionRuntime {
   /** simulated payouts only: present when seller payout conversion is available */
   payout?: PayoutConversionConfig;
   simulated: boolean;
+  /** present only when buyer-signed (client-side) conversion is enabled; the buyer's wallet signs every transaction */
+  buyerSwap?: BuyerSwapRuntime;
 }
 
 /** A deterministic stand-in for "the buyer's own wallet" in simulation. A live design uses the wallet the buyer proved. */
@@ -37,7 +40,10 @@ export function fundingConfigFor(rt: ConversionRuntime, asset: AssetRef, buyerId
   const isUsdt = asset.symbol === 'USDT';
   return {
     // the wallet the buyer PROVED they control, when there is one; the stand-in only exists in simulation
-    converter: rt.provider.fundingConverter(isUsdt ? USDT_CELO : asset, { taker: wallet ?? simBuyerWallet(buyerId), depositAddress: rt.depositAddress }),
+    converter: rt.buyerSwap && !rt.simulated
+      // a real runtime never falls back to a stand-in wallet: without a proven wallet the quote is refused upstream
+      ? rt.buyerSwap.converterFor(isUsdt ? USDT_CELO : asset, { taker: wallet ?? '0x0000000000000000000000000000000000000000', depositAddress: rt.depositAddress })
+      : rt.provider.fundingConverter(isUsdt ? USDT_CELO : asset, { taker: wallet ?? simBuyerWallet(buyerId), depositAddress: rt.depositAddress }),
     reader: rt.reader,
     usdt: rt.usdt,
     reactor: rt.reactor,
