@@ -208,3 +208,12 @@ body.apipage { background: var(--bg); }
   .apiwrap #api-buy { position: static; }
   .apiwrap { padding: 14px 14px 40px; }
 }
+
+/* one-click pay steps */
+.paysteps { list-style: none; margin: 12px 0 0; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.paysteps li { display: flex; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 14px; overflow-wrap: anywhere; }
+.paysteps li:last-child { border-bottom: 0; }
+.paysteps .st { width: 16px; flex: none; font-weight: 700; }
+.paysteps li[data-state="done"] .st { color: var(--ok); }
+.paysteps li[data-state="failed"] { background: var(--bad-bg); color: var(--bad); }
+.paysteps li[data-state="pending"] { color: var(--ink-2); }

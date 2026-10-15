@@ -10,11 +10,14 @@ export async function launch(port, outDir, width = 1100, height = 1400) {
   const ws = new WebSocket(targets.find((t) => t.type === 'page').webSocketDebuggerUrl);
   await new Promise((r) => (ws.onopen = r));
   let id = 0; const pending = new Map();
-  ws.onmessage = (m) => { const d = JSON.parse(m.data); if (d.id && pending.has(d.id)) { pending.get(d.id)(d); pending.delete(d.id); } };
+  const listeners = new Map();
+  ws.onmessage = (m) => { const d = JSON.parse(m.data); if (d.id && pending.has(d.id)) { pending.get(d.id)(d); pending.delete(d.id); } else if (d.method && listeners.has(d.method)) for (const f of listeners.get(d.method)) f(d.params); };
   const send = (method, params = {}) => new Promise((r) => { const i = ++id; pending.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
   const ev = async (expr) => { const r = await send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true }); return r.result?.result?.value ?? (r.result?.exceptionDetails ? 'EXC ' + JSON.stringify(r.result.exceptionDetails.exception?.description ?? r.result.exceptionDetails.text) : undefined); };
   const api = {
     sleep, send, ev,
+    /** subscribe to a CDP event, e.g. on('Runtime.bindingCalled', fn) */
+    on: (method, fn) => { if (!listeners.has(method)) listeners.set(method, []); listeners.get(method).push(fn); },
     goto: async (url, wait = 2200) => { await send('Page.navigate', { url }); await sleep(wait); },
     text: (sel) => ev(`document.querySelector(${JSON.stringify(sel)})?.innerText`),
     click: (scope, label) => ev(`(() => { const b=[...document.querySelectorAll(${JSON.stringify(scope)})].find(x=>x.textContent.includes(${JSON.stringify(label)})); if(!b) return 'NOT FOUND: ${label}'; b.click(); return 'clicked'; })()`),

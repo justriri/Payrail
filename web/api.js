@@ -175,21 +175,136 @@ function render(d, cfg) {
   runBtn.addEventListener('click', () => {
     problem.hidden = true; msg.textContent = '';
     if (!q.available) { msg.textContent = `This API cannot be used right now: ${q.unavailableReason}.`; return; }
-    if (!buyerToken) { msg.textContent = 'Start testing or sign in first.'; return; }
+    if (!buyerToken && q.asset !== 'USDT') { msg.textContent = 'Start testing or sign in first.'; return; }
     const c = checkInput(input.value, rules);
     if (!c.ok) { problem.textContent = c.problem; problem.hidden = false; return; }
     confirmRow.hidden = false;
     runBtn.disabled = true;
   });
 
-  confirmBtn.addEventListener('click', async () => {
-    const c = checkInput(input.value, rules);
-    if (!c.ok) { confirmRow.hidden = true; runBtn.disabled = false; problem.textContent = c.problem; problem.hidden = false; return; }
+  // ---- one-click pay (real USDT only): the buyer's OWN wallet tops up exactly the shortfall, the server verifies the
+  // transfer on-chain and credits it, and only then does the request run. Nothing is copied or pasted by the buyer.
+  const stepsBox = el('ol', { id: 'pay-steps', class: 'paysteps', hidden: '' });
+  buyBox.insertBefore(stepsBox, out);
+  function addStep(key, text) {
+    stepsBox.hidden = false;
+    const li = el('li', { 'data-state': 'pending', 'data-step': key }, el('span', { class: 'st', text: '…' }), ' ', el('span', { text }));
+    stepsBox.append(li);
+    return {
+      done(t) { li.dataset.state = 'done'; li.firstChild.textContent = '✓'; if (t) li.lastChild.textContent = t; },
+      fail(t) { li.dataset.state = 'failed'; li.firstChild.textContent = '✗'; li.lastChild.textContent = t; },
+      note(t) { li.lastChild.textContent = t; },
+    };
+  }
+  const lower = (x) => String(x).toLowerCase();
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const eth = () => window.ethereum;
+  const T = () => window.PayrailTopUp;
+
+  async function ensureWallet() {
+    const st = addStep('wallet', 'Connect your wallet');
+    if (!eth()) { st.fail('No browser wallet found. Install a wallet extension to pay with real USDT.'); return null; }
+    let acct;
+    try { [acct] = await eth().request({ method: 'eth_requestAccounts' }); } catch (e) { st.fail(`Wallet connection was declined: ${e.message || e}`); return null; }
+    let chain = parseInt(await eth().request({ method: 'eth_chainId' }), 16);
+    if (chain !== 42220) {
+      try {
+        await eth().request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0xa4ec' }] });
+        chain = parseInt(await eth().request({ method: 'eth_chainId' }), 16);
+      } catch { /* reported below */ }
+      if (chain !== 42220) { st.fail('Switch your wallet to Celo mainnet (chain 42220) and try again.'); return null; }
+    }
+    st.done(`Wallet connected: ${acct.slice(0, 6)}…${acct.slice(-4)} on Celo`);
+    return acct;
+  }
+
+  async function ensureSignedIn(acct) {
+    if (buyerToken) {
+      const me = await api('/me', { bearer: buyerToken });
+      if (me.ok) return true;
+      buyerToken = null; store.set('payrail.buyer', null);
+    }
+    const st = addStep('login', 'Sign in with your wallet (signature only, no transaction)');
+    const s = await api('/buyer/login/start', { body: { wallet: acct, chainId: 42220 } });
+    if (!s.ok) { st.fail(fail(s)); return false; }
+    let signature;
+    try { signature = await eth().request({ method: 'personal_sign', params: [s.message, acct] }); } catch (e) { st.fail(`Signature declined: ${e.message || e}`); return false; }
+    const c = await api('/buyer/login/complete', { body: { wallet: acct, nonce: s.nonce, signature } });
+    if (!c.ok) { st.fail(fail(c)); return false; }
+    buyerToken = c.token; store.set('payrail.buyer', c.token);
+    st.done('Signed in');
+    return true;
+  }
+
+  async function ensureFundingWallet(acct, f) {
+    if (f.wallets.map(lower).includes(lower(acct))) return true;
+    const st = addStep('verify', 'Verify this wallet as your funding wallet (signature only)');
+    const me = await api('/me', { bearer: buyerToken });
+    const message = f.walletMessageTemplate.replace('<your wallet address in lowercase>', lower(acct)).replace(/Buyer: .*\n/, `Buyer: ${me.accountId}\n`);
+    let signature;
+    try { signature = await eth().request({ method: 'personal_sign', params: [message, acct] }); } catch (e) { st.fail(`Signature declined: ${e.message || e}`); return false; }
+    const r = await api('/funding/wallet', { body: { wallet: acct, signature }, bearer: buyerToken });
+    if (!r.ok) { st.fail(fail(r)); return false; }
+    st.done('Funding wallet verified');
+    return true;
+  }
+
+  async function awaitCredit(hash, st) {
+    for (let i = 0; i < 40; i++) {
+      const r = await api('/funding/confirm', { body: { txHash: hash }, bearer: buyerToken });
+      if (r.ok) { store.set('payrail.topup', null); return true; }
+      if (!T().isPendingCode(r.code)) { st.fail(`NOT CREDITED: ${r.message || 'verification failed'} (${r.code}). Nothing was credited.`); return false; }
+      st.note(`Waiting for on-chain confirmations… (${r.message || 'pending'})`);
+      await sleep(window.__payrailPollMs || 5000);
+    }
+    st.fail('Still waiting for confirmations. Your transfer was sent; reload this page later and use "Check pending top-up".');
+    return false;
+  }
+
+  /** returns true when the balance covers the price and the request may run */
+  async function payWithWallet() {
+    clear(stepsBox);
+    const acct = await ensureWallet();
+    if (!acct) return false;
+    if (!(await ensureSignedIn(acct))) return false;
+    const f = await api('/funding', { bearer: buyerToken });
+    if (!f.ok || !f.enabled) { addStep('config', '').fail('Real-funds deposits are not enabled on this server.'); return false; }
+    if (!(await ensureFundingWallet(acct, f))) return false;
+    const me = await api('/me', { bearer: buyerToken });
+    const avail = T().parseUnits6(me.live ? me.live.available : '0');
+    const price = T().parseUnits6(q.buyerPays.display);
+    const cap = T().parseUnits6(f.maxDeposit);
+    const planSt = addStep('plan', 'Check your balance');
+    if (avail === null || price === null || cap === null) { planSt.fail('Could not read the balance or price.'); return false; }
+    const plan = T().planTopUp({ priceAtomic: price, availableAtomic: avail, maxDepositAtomic: cap });
+    if (plan.error) { planSt.fail(plan.error); return false; }
+    if (!plan.needed) { planSt.done(`Balance ${T().formatUnits6(avail)} USDT covers the price. No top-up needed.`); return true; }
+    planSt.done(`Balance ${T().formatUnits6(avail)} USDT; top-up of ${T().formatUnits6(plan.amountAtomic)} USDT needed`);
+    const send = addStep('send', `Send ${T().formatUnits6(plan.amountAtomic)} USDT from your wallet (confirm in your wallet)`);
+    let hash;
+    try {
+      hash = await eth().request({ method: 'eth_sendTransaction', params: [{ from: acct, to: f.token, data: T().transferCalldata(f.depositAddress, plan.amountAtomic), value: '0x0' }] });
+    } catch (e) { send.fail(`Transaction was not sent: ${String(e.message || e).replace(/\.$/, '')}. Nothing was charged.`); return false; }
+    store.set('payrail.topup', JSON.stringify({ hash, at: Date.now() }));
+    send.done(`Transfer sent (${String(hash).slice(0, 10)}…)`);
+    const conf = addStep('confirm', 'Waiting for on-chain confirmations');
+    if (!(await awaitCredit(hash, conf))) return false;
+    // credit exactly what was verified on-chain; if that is less than the price, stop instead of running the request
+    const me2 = await api('/me', { bearer: buyerToken });
+    const now = T().parseUnits6(me2.live ? me2.live.available : '0');
+    if (now === null || now < price) {
+      conf.fail(`Verified and credited ${T().formatUnits6(now === null ? 0n : now)} USDT, which is less than the price (${T().formatUnits6(price)} USDT). The API was not run and nothing was charged. Top up again to continue.`);
+      return false;
+    }
+    conf.done('Verified on-chain and credited');
+    return true;
+  }
+
+  async function runRequest(inputValue) {
     const useEscrow = Boolean(cfg.escrow && escrow.checked);
-    confirmBtn.disabled = true;
     msg.textContent = useEscrow ? 'Running through the TESTNET escrow (on-chain transactions, may take ~20s)…' : 'Running…';
-    const r0 = await api('/execute', { body: { listingId: l.id, input: c.value, idempotencyKey: newKey(), ...(useEscrow ? { settlement: 'escrow' } : {}) }, bearer: buyerToken });
-    confirmBtn.disabled = false; confirmRow.hidden = true; runBtn.disabled = false; msg.textContent = '';
+    const r0 = await api('/execute', { body: { listingId: l.id, input: inputValue, idempotencyKey: newKey(), ...(useEscrow ? { settlement: 'escrow' } : {}) }, bearer: buyerToken });
+    msg.textContent = '';
     clear(out);
     if (!r0.ok) { out.append(el('div', { class: 'problem', text: fail(r0) })); refreshBalance(); return; }
     const r = r0.result;
@@ -207,7 +322,35 @@ function render(d, cfg) {
     out.append(el('p', { class: 'notice', text: 'Qualified means the response matched the agreed structure, types and freshness. It does not prove the data is true.' }));
     await showReceipt(rec, r.executionId);
     refreshBalance();
+  }
+
+  confirmBtn.addEventListener('click', async () => {
+    const c = checkInput(input.value, rules);
+    if (!c.ok) { confirmRow.hidden = true; runBtn.disabled = false; problem.textContent = c.problem; problem.hidden = false; return; }
+    confirmBtn.disabled = true;
+    clear(out);
+    if (q.asset === 'USDT') {
+      msg.textContent = 'Preparing payment from your wallet…';
+      const ready = await payWithWallet();
+      msg.textContent = '';
+      if (!ready) { confirmBtn.disabled = false; confirmRow.hidden = true; runBtn.disabled = false; refreshBalance(); return; }
+    }
+    await runRequest(c.value);
+    confirmBtn.disabled = false; confirmRow.hidden = true; runBtn.disabled = false;
   });
+
+  // a transfer that was sent but not yet verified (for example the tab was closed) can be re-checked, never re-sent
+  const pending = (() => { try { return JSON.parse(store.get('payrail.topup') || 'null'); } catch { return null; } })();
+  if (pending && /^0x[0-9a-fA-F]{64}$/.test(pending.hash) && q.asset === 'USDT') {
+    buyBox.insertBefore(el('p', { class: 'notice' }, 'A top-up transfer was sent from this browser and has not been confirmed yet. ',
+      el('button', { type: 'button', class: 'secondary', id: 'check-pending', text: 'Check pending top-up', onclick: async (e) => {
+        e.target.disabled = true; clear(stepsBox);
+        const st = addStep('confirm', 'Checking the pending top-up');
+        if (!buyerToken) { st.fail('Sign in with the same wallet first.'); e.target.disabled = false; return; }
+        if (await awaitCredit(pending.hash, st)) { st.done('Verified on-chain and credited'); refreshBalance(); }
+        e.target.disabled = false;
+      } })), stepsBox);
+  }
 
   refreshBalance();
 }

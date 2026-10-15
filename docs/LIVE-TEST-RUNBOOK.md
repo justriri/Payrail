@@ -7,7 +7,7 @@ Nothing in this runbook has been executed by the build. Every step that moves mo
 | Flow | State | Evidence |
 |---|---|---|
 | Buyer wallet sign-in (signature, network named, single-use) | Implemented | Unit and HTTP tests with local signers. Never tried with a browser wallet extension. |
-| Real USDT funding: send USDT to the deposit address, paste the tx hash | Implemented | `test/market.test.ts` runs the whole path against a fake chain reader: token, sender (your verified wallet), recipient, amount, confirmations, credited once. **Never run on mainnet.** |
+| Real USDT funding: one-click from your wallet (or send manually and paste the hash) | Implemented | `test/market.test.ts` runs the whole path against a fake chain reader: token, sender (your verified wallet), recipient, amount, confirmations, credited once. **Never run on mainnet.** |
 | Create, verify and publish a real API (`REAL USDT` option) | Implemented | Same test covers DNS proof, credential, contract, publish with fakes. In real-funds mode the server now uses the real SSRF-safe egress and real DNS. **Untested against the real internet.** |
 | Pay and Use API with outcome-based billing in USDT | Implemented | Same engine as test credits; charges only validated outcomes. Real-USDT path covered by the fake-chain test. |
 | Receipts and on-chain verification of deposits | Implemented | Receipt page; deposits verified from the chain before any credit. |
@@ -16,6 +16,16 @@ Nothing in this runbook has been executed by the build. Every step that moves mo
 | Seller payouts | **Disabled for live use** | `POST /seller/payouts` returns `PAYOUTS_DISABLED` unless the operator opts in in code. Earnings stay in the ledger. |
 
 Not claimed live: any asset other than USDT as a funding source, and payouts.
+
+## One-click Pay (USDT)
+On a real-USDT API page, **Pay and Use API** now does everything from your own wallet in order, with each step shown as it
+happens: connect wallet, sign in (signature), verify the funding wallet (signature), check your balance, send **only the
+shortfall** as one USDT transfer to the deposit address, wait for the server to verify it on-chain and credit it, then run the
+API. You never copy an address or a transaction hash. If the transfer is short, only what arrived is credited and the API is
+not run; if your wallet declines, nothing is charged; a price above the per-deposit limit is refused before anything is sent.
+A transfer that was sent but not yet confirmed can be re-checked with **Check pending top-up** (it is never re-sent).
+Funds still pass through Payrail's deposit address and sit in the Payrail ledger until spent (custodial).
+Verified with a fake chain and a fake wallet (`scripts/browser/verify-pay.mjs`); not yet with a real wallet and mainnet.
 
 ## Safety limits already in place
 - `PAYRAIL_MARKET_LIVE` is off unless you start the server with it.

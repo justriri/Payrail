@@ -790,7 +790,7 @@ export function createWebServer(rt: WebRuntime, opts: { webDir?: string; token?:
 
       if (method === 'GET' && !url.pathname.startsWith('/api/')) {
         const name = url.pathname === '/' ? 'home.html' : url.pathname.slice(1);
-        if (!/^[a-z0-9._-]+$/i.test(name) || !(name in { 'index.html': 1, 'app.js': 1, 'style.css': 1, 'market.html': 1, 'market.js': 1, 'home.html': 1, 'site.css': 1, 'api.html': 1, 'api.js': 1 })) return send(res, 404, 'not found', 'text/plain');
+        if (!/^[a-z0-9._-]+$/i.test(name) || !(name in { 'index.html': 1, 'app.js': 1, 'style.css': 1, 'market.html': 1, 'market.js': 1, 'home.html': 1, 'site.css': 1, 'api.html': 1, 'api.js': 1, 'topup.js': 1 })) return send(res, 404, 'not found', 'text/plain');
         let text = readFileSync(join(dir, name), 'utf8');
         if (name === 'index.html' || name === 'market.html' || name === 'api.html') text = text.replace('__PAYRAIL_TOKEN__', token).replace('__PAYRAIL_MODE__', rt.mode);
         const ext = name.slice(name.lastIndexOf('.'));
