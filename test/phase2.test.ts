@@ -69,7 +69,7 @@ test('migration v5 preserves a populated database, keeps the immutability trigge
   const hold = startExecution(db, { buyerId: buyer, listingId: demo.priceListingId, contractVersionId: (db.prepare('SELECT id FROM contract_versions WHERE listing_id = ?').get(demo.priceListingId) as { id: string }).id, idempotencyKey: 'old-exec-1', requestHash: 'h' }, () => T0);
   const before = { avail: balance(db, buyer, 'buyer_available', 'TESTUSDT'), held: balance(db, buyer, 'buyer_held', 'TESTUSDT') };
 
-  assert.deepEqual(migrate(db, MIGRATIONS), [5, 6, 7, 8]);
+  assert.deepEqual(migrate(db, MIGRATIONS), [5, 6, 7, 8, 9]);
   assert.equal(balance(db, buyer, 'buyer_available', 'TESTUSDT'), before.avail);
   assert.equal(balance(db, buyer, 'buyer_held', 'TESTUSDT'), before.held);
   assert.deepEqual(verifyLedger(db), { ok: true, problems: [] });

@@ -57,6 +57,24 @@ async function loadConfig() {
 }
 
 // ------------------------------------------------------------------ buyer
+async function buyerLoginWallet() {
+  if (!window.ethereum) throw new Error('No browser wallet found. Install a wallet extension, or use "Start testing" for the demo buyer.');
+  const [account] = await window.ethereum.request({ method: 'eth_requestAccounts' });
+  const EXPECTED = 42220;
+  let chainId = parseInt(await window.ethereum.request({ method: 'eth_chainId' }), 16);
+  if (chainId !== EXPECTED) {
+    await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: `0x${EXPECTED.toString(16)}` }] });
+    chainId = parseInt(await window.ethereum.request({ method: 'eth_chainId' }), 16);
+    if (chainId !== EXPECTED) throw new Error('Your wallet is not on Celo mainnet (chain 42220).');
+  }
+  const s = await api('/buyer/login/start', { body: { wallet: account, chainId } });
+  if (!s.ok) throw new Error(fail(s));
+  const signature = await window.ethereum.request({ method: 'personal_sign', params: [s.message, account] });
+  const c = await api('/buyer/login/complete', { body: { wallet: account, nonce: s.nonce, signature } });
+  if (!c.ok) throw new Error(fail(c));
+  session.buyer = c.token; store.set('payrail.buyer', c.token);
+  await renderBuyer(); renderHistory(); renderAgents(); renderEscrow(); renderAddFunds();
+}
 async function quickStart() {
   const d = await api('/buyer', { body: {} });
   if (!d.ok) return flash($('buyer'), fail(d), true);
@@ -72,6 +90,10 @@ async function renderBuyer() {
     box.append(
       el('p', { text: 'You do not need a wallet to try the marketplace. One click creates a test buyer with 5 test credits (not real money).' }),
       el('button', { type: 'button', text: 'Start testing: get 5 test credits', onclick: quickStart }),
+      el('p', { class: 'muted', text: 'Or sign in with your own wallet. Signing proves you control it; it sends no transaction and never shares a key.' }),
+      el('button', { type: 'button', class: 'secondary', text: 'Sign in with wallet', onclick: async (ev) => {
+        try { await buyerLoginWallet(); } catch (e) { flash(box, e.message, true); }
+      } }),
     );
     return;
   }

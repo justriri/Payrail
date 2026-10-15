@@ -446,6 +446,17 @@ CREATE TRIGGER payout_events_no_update BEFORE UPDATE ON payout_events BEGIN SELE
 CREATE TRIGGER payout_events_no_delete BEFORE DELETE ON payout_events BEGIN SELECT RAISE(ABORT, 'payout events are append-only'); END;
 `;
 
+/** Version 9: a wallet may hold one account PER ROLE (buyer and seller), so wallet sign-in does not collide across roles. */
+const V9 = `
+CREATE TABLE account_wallets (
+  wallet TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('buyer','seller')),
+  account_id TEXT NOT NULL REFERENCES accounts(id),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (wallet, kind)
+) STRICT;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'accounts, listings, contracts, ledger, executions, audit', sql: V1 },
   { version: 2, name: 'encrypted seller credentials', sql: V2 },
@@ -455,6 +466,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 6, name: 'execution settlement mode', sql: V6 },
   { version: 7, name: 'marketplace funding operations', sql: V7 },
   { version: 8, name: 'multi-currency funding and payout conversion (stage 1)', sql: V8, rebuild: true },
+  { version: 9, name: 'per-role wallet accounts (buyer wallet sign-in)', sql: V9 },
 ];
 
 /** Open (creating the file and folder if needed) and bring the schema up to date. ':memory:' for tests. */

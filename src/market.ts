@@ -22,6 +22,8 @@ import { isSandboxHost } from './demoapis.ts';
 import { AgentError, authenticateAgent, createAgent, executeAsAgent, listAgents, revokeAgent } from './agents.ts';
 import { FundingError, confirmDeposit, fundingMessage, fundingMessageOnChain, fundingWallets, registerFundingWallet } from './funding.ts';
 import { takerControlTypedData, verifyTakerProof } from './takerproof.ts';
+import { CELO_CHAIN_ID } from './conversion.ts';
+import { WalletAuthError, completeBuyerLogin, startBuyerLogin } from './walletauth.ts';
 import type { FundingConfig } from './funding.ts';
 import { PayoutError, cancelPayout, payoutsOf, requestPayout } from './payouts.ts';
 import { publishReadiness, updateListingDetails } from './seller.ts';
@@ -362,11 +364,11 @@ function mapError(e: unknown): MarketResponse {
   if (e instanceof ApiError) return { status: e.status, body: { ok: false, code: e.code, message: e.message, retryable: e.status >= 500 || e.status === 429 } };
   const code = (e as { code?: string }).code ?? 'ERROR';
   const message = (e as Error).message;
-  const known = e instanceof LedgerError || e instanceof SellerError || e instanceof VaultError || e instanceof ContractError || e instanceof GatewayError || e instanceof TesterError || e instanceof FundingError || e instanceof PayoutError || e instanceof AgentError || e instanceof EscrowError || e instanceof FundingOpError || e instanceof PayoutConvError;
+  const known = e instanceof LedgerError || e instanceof SellerError || e instanceof VaultError || e instanceof ContractError || e instanceof GatewayError || e instanceof TesterError || e instanceof FundingError || e instanceof PayoutError || e instanceof AgentError || e instanceof EscrowError || e instanceof FundingOpError || e instanceof PayoutConvError || e instanceof WalletAuthError;
   if (!known) return { status: 500, body: { ok: false, code: 'INTERNAL_ERROR', message: 'Something went wrong on our side.' } };
   const status: Record<string, number> = {
     SESSION_INVALID: 401, NOT_OWNER: 403, NOT_FOUND: 404, INSUFFICIENT_CREDITS: 402, IDEMPOTENCY_CONFLICT: 409, WRONG_STATE: 409, HOST_CLAIMED: 409,
-    LISTING_NOT_PUBLISHED: 409, CONTRACT_NOT_APPROVED: 409, RATE_LIMITED: 429, DOMAIN_PROOF_FAILED: 422, BAD_SIGNATURE: 422,
+    LISTING_NOT_PUBLISHED: 409, CONTRACT_NOT_APPROVED: 409, RATE_LIMITED: 429, DOMAIN_PROOF_FAILED: 422, BAD_SIGNATURE: 422, WRONG_NETWORK: 422, NONCE_INVALID: 401,
     WALLET_TAKEN: 409, NO_FUNDING_WALLET: 409, TX_NOT_FOUND: 404, TX_REVERTED: 422, NOT_ENOUGH_CONFIRMATIONS: 409, NO_MATCHING_TRANSFER: 422, OVER_LIMIT: 422, READ_FAILED: 502,
     KEY_INVALID: 401, LISTING_NOT_ALLOWED: 403, ROUTE_UNAVAILABLE: 409, ADDRESS_REQUIRED: 409, ADDRESS_TAKEN: 409, BELOW_FLOOR: 422, ABOVE_DEPTH: 422, NOT_ENABLED: 409, PER_REQUEST_CAP: 403, DAILY_CAP: 403, INSUFFICIENT_EARNINGS: 409, NO_WALLET: 409, TEST_ASSET: 422, NO_SELLER_WALLET: 409, HOLD_FAILED: 502,
     BAD_AMOUNT: 400, BELOW_MINIMUM: 422, ABOVE_MAXIMUM: 422, DAILY_LIMIT: 429, TOO_MANY_OPEN: 409, QUOTE_UNAVAILABLE: 502, QUOTE_EXPIRED: 409, DIGEST_MISMATCH: 409, SIGNING_UNAVAILABLE: 409, NOT_ALLOWED: 403,
@@ -976,6 +978,16 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
       }
       return ok({ payout: view(pid) });
     }
+  }
+
+  // ---- buyer wallet sign-in (signature proves wallet control; the message names the network; single-use nonce)
+  if (method === 'POST' && path === '/buyer/login/start') {
+    const expected = rt.conversion?.chainId ?? CELO_CHAIN_ID;
+    return ok({ ...startBuyerLogin(db, { wallet: str(body.wallet, 'wallet', 60), chainId: Number(body.chainId), expectedChainId: expected }, now), expectedChainId: expected });
+  }
+  if (method === 'POST' && path === '/buyer/login/complete') {
+    const r = await completeBuyerLogin(db, { wallet: str(body.wallet, 'wallet', 60), nonce: str(body.nonce, 'nonce', 80), signature: str(body.signature, 'signature', 400) }, now);
+    return ok({ ...r, mode: rt.live ? 'live' : 'test-credits' }, r.created ? 201 : 200);
   }
 
   // ---- seller sign-in
