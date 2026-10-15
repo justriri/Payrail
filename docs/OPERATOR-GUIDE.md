@@ -37,3 +37,8 @@ twice, and counts of open items.
 ## 4. Never
 Do not edit the database by hand; do not enable `PAYRAIL_MARKET_LIVE` to "fix" an item; do not treat simulated items as real.
 Live conversions and payouts are not wired in this build, so real-funds recovery is out of scope until they are.
+
+## 5. Post-submission improvement: authenticated operator interface
+There is no operator authentication in the HTTP layer (seller and buyer tokens are not operator credentials), so recovery
+mutations are deliberately NOT exposed over HTTP. The CLI is read-only. Next step: a separate operator credential (hardware key
+or SSO) + CSRF-protected endpoints wrapping the `src/operator.ts` functions, with the same reason/evidence requirements.

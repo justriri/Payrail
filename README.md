@@ -224,3 +224,24 @@ See `docs/ARCHITECTURE.md` for how the pieces fit together.
 ## Marketplace (pay only for qualifying responses)
 
 See [docs/MARKETPLACE.md](docs/MARKETPLACE.md): what exists, how each part was verified, the two (test-credit / real-funds) modes, and the trust assumptions.
+
+## Marketplace and multi-currency (hackathon demo)
+
+Payrail also runs an outcome-based API marketplace: sellers list APIs, buyers pay only for responses that meet a
+seller-approved contract (3% platform fee). Everything below runs in **simulation / test credits**; no real funds move.
+
+```
+node scripts/serve.ts --simulate --port 4402 --market-db data/marketplace.db   # then open http://127.0.0.1:4402/market.html
+```
+
+Demo: Buyer tab -> Start testing -> add funds (pick cNGN/wARS/USDT, approve the quote, see the verified credit) -> buy a
+demo API. Seller tab -> sandbox seller -> Payout settings -> verify address -> Earnings -> request, confirm and (simulated)
+approve a payout. `node scripts/operator.ts queue|inspect|reconcile --db data/marketplace.db` is a read-only operator report.
+
+| Verified against real Textile data / executed on mainnet | Simulation only |
+|---|---|
+| Public ladder and indicative quotes (read-only), `docs/ROUTE-MATRIX.md`; USDT->cNGN and cNGN->USDT each executed once by our code (txs in the matrix) | All marketplace funding and payout conversions, buyer wallet flow after the authorization check, USDT payout lifecycle, operator recovery |
+
+Not wired: live marketplace funding and payouts (`PAYRAIL_MARKET_LIVE` is off), HTTP operator mutations (no operator
+authentication exists; recovery actions are library-level and tested), CWT (not present on any Textile route).
+See `docs/MULTI-CURRENCY-ARCHITECTURE.md`, `docs/OPERATOR-GUIDE.md`.
