@@ -245,27 +245,52 @@ async function renderAddFunds() {
   if (!cfgR.ok) { box.append(el('p', { class: 'muted', text: cfgR.code === 'FUNDING_DISABLED' ? 'Funding is not configured on this server.' : fail(cfgR) })); return; }
   fund.cfg = cfgR;
   const ops = await api('/fund/ops', { bearer: session.buyer });
+  const routesR = cfgR.multiAsset ? await api('/fund/routes', { bearer: session.buyer }) : null;
   const sim = cfgR.simulated;
   box.append(el('div', { class: sim ? 'banner sim' : 'banner live', text: cfgR.banner }));
   if (ops.ok) {
     box.append(el('p', {}, el('strong', { text: `Available: ${ops.balances.available} ${ops.balances.asset}` }), `  ·  held for pending requests: ${ops.balances.held}  `, el('span', { class: 'badge', text: sim ? 'SIMULATED / TEST' : 'REAL USDT' })));
   }
-  box.append(el('p', { class: 'muted', text: `Limits per operation: ${cfgR.limits.min}–${cfgR.limits.max} cNGN; ${cfgR.limits.perDay} cNGN per rolling 24 hours. ${cfgR.steps.join('. ')}.` }));
-
-  const amount = el('input', { value: '1364', 'aria-label': 'cNGN amount', inputmode: 'decimal' });
-  const scen = sim ? el('select', { 'aria-label': 'Simulation outcome' }, ...cfgR.scenarios.map((s) => el('option', { value: s, text: s }))) : null;
+  // legacy single-asset config keeps its own limits line
+  const routes = routesR && routesR.ok ? routesR.routes : [{ symbol: cfgR.sell || 'cNGN', decimals: 6, usable: true, min: cfgR.limits ? cfgR.limits.min : '', max: cfgR.limits ? cfgR.limits.max : '', passthrough: false }];
+  const usable = routes.filter((r) => r.usable);
+  const blocked = routes.filter((r) => !r.usable);
+  const assetSel = el('select', { 'aria-label': 'Funding asset' }, ...usable.map((r) => el('option', { value: r.symbol, text: r.passthrough ? 'USDT (already USDT: no conversion)' : r.symbol })));
+  const amountLabel = el('label', { text: '' });
+  const amount = el('input', { value: '1364', 'aria-label': 'Amount to convert', inputmode: 'decimal' });
+  const limitsLine = el('p', { class: 'muted' });
+  const scenarios = (routesR && routesR.ok ? routesR.scenarios : cfgR.scenarios) || [];
+  const scen = sim && scenarios.length ? el('select', { 'aria-label': 'Simulation outcome' }, ...scenarios.map((x) => el('option', { value: x, text: x }))) : null;
+  const sync = () => {
+    const r = usable.find((x) => x.symbol === assetSel.value) || usable[0];
+    if (!r) return;
+    amountLabel.textContent = r.passthrough ? 'Amount of USDT to deposit' : `Amount of ${r.symbol} to convert`;
+    limitsLine.textContent = r.passthrough
+      ? 'No conversion is needed. Only your deposit to the marketplace is verified on-chain.'
+      : `Allowed per operation: ${r.min} to ${r.max} ${r.symbol}. ${cfgR.steps ? cfgR.steps.join('. ') + '.' : ''}`;
+    if (r.passthrough) amount.value = '5';
+    else if (r.min) amount.value = String(Number((Number(r.min) * 2).toPrecision(6)));
+  };
+  assetSel.addEventListener('change', sync);
+  sync();
   const msg = el('p', { class: 'muted', role: 'status' });
   box.append(
-    el('label', { text: 'Amount of cNGN to convert' }), amount,
-    sim && el('label', { text: 'Simulation outcome (testing only)' }), scen,
+    routesR && routesR.ok && el('label', { text: 'Fund with' }), routesR && routesR.ok && assetSel,
+    amountLabel, amount, limitsLine,
+    sim && scen && el('label', { text: 'Simulation outcome (testing only)' }), scen,
     el('div', { class: 'row' },
       el('button', { type: 'button', text: 'Get a quote (converts nothing)', onclick: async () => {
-        msg.textContent = 'Requesting a quote…';
-        const r = await api('/fund/quote', { body: { amount: amount.value.trim(), ...(scen ? { scenario: scen.value } : {}) }, bearer: session.buyer });
+        msg.textContent = 'Requesting a quote…'; msg.className = 'muted';
+        const r = await api('/fund/quote', { body: { amount: amount.value.trim(), asset: assetSel.value, ...(scen ? { scenario: scen.value } : {}) }, bearer: session.buyer });
         if (!r.ok) { msg.textContent = fail(r); msg.className = 'problem'; return; }
+        msg.textContent = '';
         fund.op = r.operation; renderFundOp(box);
       } }), msg),
   );
+  if (blocked.length) {
+    box.append(el('details', {}, el('summary', { text: `Not available for funding (${blocked.length})` }),
+      el('ul', {}, ...blocked.map((r) => el('li', { text: `${r.symbol}: ${r.reason || 'unavailable'}` })))));
+  }
   const opBox = el('div', { id: 'fund-op' });
   box.append(opBox);
   // keep showing the latest unfinished operation after a reload
@@ -274,7 +299,7 @@ async function renderAddFunds() {
   box.append(el('h3', { text: 'Funding history' }));
   if (ops.ok && ops.operations.length) {
     box.append(el('ul', {}, ...ops.operations.map((o) => el('li', {},
-      `${o.createdAt.slice(0, 19).replace('T', ' ')}  ${o.sell.display} cNGN  `, el('span', { class: `badge ${FUND_BADGE[o.state] || ''}`, text: o.state }), ' ',
+      `${o.createdAt.slice(0, 19).replace('T', ' ')}  ${o.sell.display} ${o.sell.symbol}  `, el('span', { class: `badge ${FUND_BADGE[o.state] || ''}`, text: o.state }), ' ',
       o.simulated && el('span', { class: 'badge o-sim', text: 'SIMULATED' }), ` ${o.statusText}`,
       o.credited ? ` · credited ${o.credited} ${o.creditAsset}` : '', o.failure ? ` · ${o.failure.message || o.failure.code}` : ''))));
   } else box.append(el('p', { class: 'muted', text: 'No funding operations yet.' }));
@@ -288,13 +313,14 @@ function renderFundOp(box) {
   const op = fund.op;
   if (!op) return;
   const rows = [
-    ['You convert', `${op.sell.display} cNGN`],
+    [op.txs && op.sell.symbol === 'USDT' ? 'You deposit' : 'You convert', `${op.sell.display} ${op.sell.symbol}`],
     ['Exchange rate', `${op.rate} (${op.provider})`],
-    ['Conversion fee (inside the amount)', `${op.fee.display} cNGN`],
+    ['Conversion fee (inside the amount)', `${op.fee.display} ${op.sell.symbol}`],
     ['Estimated USDT received', `${op.estimatedReceive.display} USDT`],
     ['Guaranteed minimum', `${op.minimumReceive.display} USDT (anything lower is never credited)`],
     ['Credited to your marketplace balance', op.willBeCredited.display + ` ${op.creditAsset}`],
   ];
+  if (op.depositAddress) rows.push(['Then deposited to', `${op.depositAddress} (only USDT that arrives there from your wallet is credited)`]);
   const card = el('div', { class: 'notice' },
     el('h3', { text: op.simulated ? 'Quote summary (SIMULATED)' : 'Quote summary' }),
     el('table', { class: 'quote' }, ...rows.map(([k, v]) => el('tr', {}, el('th', { text: k }), el('td', { class: 'v', text: v })))));
@@ -308,7 +334,7 @@ function renderFundOp(box) {
       exp.textContent = left > 0 ? `Quote valid for ${left}s. Nothing has been converted.` : 'This quote has expired. Request a new one.';
       if (left === 0) approveBtn.disabled = true;
     };
-    const approveBtn = el('button', { type: 'button', text: `Approve and convert ${op.sell.display} cNGN`, onclick: async () => {
+    const approveBtn = el('button', { type: 'button', text: op.sell.symbol === 'USDT' ? `Approve deposit of ${op.sell.display} USDT` : `Approve and convert ${op.sell.display} ${op.sell.symbol}`, onclick: async () => {
       approveBtn.disabled = true;
       status.textContent = 'Converting…';
       const r = await api('/fund/approve', { body: { opId: op.id, digest: op.approvalDigest }, bearer: session.buyer });
@@ -320,6 +346,8 @@ function renderFundOp(box) {
     return;
   }
   if (op.txs.swap) card.append(el('p', { class: 'muted', text: `Conversion transaction: ${op.txs.swap}${op.simulated ? ' (simulated, not on a real chain)' : ''}` }));
+  if (op.txs.deposit) card.append(el('p', { class: 'muted', text: `Deposit transaction: ${op.txs.deposit}${op.simulated ? ' (simulated, not on a real chain)' : ''}` }));
+  if (op.stage) card.append(el('p', { class: 'muted', text: `Step: ${op.stage === 'deposit' ? '2 of 2: deposit to the marketplace' : '1 of 2: conversion'}` }));
   if (op.received) card.append(el('p', { text: `Verified received: ${op.received} USDT` }));
   if (op.failure) card.append(el('p', { class: 'problem', text: `${op.failure.code}: ${op.failure.message || ''}` }));
   if (['VERIFYING', 'UNRESOLVED', 'CONVERTING'].includes(op.state)) {
@@ -433,10 +461,11 @@ const memSecrets = {};
 let renderToken = 0;
 
 function sellerRoute() {
-  const m = /^#\/seller(?:\/(new|earnings|api\/([\w-]{1,80})))?$/.exec(location.hash);
+  const m = /^#\/seller(?:\/(new|earnings|payout-settings|api\/([\w-]{1,80})))?$/.exec(location.hash);
   if (!m || !m[1]) return { page: 'apis' };
   if (m[1] === 'new') return { page: 'new' };
   if (m[1] === 'earnings') return { page: 'earnings' };
+  if (m[1] === 'payout-settings') return { page: 'payout-settings' };
   return { page: 'edit', id: m[2] };
 }
 const go = (hash) => { if (location.hash === hash) renderSeller(); else location.hash = hash; };
@@ -515,12 +544,17 @@ async function renderSeller() {
       el('a', { class: `subtab${route.page === 'apis' ? ' active' : ''}`, href: '#/seller', text: `My APIs (${listings.length})` }),
       el('a', { class: `subtab${route.page === 'new' ? ' active' : ''}`, href: '#/seller/new', text: 'New listing' }),
       el('a', { class: `subtab${route.page === 'earnings' ? ' active' : ''}`, href: '#/seller/earnings', text: 'Earnings & payouts' }),
+      el('a', { class: `subtab${route.page === 'payout-settings' ? ' active' : ''}`, href: '#/seller/payout-settings', text: 'Payout settings' }),
       route.page === 'edit' && el('span', { class: 'subtab active', text: 'Manage API' })),
   );
-  if (route.page === 'earnings') {
-    const sm = await api('/seller/statement', { bearer: session.seller });
+  if (route.page === 'payout-settings') {
+    const st = await api('/seller/payout/settings', { bearer: session.seller });
     if (mine !== renderToken) return;
-    box.append(sm.ok ? earningsPage(sm.statement) : el('p', { class: 'problem', text: fail(sm) }));
+    box.append(st.ok ? payoutSettingsPage(st) : el('p', { class: 'problem', text: fail(st) }));
+  } else if (route.page === 'earnings') {
+    const [sm, pl] = await Promise.all([api('/seller/statement', { bearer: session.seller }), api('/seller/payout/settings', { bearer: session.seller })]);
+    if (mine !== renderToken) return;
+    box.append(sm.ok ? earningsPage(sm.statement, pl.ok ? pl : null) : el('p', { class: 'problem', text: fail(sm) }));
   } else if (route.page === 'new') box.append(newListingPage());
   else if (route.page === 'edit') {
     const l = listings.find((x) => x.id === route.id);
@@ -530,7 +564,104 @@ async function renderSeller() {
 }
 
 // ---- Earnings & payouts (derived from persisted executions, ledger and payouts)
-function earningsPage(sm) {
+const PAYOUT_STAGE = {
+  quoted: 'Quote ready: confirm it to continue', confirmed: 'Confirmed by you: waiting for operator approval', converting: 'Converting in custody',
+  converted: 'Converted: delivering', delivering: 'Delivering', converted_undelivered: 'Converted but NOT delivered yet (your USDT is not returned; delivery will be retried)',
+  review: 'Needs operator review: not marked paid', delivered: 'Delivered and verified',
+};
+
+function payoutSettingsPage(st) {
+  const wrap = el('div', {});
+  const sim = st.simulated;
+  wrap.append(el('h3', { text: 'Payout settings' }));
+  if (sim) wrap.append(el('div', { class: 'banner sim', text: 'SIMULATED conversion: nothing real is converted or sent. Test-credit earnings cannot be paid out.' }));
+  wrap.append(el('p', {}, el('strong', { text: `Current payout asset: ${st.preference.symbol}` }), ` (version ${st.preference.version}, ${st.preference.source}). Your prices, balances and earnings stay in USDT.`));
+  const sel = el('select', { 'aria-label': 'Payout asset' }, ...st.options.filter((o) => o.usable).map((o) => el('option', { value: o.symbol, text: o.passthrough ? 'USDT (no conversion)' : `${o.symbol} (up to ${o.maxUsdt} USDT per payout, from ${o.minUsdt})` })));
+  sel.value = st.preference.symbol;
+  const msg = el('p', { class: 'muted', role: 'status' });
+  wrap.append(el('label', { text: 'Preferred payout asset' }), sel,
+    el('div', { class: 'row' }, el('button', { type: 'button', text: 'Save preference', onclick: async () => {
+      const r = await api('/seller/payout/preference', { body: { symbol: sel.value }, bearer: session.seller });
+      msg.textContent = r.ok ? `Saved. ${r.note}` : fail(r); msg.className = r.ok ? 'notice' : 'problem';
+      if (r.ok) renderSeller();
+    } }), msg));
+  const blocked = st.options.filter((o) => !o.usable);
+  if (blocked.length) {
+    wrap.append(el('details', {}, el('summary', { text: `Not available as a payout asset (${blocked.length})` }),
+      el('ul', {}, ...blocked.map((o) => el('li', { text: `${o.symbol}: ${o.reason || 'unavailable'}` })))));
+  }
+  wrap.append(el('h3', { text: 'Verified payout addresses' }));
+  if (!st.addresses.length) wrap.append(el('p', { class: 'muted', text: 'None yet. A converted payout is only ever delivered to an address you prove you control.' }));
+  else wrap.append(el('ul', {}, ...st.addresses.map((a) => el('li', { text: `chain ${a.chainId}: ${a.address}` }))));
+  const addrIn = el('input', { placeholder: '0x… address you control' });
+  const am = el('p', { class: 'muted' });
+  const buttons = [];
+  if (session.sandboxSeed) {
+    buttons.push(el('button', { type: 'button', class: 'secondary', text: 'Use my sandbox wallet as payout address', onclick: async () => {
+      const r = await api('/seller/payout/address', { body: { sandbox: true, seed: session.sandboxSeed, chainId: 42220 }, bearer: session.seller });
+      am.textContent = r.ok ? 'Address verified.' : fail(r); am.className = r.ok ? 'notice' : 'problem';
+      if (r.ok) renderSeller();
+    } }));
+  } else {
+    buttons.push(el('button', { type: 'button', class: 'secondary', text: 'Verify with my wallet', onclick: async () => {
+      try {
+        const addr = addrIn.value.trim();
+        const m = await api(`/seller/payout/address-message?chainId=42220&address=${encodeURIComponent(addr)}`, { bearer: session.seller });
+        if (!m.ok) throw new Error(fail(m));
+        const { signature } = await walletSign(m.message);
+        const r = await api('/seller/payout/address', { body: { chainId: 42220, address: addr, signature }, bearer: session.seller });
+        am.textContent = r.ok ? 'Address verified.' : fail(r); am.className = r.ok ? 'notice' : 'problem';
+        if (r.ok) renderSeller();
+      } catch (e) { am.textContent = e.message; am.className = 'problem'; }
+    } }));
+  }
+  if (!session.sandboxSeed) wrap.append(el('label', { text: 'Address to verify' }), addrIn);
+  wrap.append(el('div', { class: 'row' }, ...buttons), am);
+  wrap.append(el('h3', { text: 'How it works' }), el('ul', {}, ...st.rules.map((r) => el('li', { text: r }))));
+  return wrap;
+}
+
+function payoutCard(p, box) {
+  const t = p.target;
+  const act = async (path, body) => {
+    const r = await api(`/seller/payouts/${p.id}/${path}`, { body: body || {}, bearer: session.seller });
+    if (!r.ok) say(fail(r), 'bad'); else say(r.payout.stage ? (PAYOUT_STAGE[r.payout.stage] || r.payout.stage) : r.payout.state, 'ok');
+    renderSeller();
+  };
+  const card = el('div', { class: 'notice' },
+    el('strong', { text: `${p.usdt.display} ${p.usdt.asset} → ${t ? t.symbol : 'USDT'}` }), ' ',
+    el('span', { class: `badge ${p.state === 'confirmed' ? 'ok' : p.state === 'failed' ? 'bad' : 'warn'}`, text: p.state }), ' ', p.simulated && el('span', { class: 'badge o-sim', text: 'SIMULATED' }),
+    el('p', { class: 'muted', text: PAYOUT_STAGE[p.stage] || p.stage || '' }));
+  if (t) {
+    card.append(el('table', { class: 'quote' },
+      el('tr', {}, el('th', { text: 'Rate' }), el('td', { class: 'v', text: p.rate || '' })),
+      el('tr', {}, el('th', { text: 'Expected to receive' }), el('td', { class: 'v', text: `${p.expected} ${t.symbol}` })),
+      el('tr', {}, el('th', { text: 'Guaranteed minimum' }), el('td', { class: 'v', text: `${p.minimum} ${t.symbol}` })),
+      el('tr', {}, el('th', { text: 'Venue fee (inside the amount)' }), el('td', { class: 'v', text: `${p.fee} ${t.symbol}` })),
+      el('tr', {}, el('th', { text: 'Delivered to' }), el('td', { class: 'v', text: t.deliveryAddress })),
+      p.received ? el('tr', {}, el('th', { text: 'Verified received' }), el('td', { class: 'v', text: `${p.received} ${t.symbol}` })) : null));
+  }
+  const row = el('div', { class: 'row' });
+  if (p.stage === 'quoted') {
+    row.append(el('button', { type: 'button', text: 'Confirm this quote', onclick: () => act('confirm', { digest: p.approvalDigest }) }),
+      el('button', { type: 'button', class: 'secondary', text: 'Get a fresh quote', onclick: () => act('requote') }));
+  }
+  if (p.stage === 'confirmed' && p.state === 'requested' && p.simulated) row.append(el('button', { type: 'button', class: 'secondary', text: 'Simulate operator approval', onclick: () => act('simulate-approve') }));
+  if (p.stage === 'confirmed' && p.state === 'approved' && p.simulated) {
+    const sc = el('select', { 'aria-label': 'Simulation outcome' }, ...['ok', 'reverted', 'short', 'wrong_token', 'delivery_missing', 'delivery_reverted', 'uncertain', 'refused'].map((x) => el('option', { value: x, text: x })));
+    row.append(el('label', { class: 'muted', text: 'Simulation outcome (testing only)' }), sc,
+      el('button', { type: 'button', text: 'Execute conversion (simulated)', onclick: () => act('simulate-execute', { scenario: sc.value }) }));
+  }
+  if (['converting', 'converted', 'delivering'].includes(p.stage)) row.append(el('button', { type: 'button', class: 'secondary', text: 'Check status', onclick: () => act('check') }));
+  if (p.stage === 'converted_undelivered') row.append(el('button', { type: 'button', text: 'Retry delivery', onclick: () => act('retry-delivery') }));
+  card.append(row);
+  if (p.failure) card.append(el('p', { class: 'problem', text: p.failure }));
+  if (p.conversionTx) card.append(el('p', { class: 'muted', text: `Conversion tx ${p.conversionTx}${p.simulated ? ' (simulated)' : ''}${p.deliveryTx ? ` · delivery tx ${p.deliveryTx}` : ''}` }));
+  if (p.events && p.events.length) card.append(el('details', {}, el('summary', { text: 'Timeline' }), el('ul', {}, ...p.events.map((e) => el('li', { text: `${e.at.slice(11, 19)} ${e.stage}: ${e.note}` })))));
+  return card;
+}
+
+function earningsPage(sm, payoutSettings) {
   const wrap = el('div', {});
   wrap.append(el('p', { class: 'notice', text: 'Every figure below is computed from saved requests, ledger entries and payouts. Direct (ledger) and escrow settlement are shown separately because they are paid out differently.' }));
   if (!sm.buckets.length) wrap.append(el('p', { class: 'muted', text: 'No requests yet.' }));
@@ -548,6 +679,31 @@ function earningsPage(sm) {
     wrap.append(el('p', { text: `${l.asset}: available to pay out ${l.available.display} · payout pending ${l.pendingPayout.display}` }));
   }
   for (const t of sm.payoutTotals) wrap.append(el('p', { text: `${t.asset} payouts: pending ${t.pending.display} · completed ${t.completed.display}` }));
+  if (payoutSettings && payoutSettings.preference.symbol !== 'USDT') {
+    const amt = el('input', { value: '3', 'aria-label': 'USDT amount to pay out' });
+    const pm = el('p', { class: 'muted', role: 'status' });
+    const scen = null;
+    wrap.append(el('h3', { text: `Request a payout in ${payoutSettings.preference.symbol}` }),
+      el('p', { class: 'muted', text: 'Your earnings are in USDT. You will see the expected amount, rate, fee and guaranteed minimum before anything is converted, and you confirm that exact quote.' }),
+      el('label', { text: 'USDT to pay out' }), amt,
+      el('div', { class: 'row' }, el('button', { type: 'button', text: 'Get a payout quote', onclick: async () => {
+        const r = await api('/seller/payouts/convert', { body: { amount: amt.value.trim(), ...(scen ? { scenario: scen.value } : {}) }, bearer: session.seller });
+        if (!r.ok) { pm.textContent = fail(r); pm.className = 'problem'; return; }
+        say('Quote ready: review and confirm it below.', 'ok');
+        renderSeller();
+      } }), pm));
+  } else if (payoutSettings) {
+    wrap.append(el('p', { class: 'muted', text: 'Payout asset is USDT (no conversion). Choose another asset under Payout settings.' }));
+  }
+  const conv = sm.payouts.filter((p) => p.mode && p.mode !== 'usdt');
+  if (conv.length) {
+    wrap.append(el('h3', { text: 'Conversion payouts' }));
+    for (const p of conv) {
+      const holder = el('div', {});
+      wrap.append(holder);
+      api(`/seller/payouts/${p.id}`, { bearer: session.seller }).then((d) => { if (d.ok) holder.append(payoutCard(d.payout, wrap)); });
+    }
+  }
   wrap.append(el('h3', { text: 'Payouts' }));
   if (!sm.payouts.length) wrap.append(el('p', { class: 'muted', text: config.realFunds ? 'No payouts yet.' : 'Payouts are disabled in test-credit mode: test credits cannot be paid out.' }));
   else wrap.append(el('ul', {}, ...sm.payouts.map((p) => el('li', { text: `${p.requestedAt.slice(0, 19).replace('T', ' ')}  ${p.amount.display} ${p.asset}  ${p.state}${p.txHash ? '  tx ' + p.txHash : ''}` }))));

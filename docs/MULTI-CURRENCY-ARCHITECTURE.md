@@ -1,8 +1,8 @@
 # Multi-currency funding and payouts: findings and recommended architecture
 
-> **Status: investigation and design only. Nothing in this document is implemented, wired or enabled.**
-> No code was changed, no real conversion or payout was executed, `PAYRAIL_MARKET_LIVE` is untouched, and the existing
-> simulation and tests are as they were (465 tests). Facts below come from **read-only** requests made on 2026-10-14 to
+> **Status: Stage 1 (simulation) is implemented and approved; everything LIVE remains unimplemented.**
+> See "Implementation status (Stage 1)" at the end. Nothing here signs, sends or converts anything real, and
+> `PAYRAIL_MARKET_LIVE` is untouched. Facts below come from **read-only** requests made on 2026-10-14 to
 > Textile's public API and documentation, plus ERC-20 reads on public RPCs. They describe a moment in time: Textile's
 > liquidity changes, so every route must be re-discovered live at quote time.
 
@@ -282,3 +282,27 @@ prices or fees. Add:
    contract for single-hop funding; (b) a dedicated custody wallet with a bounded signer for payout conversion; (c) which
    payout assets to enable (suggest USDT, cNGN, wARS, wBRL first; deep and symmetric).
 4. Ask Textile about test keys for Base Sepolia/BNB testnet and about CWT, if CWT is a real requirement.
+
+
+## 8. Implementation status (Stage 1: simulation, approved 2026-10-14)
+
+**Built and tested (automated + real browser), SIMULATED provider only. No signing, no network, no real funds.**
+
+| Piece | File | Notes |
+|---|---|---|
+| Provider interface, `Route`, `ConversionQuote`, `RouteRegistry`, operator allow-list | `src/conversion.ts` | routes asked per direction; unknown assets (CWT) simply absent |
+| Simulated Textile provider (snapshot of the 2026-10-14 ladder), fake chain | `src/simconversion.ts` | includes asymmetric (wMXN), shallow (CELO, WETH, IDRX) and empty (G$) routes |
+| Asset-agnostic funding engine, text-stored amounts, two-hop (swap -> deposit) verification, USDT passthrough | `src/marketfunding.ts`, `src/multifunding.ts` | credits only USDT that reached custody from the buyer's wallet |
+| Payout preferences (versioned, per listing / per seller), payout-address proofs | `src/payoutconv.ts` | change applies to later payouts; each payout snapshots version and quote |
+| Payout conversion workflow: quote -> seller confirms digest -> operator approves -> convert -> deliver -> verify | `src/payoutconv.ts`, `src/payouts.ts` | provable failure restores USDT; converted-but-undelivered is never reversed |
+| Data model (migration v8) | `src/db.ts` | `conversion_assets`, `payout_addresses`, `payout_preferences`, `payout_events`, rebuilt `funding_ops`, extended `payouts` |
+| API + screens | `src/market.ts`, `web/market.*` | asset picker with reasons; Payout settings; conversion payout cards |
+| Tests | `test/multicurrency*.test.ts` (18), `scripts/browser/verify-multicurrency.mjs` | |
+
+Simulation controls (`simulate-approve`, `simulate-execute`, scenario selectors) exist only when the runtime is
+simulated and real-funds mode is off.
+
+**Still NOT implemented (needs your decisions and, for live, approval):** browser-wallet signing for buyer funding, a
+bounded custody signer for payout conversion, a live Textile provider, per-asset live liquidity re-checks at quote time
+against the real API, an operator tool to resolve `REVIEW` states, and Textile test-key verification on Base Sepolia/BNB
+testnet. CWT remains unsupported (no route, token unidentified).

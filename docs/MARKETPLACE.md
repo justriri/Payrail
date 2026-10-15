@@ -86,3 +86,8 @@ path); automatic or live payouts (operator CLI only, unchanged); mainnet escrow.
 See [MARKETPLACE-FUNDING.md](MARKETPLACE-FUNDING.md). Quote -> explicit approval -> independent on-chain verification ->
 once-only ledger credit. **Simulation and automated tests only: no testnet (Textile has no configured testnet), no real
 funds.** The live adapter is built but intentionally not wired; the readiness checklist lists what real funding needs.
+
+## Multi-currency (Stage 1, simulation)
+
+Funding from any enabled asset and seller payout preferences with conversion are built against a **simulated** provider.
+See [MULTI-CURRENCY-ARCHITECTURE.md](MULTI-CURRENCY-ARCHITECTURE.md) (findings, design, and implementation status).

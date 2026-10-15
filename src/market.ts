@@ -31,6 +31,14 @@ import { EscrowError, executeEscrowRequest } from './escrow.ts';
 import { FundingOpError, approveFunding, fundingEvents, fundingView, getFundingOp, listFundingOps, requestFundingQuote, verifyAndCredit } from './marketfunding.ts';
 import type { FundingConfig as ConversionFundingConfig } from './marketfunding.ts';
 import { SIM_SCENARIOS } from './simfunding.ts';
+import { fundingConfigFor, fundingConfigForOp, routeLimits } from './multifunding.ts';
+import type { ConversionRuntime } from './multifunding.ts';
+import { SIM_FUNDING_SCENARIOS, SIM_PAYOUT_SCENARIOS } from './simconversion.ts';
+import {
+  PayoutConvError, confirmConversionQuote, executeConversionPayout, getPayoutPreference, payoutAddressMessage, payoutAddresses, payoutEvents,
+  recheckConversionPayout, registerPayoutAddress, requestConversionPayout, requoteConversionPayout, retryConversionDelivery, setPayoutPreference,
+} from './payoutconv.ts';
+import { approvePayout, getPayout } from './payouts.ts';
 import type { EscrowClient } from './escrow.ts';
 
 /** Test credits live in their own ledger asset so they can never mix with real funds. */
@@ -58,6 +66,8 @@ export interface MarketRuntime {
   sandbox?: boolean;
   /** marketplace funding through the Textile conversion (simulated unless real-funds mode is on) */
   funding?: ConversionFundingConfig;
+  /** Stage 1 multi-currency: route discovery, asset-agnostic funding, payout preferences and simulated payout conversion */
+  conversion?: ConversionRuntime;
   /** real-funds mode. Absent = test credits only and every real-money route answers LIVE_DISABLED. */
   live?: { funding: FundingConfig; payout: PayoutPolicy };
   /** alternative settlement through the on-chain escrow contract (testnet-verified only) */
@@ -152,6 +162,21 @@ export const formatAtomic = (v: bigint): string => {
   const s = a.toString().padStart(DECIMALS + 1, '0');
   const frac = s.slice(-DECIMALS).replace(/0+$/, '');
   return `${neg ? '-' : ''}${s.slice(0, -DECIMALS)}${frac ? `.${frac}` : ''}`;
+};
+/** Parse a human decimal string into atomic units for an asset with `decimals` (up to 18). */
+export function parseUnitsText(s: unknown, decimals: number): bigint {
+  if (typeof s !== 'string' || !/^\d{1,15}(\.\d{1,18})?$/.test(s.trim())) throw bad(`amount must look like 12.5 (up to ${decimals} decimals)`);
+  const [w, f = ''] = s.trim().split('.');
+  if (f.length > decimals) throw bad(`this asset has ${decimals} decimals`);
+  const v = BigInt(w!) * 10n ** BigInt(decimals) + BigInt(f.padEnd(decimals, '0') || '0');
+  if (v <= 0n) throw bad('amount must be greater than zero');
+  return v;
+}
+const fmtUnits = (v: bigint, decimals: number): string => {
+  if (decimals === 0) return v.toString();
+  const s = v.toString().padStart(decimals + 1, '0');
+  const f = s.slice(-decimals).replace(/0+$/, '');
+  return `${s.slice(0, -decimals)}${f ? `.${f}` : ''}`;
 };
 export function parseAtomic(s: unknown): bigint {
   if (typeof s !== 'string' || !/^\d{1,9}(\.\d{1,6})?$/.test(s.trim())) throw bad('amount must look like 0.02 (up to 6 decimals)');
@@ -336,13 +361,13 @@ function mapError(e: unknown): MarketResponse {
   if (e instanceof ApiError) return { status: e.status, body: { ok: false, code: e.code, message: e.message, retryable: e.status >= 500 || e.status === 429 } };
   const code = (e as { code?: string }).code ?? 'ERROR';
   const message = (e as Error).message;
-  const known = e instanceof LedgerError || e instanceof SellerError || e instanceof VaultError || e instanceof ContractError || e instanceof GatewayError || e instanceof TesterError || e instanceof FundingError || e instanceof PayoutError || e instanceof AgentError || e instanceof EscrowError || e instanceof FundingOpError;
+  const known = e instanceof LedgerError || e instanceof SellerError || e instanceof VaultError || e instanceof ContractError || e instanceof GatewayError || e instanceof TesterError || e instanceof FundingError || e instanceof PayoutError || e instanceof AgentError || e instanceof EscrowError || e instanceof FundingOpError || e instanceof PayoutConvError;
   if (!known) return { status: 500, body: { ok: false, code: 'INTERNAL_ERROR', message: 'Something went wrong on our side.' } };
   const status: Record<string, number> = {
     SESSION_INVALID: 401, NOT_OWNER: 403, NOT_FOUND: 404, INSUFFICIENT_CREDITS: 402, IDEMPOTENCY_CONFLICT: 409, WRONG_STATE: 409, HOST_CLAIMED: 409,
     LISTING_NOT_PUBLISHED: 409, CONTRACT_NOT_APPROVED: 409, RATE_LIMITED: 429, DOMAIN_PROOF_FAILED: 422, BAD_SIGNATURE: 422,
     WALLET_TAKEN: 409, NO_FUNDING_WALLET: 409, TX_NOT_FOUND: 404, TX_REVERTED: 422, NOT_ENOUGH_CONFIRMATIONS: 409, NO_MATCHING_TRANSFER: 422, OVER_LIMIT: 422, READ_FAILED: 502,
-    KEY_INVALID: 401, LISTING_NOT_ALLOWED: 403, PER_REQUEST_CAP: 403, DAILY_CAP: 403, INSUFFICIENT_EARNINGS: 409, NO_WALLET: 409, TEST_ASSET: 422, NO_SELLER_WALLET: 409, HOLD_FAILED: 502,
+    KEY_INVALID: 401, LISTING_NOT_ALLOWED: 403, ROUTE_UNAVAILABLE: 409, ADDRESS_REQUIRED: 409, ADDRESS_TAKEN: 409, BELOW_FLOOR: 422, ABOVE_DEPTH: 422, NOT_ENABLED: 409, PER_REQUEST_CAP: 403, DAILY_CAP: 403, INSUFFICIENT_EARNINGS: 409, NO_WALLET: 409, TEST_ASSET: 422, NO_SELLER_WALLET: 409, HOLD_FAILED: 502,
     BAD_AMOUNT: 400, BELOW_MINIMUM: 422, ABOVE_MAXIMUM: 422, DAILY_LIMIT: 429, TOO_MANY_OPEN: 409, QUOTE_UNAVAILABLE: 502, QUOTE_EXPIRED: 409, DIGEST_MISMATCH: 409, SIGNING_UNAVAILABLE: 409, NOT_ALLOWED: 403,
   };
   const s = status[code] ?? 400;
@@ -605,6 +630,70 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
     }
   }
 
+  // ---- multi-asset funding (Stage 1, simulated provider): any enabled asset -> USDT -> marketplace balance
+  if (path.startsWith('/fund/') && rt.conversion) {
+    const id = buyer();
+    const c = rt.conversion;
+    const routeView = (r: Awaited<ReturnType<typeof c.registry.routes>>[number]) => ({
+      symbol: (r.from.symbol), chainId: r.from.chainId, address: r.from.address, decimals: r.from.decimals,
+      passthrough: r.passthrough === true, available: r.available, enabled: r.enabled, usable: r.usable, reason: r.reason,
+      min: fmtUnits(r.minInputAtomic, r.from.decimals), max: fmtUnits(r.maxInputAtomic, r.from.decimals), provider: r.provider,
+    });
+    if (method === 'GET' && path === '/fund/routes') {
+      const rs = await c.registry.routes('funding');
+      return ok({
+        simulated: c.simulated,
+        note: 'Routes are discovered live from the provider and filtered by the operator allow-list. A route that works into USDT says nothing about the reverse direction.',
+        deliversTo: 'USDT on Celo',
+        routes: rs.map(routeView),
+        scenarios: c.simulated ? SIM_FUNDING_SCENARIOS : [],
+      });
+    }
+    if (method === 'GET' && path === '/fund/config') {
+      return ok({
+        enabled: true, multiAsset: true, mode: c.simulated ? 'simulated' : 'live', simulated: c.simulated,
+        banner: c.simulated ? 'SIMULATED conversion: no real assets are spent and no real USDT is received. Credits are test credits.' : 'LIVE conversion into USDT.',
+        buy: 'USDT', creditAsset: c.creditAsset, creditLabel: c.simulated ? 'test credits (simulated funding)' : 'USDT',
+        depositAddress: c.depositAddress, minConfirmations: c.minConfirmations,
+        steps: ['Pick an asset and an amount and get a quote (nothing is converted yet)', 'Review the rate, fee, minimum and what will be credited, then approve', 'Your wallet converts, then deposits the USDT; each step is verified on-chain before your balance is credited'],
+        scenarios: c.simulated ? SIM_FUNDING_SCENARIOS : [],
+      });
+    }
+    if (method === 'GET' && path === '/fund/ops') {
+      return ok({
+        operations: listFundingOps(db, id).map((o) => fundingView(o, now())),
+        balances: { asset: c.creditAsset, available: formatAtomic(balance(db, id, 'buyer_available', c.creditAsset)), held: formatAtomic(balance(db, id, 'buyer_held', c.creditAsset)) },
+      });
+    }
+    if (method === 'GET' && (m = path.match(/^\/fund\/ops\/([\w-]{1,80})$/))) {
+      const o = getFundingOp(db, m[1]!);
+      if (!o || o.buyerId !== id) throw new ApiError(404, 'NOT_FOUND', 'no such funding operation');
+      return ok({ operation: fundingView(o, now()), events: fundingEvents(db, o.id) });
+    }
+    if (method === 'POST' && path === '/fund/quote') {
+      const symbol = typeof body.asset === 'string' && body.asset ? body.asset : 'cNGN';
+      const route = await c.registry.find('funding', symbol);
+      if (!route) throw new ApiError(422, 'UNSUPPORTED_ASSET', `${symbol} is not a supported funding asset: no verified conversion route to USDT exists`);
+      if (!route.usable) throw new ApiError(422, 'UNSUPPORTED_ASSET', `${route.from.symbol} cannot be used to fund right now: ${route.reason ?? 'unavailable'}`);
+      const amount = parseUnitsText(body.amount, route.from.decimals);
+      const key = typeof body.idempotencyKey === 'string' && /^[\w.:-]{8,100}$/.test(body.idempotencyKey) ? body.idempotencyKey : `q-${randomBytes(12).toString('hex')}`;
+      const scenario = c.simulated && typeof body.scenario === 'string' && (SIM_FUNDING_SCENARIOS as readonly string[]).includes(body.scenario) ? body.scenario : undefined;
+      const cfg = fundingConfigFor(c, route.from, id, routeLimits(route));
+      const o = await requestFundingQuote(db, cfg, { buyerId: id, sellAtomic: amount, idempotencyKey: key, ...(scenario ? { scenario } : {}) }, now);
+      return ok({ operation: fundingView(o, now()) }, 201);
+    }
+    if (method === 'POST' && (path === '/fund/approve' || path === '/fund/check')) {
+      const opId = str(body.opId, 'opId', 80);
+      const cur = getFundingOp(db, opId);
+      if (!cur || cur.buyerId !== id) throw new ApiError(404, 'NOT_FOUND', 'no such funding operation');
+      const cfg = fundingConfigForOp(c, cur);
+      const o = path === '/fund/approve'
+        ? await approveFunding(db, cfg, { opId, buyerId: id, digest: str(body.digest, 'digest', 100) }, now)
+        : await verifyAndCredit(db, cfg, opId, now);
+      return ok({ operation: fundingView(o, now()), events: fundingEvents(db, o.id) });
+    }
+  }
+
   // ---- marketplace funding: cNGN -> (Textile) -> USDT -> marketplace balance
   if (path.startsWith('/fund/')) {
     const id = buyer();
@@ -712,6 +801,116 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
     const wallet = privateKeyToAccount(sandboxSeed(rt.activeKey, seed)).address;
     const r = createSandboxSeller(db, wallet, 'Sandbox seller', now);
     return ok({ ...r, wallet, seed, note: 'Sandbox seller: a test wallet derived by this server. Not a real identity.' });
+  }
+
+  // ---- seller payout preferences and conversion payouts (Stage 1: simulated provider)
+  if (path.startsWith('/seller/payout/') || /^\/seller\/payouts\/(convert|[\w-]{1,80}(\/(confirm|requote|check|retry-delivery|simulate-approve|simulate-execute))?)$/.test(path)) {
+    const sid = seller();
+    const c = rt.conversion;
+    if (!c) throw new ApiError(409, 'CONVERSION_DISABLED', 'payout conversion is not configured on this server');
+    const view = (pid: string) => {
+      const p = getPayout(db, pid)!;
+      const dec = p.target?.decimals ?? 6;
+      return {
+        id: p.id, state: p.state, stage: p.stage, mode: p.mode, simulated: p.mode === 'convert-simulated',
+        usdt: { atomic: p.amountAtomic.toString(), display: formatAtomic(p.amountAtomic), asset: p.asset },
+        target: p.target ? { symbol: p.target.symbol, chainId: p.target.chainId, address: p.target.address, decimals: dec, deliveryAddress: p.target.deliveryAddress } : null,
+        rate: p.rate,
+        expected: p.expectedTarget === null ? null : fmtUnits(p.expectedTarget, dec),
+        minimum: p.minTarget === null ? null : fmtUnits(p.minTarget, dec),
+        fee: p.feeTarget === null ? null : fmtUnits(p.feeTarget, dec),
+        received: p.receivedTarget === null ? null : fmtUnits(p.receivedTarget, dec),
+        quoteExpiresAt: p.quoteExpiresAt,
+        approvalDigest: p.stage === 'quoted' ? p.approvalDigest : null,
+        preferenceVersion: p.preferenceVersion,
+        conversionTx: p.conversionTx, deliveryTx: p.deliveryTx,
+        failure: p.failure,
+        events: payoutEvents(db, p.id),
+      };
+    };
+    const owned = (pid: string) => {
+      const p = getPayout(db, pid);
+      if (!p || p.sellerId !== sid) throw new ApiError(404, 'NOT_FOUND', 'no such payout');
+      return p;
+    };
+    if (method === 'GET' && path === '/seller/payout/settings') {
+      const routes = await c.registry.routes('payout');
+      const pref = getPayoutPreference(db, sid, typeof req.query.get('listingId') === 'string' ? req.query.get('listingId') : null);
+      return ok({
+        simulated: c.simulated,
+        preference: { symbol: pref.asset.symbol, version: pref.version, source: pref.source },
+        options: routes.map((r) => ({
+          symbol: r.to.symbol, chainId: r.to.chainId, address: r.to.address, decimals: r.to.decimals, passthrough: r.passthrough === true,
+          available: r.available, enabled: r.enabled, usable: r.usable, reason: r.reason,
+          minUsdt: formatAtomic(r.passthrough ? 0n : r.minInputAtomic), maxUsdt: formatAtomic(r.maxInputAtomic),
+        })),
+        addresses: payoutAddresses(db, sid),
+        rules: [
+          'Prices, balances, fees and earnings stay in USDT. Conversion only changes what you receive.',
+          'A change applies to payouts requested after you save it. Payouts already requested keep the asset and quote you confirmed.',
+          'You see the expected amount, rate, fee and guaranteed minimum before anything is converted, and you confirm that exact quote.',
+          'If a conversion cannot be verified, the payout is not marked paid. If it provably did not happen, your USDT earnings are restored.',
+          'Not every asset can be paid out: a route that works into USDT may not work in reverse, and some routes are shallow.',
+        ],
+      });
+    }
+    if (method === 'POST' && path === '/seller/payout/preference') {
+      const pref = await setPayoutPreference(db, c.registry, { sellerId: sid, symbol: str(body.symbol, 'symbol', 20), ...(typeof body.listingId === 'string' && body.listingId ? { listingId: body.listingId } : {}) }, now);
+      return ok({ preference: { symbol: pref.asset.symbol, version: pref.version, source: pref.source }, note: 'Applies to payouts you request from now on.' });
+    }
+    if (method === 'GET' && path === '/seller/payout/address-message') {
+      const chainId = Number(req.query.get('chainId') ?? '42220');
+      const address = req.query.get('address') ?? '';
+      if (!/^0x[0-9a-fA-F]{40}$/.test(address) || !Number.isInteger(chainId)) throw bad('address and chainId are required');
+      return ok({ message: payoutAddressMessage(sid, chainId, address) });
+    }
+    if (method === 'POST' && path === '/seller/payout/address') {
+      const chainId = Number(body.chainId ?? 42220);
+      let address = typeof body.address === 'string' ? body.address : '';
+      let signature = typeof body.signature === 'string' ? body.signature : '';
+      if (body.sandbox === true) {
+        if (!rt.sandbox || rt.live) throw new ApiError(409, 'SANDBOX_DISABLED', 'sandbox signing is only available in test-credit mode');
+        const acct = queryOne(db, 'SELECT wallet_address FROM accounts WHERE id = ?', sid);
+        const key = privateKeyToAccount(sandboxSeed(rt.activeKey, str(body.seed, 'seed', 64)));
+        if (!acct || String(acct.wallet_address) !== key.address.toLowerCase()) throw new ApiError(403, 'NOT_SANDBOX_ACCOUNT', 'this account is not a sandbox seller');
+        address = key.address;
+        signature = await key.signMessage({ message: payoutAddressMessage(sid, chainId, key.address) });
+      }
+      const r = await registerPayoutAddress(db, { sellerId: sid, chainId, address, signature }, now);
+      return ok({ address: r.address, chainId: r.chainId }, 201);
+    }
+    if (method === 'POST' && path === '/seller/payouts/convert') {
+      if (!c.payout) throw new ApiError(409, 'CONVERSION_DISABLED', 'payout conversion is not configured');
+      const asset = c.simulated ? TEST_ASSET : LIVE_ASSET;
+      const amount = parseAtomic(body.amount);
+      const scenario = c.simulated && typeof body.scenario === 'string' && (SIM_PAYOUT_SCENARIOS as readonly string[]).includes(body.scenario) ? body.scenario : undefined;
+      const p = await requestConversionPayout(db, c.payout, { sellerId: sid, amountAtomic: amount, asset, ...(typeof body.listingId === 'string' && body.listingId ? { listingId: body.listingId } : {}), ...(scenario ? { scenario } : {}) }, now);
+      return ok({ payout: view(p.id) }, 201);
+    }
+    if (method === 'GET' && (m = path.match(/^\/seller\/payouts\/([\w-]{1,80})$/))) {
+      owned(m[1]!);
+      return ok({ payout: view(m[1]!) });
+    }
+    if (method === 'POST' && (m = path.match(/^\/seller\/payouts\/([\w-]{1,80})\/(confirm|requote|check|retry-delivery|simulate-approve|simulate-execute)$/))) {
+      owned(m[1]!);
+      if (!c.payout) throw new ApiError(409, 'CONVERSION_DISABLED', 'payout conversion is not configured');
+      const pid = m[1]!;
+      const action = m[2]!;
+      if (action === 'confirm') confirmConversionQuote(db, { sellerId: sid, payoutId: pid, digest: str(body.digest, 'digest', 100) }, now);
+      else if (action === 'requote') await requoteConversionPayout(db, c.payout, { sellerId: sid, payoutId: pid }, now);
+      else if (action === 'check') await recheckConversionPayout(db, c.payout, pid, now);
+      else if (action === 'retry-delivery') await retryConversionDelivery(db, c.payout, pid, now);
+      else {
+        // SIMULATION ONLY: stands in for the operator CLI approval and the bounded custody signer
+        if (!c.simulated || rt.live) throw new ApiError(409, 'SIMULATION_ONLY', 'this control exists only in simulation; real payouts are approved and executed by the operator tooling');
+        if (action === 'simulate-approve') approvePayout(db, pid, 'simulated-operator', now);
+        else {
+          const scenario = typeof body.scenario === 'string' && (SIM_PAYOUT_SCENARIOS as readonly string[]).includes(body.scenario) ? body.scenario : undefined;
+          await executeConversionPayout(db, c.payout, { payoutId: pid, ...(scenario ? { scenario } : {}) }, now);
+        }
+      }
+      return ok({ payout: view(pid) });
+    }
   }
 
   // ---- seller sign-in

@@ -331,6 +331,121 @@ CREATE TABLE funding_tx_claims (
 ) STRICT;
 `;
 
+/**
+ * Version 8 (Stage 1 multi-currency): funding and payouts become asset-agnostic.
+ * funding_ops is REBUILT so amounts that exceed 64 bits (18-decimal assets) are stored as text and the two-hop
+ * (swap -> deposit) funding path has somewhere to record its second transaction.
+ */
+const V8 = `
+CREATE TABLE funding_ops_new (
+  id TEXT PRIMARY KEY,
+  buyer_id TEXT NOT NULL REFERENCES accounts(id),
+  idempotency_key TEXT NOT NULL,
+  mode TEXT NOT NULL CHECK (mode IN ('simulated','live')),
+  state TEXT NOT NULL CHECK (state IN ('QUOTED','EXPIRED','CONVERTING','VERIFYING','CREDITED','FAILED','UNRESOLVED','REVIEW','CANCELLED')),
+  sell_symbol TEXT NOT NULL,
+  sell_atomic TEXT NOT NULL,
+  buy_symbol TEXT NOT NULL,
+  expected_atomic INTEGER NOT NULL,
+  min_atomic INTEGER NOT NULL,
+  fee_atomic TEXT NOT NULL,
+  rate TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  quote_id TEXT NOT NULL,
+  quote_expires_at TEXT NOT NULL,
+  approval_digest TEXT NOT NULL,
+  approved_at TEXT,
+  credit_asset TEXT NOT NULL,
+  received_atomic INTEGER,
+  credited_atomic INTEGER,
+  credit_ref TEXT,
+  swap_tx TEXT,
+  approve_txs TEXT,
+  failure_code TEXT,
+  failure_message TEXT,
+  scenario TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  sell_decimals INTEGER NOT NULL DEFAULT 6,
+  sell_chain_id INTEGER,
+  sell_address TEXT,
+  taker TEXT,
+  deposit_tx TEXT,
+  deposit_address TEXT,
+  stage TEXT,
+  UNIQUE (buyer_id, idempotency_key)
+) STRICT;
+INSERT INTO funding_ops_new (id, buyer_id, idempotency_key, mode, state, sell_symbol, sell_atomic, buy_symbol, expected_atomic, min_atomic, fee_atomic, rate, provider, quote_id, quote_expires_at, approval_digest, approved_at, credit_asset, received_atomic, credited_atomic, credit_ref, swap_tx, approve_txs, failure_code, failure_message, scenario, created_at, updated_at)
+  SELECT id, buyer_id, idempotency_key, mode, state, sell_symbol, CAST(sell_atomic AS TEXT), buy_symbol, expected_atomic, min_atomic, CAST(fee_atomic AS TEXT), rate, provider, quote_id, quote_expires_at, approval_digest, approved_at, credit_asset, received_atomic, credited_atomic, credit_ref, swap_tx, approve_txs, failure_code, failure_message, scenario, created_at, updated_at FROM funding_ops;
+DROP TABLE funding_ops;
+ALTER TABLE funding_ops_new RENAME TO funding_ops;
+CREATE INDEX funding_ops_buyer ON funding_ops (buyer_id, created_at);
+
+CREATE TABLE conversion_assets (
+  chain_id INTEGER NOT NULL,
+  address TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  decimals INTEGER NOT NULL,
+  funding_enabled INTEGER NOT NULL DEFAULT 0,
+  payout_enabled INTEGER NOT NULL DEFAULT 0,
+  note TEXT,
+  PRIMARY KEY (chain_id, address)
+) STRICT;
+
+CREATE TABLE payout_addresses (
+  seller_id TEXT NOT NULL REFERENCES accounts(id),
+  chain_id INTEGER NOT NULL,
+  address TEXT NOT NULL,
+  signature TEXT NOT NULL,
+  verified_at TEXT NOT NULL,
+  PRIMARY KEY (seller_id, chain_id, address),
+  UNIQUE (chain_id, address)
+) STRICT;
+
+CREATE TABLE payout_preferences (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  seller_id TEXT NOT NULL REFERENCES accounts(id),
+  listing_id TEXT,
+  asset_chain_id INTEGER NOT NULL,
+  asset_address TEXT NOT NULL,
+  asset_symbol TEXT NOT NULL,
+  asset_decimals INTEGER NOT NULL,
+  version INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (seller_id, listing_id, version)
+) STRICT;
+
+ALTER TABLE payouts ADD COLUMN mode TEXT NOT NULL DEFAULT 'usdt';
+ALTER TABLE payouts ADD COLUMN stage TEXT;
+ALTER TABLE payouts ADD COLUMN target_symbol TEXT;
+ALTER TABLE payouts ADD COLUMN target_chain_id INTEGER;
+ALTER TABLE payouts ADD COLUMN target_address TEXT;
+ALTER TABLE payouts ADD COLUMN target_decimals INTEGER;
+ALTER TABLE payouts ADD COLUMN delivery_address TEXT;
+ALTER TABLE payouts ADD COLUMN quote_id TEXT;
+ALTER TABLE payouts ADD COLUMN quote_expires_at TEXT;
+ALTER TABLE payouts ADD COLUMN approval_digest TEXT;
+ALTER TABLE payouts ADD COLUMN expected_target TEXT;
+ALTER TABLE payouts ADD COLUMN min_target TEXT;
+ALTER TABLE payouts ADD COLUMN received_target TEXT;
+ALTER TABLE payouts ADD COLUMN rate TEXT;
+ALTER TABLE payouts ADD COLUMN fee_target TEXT;
+ALTER TABLE payouts ADD COLUMN conversion_tx TEXT;
+ALTER TABLE payouts ADD COLUMN delivery_tx TEXT;
+ALTER TABLE payouts ADD COLUMN preference_version INTEGER;
+ALTER TABLE payouts ADD COLUMN seller_confirmed_at TEXT;
+ALTER TABLE payouts ADD COLUMN failure TEXT;
+CREATE TABLE payout_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  payout_id TEXT NOT NULL REFERENCES payouts(id),
+  at TEXT NOT NULL,
+  stage TEXT NOT NULL,
+  note TEXT NOT NULL
+) STRICT;
+CREATE TRIGGER payout_events_no_update BEFORE UPDATE ON payout_events BEGIN SELECT RAISE(ABORT, 'payout events are append-only'); END;
+CREATE TRIGGER payout_events_no_delete BEFORE DELETE ON payout_events BEGIN SELECT RAISE(ABORT, 'payout events are append-only'); END;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'accounts, listings, contracts, ledger, executions, audit', sql: V1 },
   { version: 2, name: 'encrypted seller credentials', sql: V2 },
@@ -339,6 +454,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 5, name: 'payouts, chain deposits, funding wallets, agents', sql: V5, rebuild: true },
   { version: 6, name: 'execution settlement mode', sql: V6 },
   { version: 7, name: 'marketplace funding operations', sql: V7 },
+  { version: 8, name: 'multi-currency funding and payout conversion (stage 1)', sql: V8, rebuild: true },
 ];
 
 /** Open (creating the file and folder if needed) and bring the schema up to date. ':memory:' for tests. */

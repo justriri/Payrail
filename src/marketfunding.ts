@@ -55,16 +55,29 @@ export interface ConverterQuote {
 }
 
 export type ExecuteResult =
-  | { kind: 'submitted'; swapTx: string; approveTxs: string[] }
+  | { kind: 'submitted'; swapTx: string | null; approveTxs: string[]; /** the buyer's own USDT transfer to custody (two-hop funding) */ depositTx?: string }
   | { kind: 'failed'; code: string; message: string }
   | { kind: 'uncertain'; swapTx?: string; approveTxs: string[]; message: string };
 
 export interface FundingConverter {
   mode: 'simulated' | 'live';
-  sellSymbol: 'cNGN';
+  sellSymbol: string;
   buySymbol: 'USDT';
-  /** the address the converted USDT must arrive at */
+  /** decimals of the sell asset (default 6); amounts above 64 bits are stored as text */
+  sellDecimals?: number;
+  sellChainId?: number;
+  sellAddress?: string;
+  /**
+   * Already USDT: there is nothing to convert. The only step is the deposit to custody, which is still verified on-chain.
+   */
+  passthrough?: boolean;
+  /**
+   * The wallet that fills the order and therefore RECEIVES the converted USDT (Textile pays msg.sender; there is no
+   * recipient parameter). For buyer funding this is the buyer's own wallet.
+   */
   recipient: string;
+  /** When set, the USDT must then be transferred from `recipient` to this custody address, and only that transfer is credited. */
+  depositAddress?: string;
   quote(req: { sellAtomic: bigint; scenario?: string }): Promise<ConverterQuote>;
   execute(req: { opId: string; quoteId: string; sellAtomic: bigint; minBuyAtomic: bigint; digest: string; scenario?: string | null }): Promise<ExecuteResult>;
 }
@@ -81,6 +94,8 @@ export interface FundingConfig {
   limits: FundingLimits;
   /** ledger asset credited: the TEST asset for simulated conversions, USDT only in real-funds mode */
   creditAsset: string;
+  /** optional cap across ALL source assets, in USDT atomic (expected output summed over the rolling 24 hours) */
+  maxPerDayBuyAtomic?: bigint;
   /**
    * Who may fund. REQUIRED for a live converter: the signing wallet belongs to the operator, and anonymous marketplace
    * buyers hold no keys, so unrestricted live funding would let any buyer turn the operator's cNGN into credits.
@@ -159,18 +174,32 @@ export interface FundingOp {
   scenario: string | null;
   createdAt: string;
   updatedAt: string;
+  sellDecimals: number;
+  sellChainId: number | null;
+  sellAddress: string | null;
+  taker: string | null;
+  depositTx: string | null;
+  depositAddress: string | null;
+  /** 'swap' | 'deposit' while VERIFYING in a two-hop funding */
+  stage: string | null;
 }
 const big = (v: unknown) => (v === null || v === undefined ? null : BigInt(v as bigint));
 const toOp = (r: Record<string, unknown>): FundingOp => ({
   id: String(r.id), buyerId: String(r.buyer_id), mode: r.mode as FundingOp['mode'], state: r.state as FundingState,
-  sellSymbol: String(r.sell_symbol), sellAtomic: BigInt(r.sell_atomic as bigint), buySymbol: String(r.buy_symbol),
-  expectedAtomic: BigInt(r.expected_atomic as bigint), minAtomic: BigInt(r.min_atomic as bigint), feeAtomic: BigInt(r.fee_atomic as bigint),
+  sellSymbol: String(r.sell_symbol), sellAtomic: BigInt(String(r.sell_atomic)), buySymbol: String(r.buy_symbol),
+  expectedAtomic: BigInt(r.expected_atomic as bigint), minAtomic: BigInt(r.min_atomic as bigint), feeAtomic: BigInt(String(r.fee_atomic)),
   rate: String(r.rate), provider: String(r.provider), quoteId: String(r.quote_id), quoteExpiresAt: String(r.quote_expires_at),
   approvalDigest: String(r.approval_digest), approvedAt: r.approved_at === null ? null : String(r.approved_at), creditAsset: String(r.credit_asset),
   receivedAtomic: big(r.received_atomic), creditedAtomic: big(r.credited_atomic), creditRef: r.credit_ref === null ? null : String(r.credit_ref),
   swapTx: r.swap_tx === null ? null : String(r.swap_tx), approveTxs: r.approve_txs === null ? [] : (JSON.parse(String(r.approve_txs)) as string[]),
   failureCode: r.failure_code === null ? null : String(r.failure_code), failureMessage: r.failure_message === null ? null : String(r.failure_message),
   scenario: r.scenario === null ? null : String(r.scenario), createdAt: String(r.created_at), updatedAt: String(r.updated_at),
+  sellDecimals: Number(r.sell_decimals ?? 6), sellChainId: r.sell_chain_id === null || r.sell_chain_id === undefined ? null : Number(r.sell_chain_id),
+  sellAddress: r.sell_address === null || r.sell_address === undefined ? null : String(r.sell_address),
+  taker: r.taker === null || r.taker === undefined ? null : String(r.taker),
+  depositTx: r.deposit_tx === null || r.deposit_tx === undefined ? null : String(r.deposit_tx),
+  depositAddress: r.deposit_address === null || r.deposit_address === undefined ? null : String(r.deposit_address),
+  stage: r.stage === null || r.stage === undefined ? null : String(r.stage),
 });
 
 export function getFundingOp(db: Db, id: string): FundingOp | undefined {
@@ -208,7 +237,7 @@ export async function requestFundingQuote(
 ): Promise<FundingOp> {
   const prior = queryOne(db, 'SELECT * FROM funding_ops WHERE buyer_id = ? AND idempotency_key = ?', a.buyerId, a.idempotencyKey);
   if (prior) {
-    if (BigInt(prior.sell_atomic as bigint) !== a.sellAtomic) throw new FundingOpError('IDEMPOTENCY_CONFLICT', 'this request key was already used for a different amount');
+    if (BigInt(String(prior.sell_atomic)) !== a.sellAtomic) throw new FundingOpError('IDEMPOTENCY_CONFLICT', 'this request key was already used for a different amount');
     return toOp(prior);
   }
   if (cfg.converter.mode === 'live' && !(cfg.allowedBuyerIds && cfg.allowedBuyerIds.includes(a.buyerId))) {
@@ -218,13 +247,20 @@ export async function requestFundingQuote(
   if (a.sellAtomic <= 0n) throw new FundingOpError('BAD_AMOUNT', 'the amount must be positive');
   if (a.sellAtomic < L.minSellAtomic) throw new FundingOpError('BELOW_MINIMUM', `the minimum funding amount is ${L.minSellAtomic} (atomic cNGN)`);
   if (a.sellAtomic > L.maxSellAtomic) throw new FundingOpError('ABOVE_MAXIMUM', `the maximum for one funding operation is ${L.maxSellAtomic} (atomic cNGN)`);
-  const day = queryOne<{ s: bigint | null; n: bigint }>(
+  const recent = query(
     db,
-    "SELECT SUM(sell_atomic) AS s, COUNT(*) AS n FROM funding_ops WHERE buyer_id = ? AND state IN ('CONVERTING','VERIFYING','CREDITED','UNRESOLVED','REVIEW') AND created_at >= ?",
+    "SELECT sell_symbol, sell_atomic, expected_atomic FROM funding_ops WHERE buyer_id = ? AND state IN ('CONVERTING','VERIFYING','CREDITED','UNRESOLVED','REVIEW') AND created_at >= ?",
     a.buyerId,
     iso(now() - 86_400_000),
   );
-  if (BigInt(day?.s ?? 0n) + a.sellAtomic > L.maxPerDaySellAtomic) throw new FundingOpError('DAILY_LIMIT', 'this would exceed the rolling 24-hour funding limit');
+  // sums are done in JS: 18-decimal amounts do not fit SQLite integers
+  let daySell = 0n;
+  let dayBuy = 0n;
+  for (const r of recent) {
+    if (String(r.sell_symbol) === cfg.converter.sellSymbol) daySell += BigInt(String(r.sell_atomic));
+    dayBuy += BigInt(r.expected_atomic as bigint);
+  }
+  if (daySell + a.sellAtomic > L.maxPerDaySellAtomic) throw new FundingOpError('DAILY_LIMIT', 'this would exceed the rolling 24-hour funding limit');
   // in-flight operations only: REVIEW is parked for an operator and still counts toward the daily limit, but must not lock a buyer out
   const open = queryOne<{ n: bigint }>(db, "SELECT COUNT(*) AS n FROM funding_ops WHERE buyer_id = ? AND state IN ('CONVERTING','VERIFYING','UNRESOLVED')", a.buyerId);
   if (Number(open?.n ?? 0n) >= L.maxOpenOps) throw new FundingOpError('TOO_MANY_OPEN', 'finish or resolve your open funding operations first');
@@ -235,14 +271,18 @@ export async function requestFundingQuote(
   } catch (e) {
     throw new FundingOpError('QUOTE_UNAVAILABLE', `no conversion quote is available right now: ${(e as Error).message.slice(0, 160)}`);
   }
+  if (cfg.maxPerDayBuyAtomic !== undefined && dayBuy + q.expectedBuyAtomic > cfg.maxPerDayBuyAtomic) {
+    throw new FundingOpError('DAILY_LIMIT', 'this would exceed the rolling 24-hour funding limit across all assets');
+  }
   const id = `fund_${randomUUID()}`;
   const base = { id, buyerId: a.buyerId, sellAtomic: a.sellAtomic, minAtomic: q.minBuyAtomic, expectedAtomic: q.expectedBuyAtomic, quoteId: q.quoteId, quoteExpiresAt: iso(q.expiresAtMs), mode: cfg.converter.mode, creditAsset: cfg.creditAsset };
   const digest = approvalDigest(base);
   const at = iso(now());
   db.prepare(
-    `INSERT INTO funding_ops (id, buyer_id, idempotency_key, mode, state, sell_symbol, sell_atomic, buy_symbol, expected_atomic, min_atomic, fee_atomic, rate, provider, quote_id, quote_expires_at, approval_digest, credit_asset, scenario, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'QUOTED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, a.buyerId, a.idempotencyKey, cfg.converter.mode, cfg.converter.sellSymbol, a.sellAtomic, cfg.converter.buySymbol, q.expectedBuyAtomic, q.minBuyAtomic, q.feeAtomic, q.rate, q.provider, q.quoteId, iso(q.expiresAtMs), digest, cfg.creditAsset, a.scenario ?? null, at, at);
+    `INSERT INTO funding_ops (id, buyer_id, idempotency_key, mode, state, sell_symbol, sell_atomic, buy_symbol, expected_atomic, min_atomic, fee_atomic, rate, provider, quote_id, quote_expires_at, approval_digest, credit_asset, scenario, created_at, updated_at, sell_decimals, sell_chain_id, sell_address, taker, deposit_address)
+     VALUES (?, ?, ?, ?, 'QUOTED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, a.buyerId, a.idempotencyKey, cfg.converter.mode, cfg.converter.sellSymbol, a.sellAtomic.toString(), cfg.converter.buySymbol, q.expectedBuyAtomic, q.minBuyAtomic, q.feeAtomic.toString(), q.rate, q.provider, q.quoteId, iso(q.expiresAtMs), digest, cfg.creditAsset, a.scenario ?? null, at, at,
+    cfg.converter.sellDecimals ?? 6, cfg.converter.sellChainId ?? null, cfg.converter.sellAddress ?? null, cfg.converter.recipient, cfg.converter.depositAddress ?? null);
   event(db, id, 'QUOTED', 'quote obtained; nothing has been converted', { rate: q.rate, expected: q.expectedBuyAtomic.toString(), min: q.minBuyAtomic.toString() }, now());
   return getFundingOp(db, id)!;
 }
@@ -289,11 +329,12 @@ export async function approveFunding(
     return getFundingOp(db, op0.id)!;
   }
   const patch: Record<string, string | null> = { approve_txs: JSON.stringify(r.approveTxs), swap_tx: r.swapTx ?? null };
+  if (r.kind === 'submitted' && r.depositTx) patch.deposit_tx = r.depositTx;
   if (r.kind === 'uncertain') {
     setState(db, op0.id, 'UNRESOLVED', `outcome unknown: ${r.message}`, now(), { ...patch, failure_code: 'UNCERTAIN', failure_message: r.message.slice(0, 300) });
     return getFundingOp(db, op0.id)!;
   }
-  setState(db, op0.id, 'VERIFYING', 'transaction submitted; verifying on-chain before crediting', now(), patch, { swapTx: r.swapTx });
+  setState(db, op0.id, 'VERIFYING', 'transaction submitted; verifying on-chain before crediting', now(), { ...patch, stage: cfg.converter.passthrough ? 'deposit' : 'swap' }, { swapTx: r.swapTx, depositTx: r.depositTx ?? null });
   return verifyAndCredit(db, cfg, op0.id, now);
 }
 
@@ -302,58 +343,140 @@ export async function verifyAndCredit(db: Db, cfg: FundingConfig, opId: string, 
   const op = getFundingOp(db, opId);
   if (!op) throw new FundingOpError('NOT_FOUND', 'no such funding operation');
   if (!['VERIFYING', 'CONVERTING', 'UNRESOLVED'].includes(op.state)) return op;
-  if (!op.swapTx) {
+  const pass = cfg.converter.passthrough === true;
+  if (!op.swapTx && !(pass && op.depositTx)) {
     if (op.state === 'CONVERTING') setState(db, op.id, 'UNRESOLVED', 'interrupted before a transaction was recorded; check the wallet before retrying', now(), { failure_code: 'NO_TX_RECORDED' });
+    else if (pass && op.state === 'VERIFYING') setState(db, op.id, 'REVIEW', 'no deposit transaction was recorded; nothing was credited', now(), { failure_code: 'DEPOSIT_NOT_RECORDED', stage: 'deposit' });
     return getFundingOp(db, opId)!;
   }
-  let receipt: ChainReceipt | null;
-  let head: bigint;
-  try {
-    [receipt, head] = await Promise.all([cfg.reader.receipt(op.swapTx), cfg.reader.blockNumber()]);
-  } catch (e) {
-    if (op.state !== 'UNRESOLVED') setState(db, op.id, 'UNRESOLVED', `could not read the chain: ${(e as Error).message.slice(0, 120)}; will re-check`, now(), { failure_code: 'READ_FAILED' });
+  const hop = op.depositAddress !== null || cfg.converter.depositAddress !== undefined;
+  const depositTo = op.depositAddress ?? cfg.converter.depositAddress ?? null;
+  const read = async (hash: string): Promise<{ receipt: ChainReceipt | null; head: bigint } | { error: string }> => {
+    try {
+      const [receipt, head] = await Promise.all([cfg.reader.receipt(hash), cfg.reader.blockNumber()]);
+      return { receipt, head };
+    } catch (e) {
+      return { error: (e as Error).message.slice(0, 120) };
+    }
+  };
+  const unreadable = (msg: string) => {
+    if (op.state !== 'UNRESOLVED') setState(db, op.id, 'UNRESOLVED', `could not read the chain: ${msg}; will re-check`, now(), { failure_code: 'READ_FAILED' });
     return getFundingOp(db, opId)!;
-  }
-  if (!receipt) {
-    // not found is NOT failure: the transaction may still land. It stays pending and unspendable.
-    // an operation already marked UNRESOLVED stays UNRESOLVED; only a fresh one becomes "verifying"
-    if (op.state === 'CONVERTING') setState(db, op.id, 'VERIFYING', 'transaction not found yet; waiting', now());
-    return getFundingOp(db, opId)!;
-  }
-  const v = verifyConversion(receipt, head, { usdt: cfg.usdt, reactor: cfg.reactor, recipient: cfg.converter.recipient, minBuyAtomic: op.minAtomic, minConfirmations: cfg.minConfirmations });
-  switch (v.kind) {
-    case 'pending':
-      {
+  };
+
+  // ---- 1. the conversion (skipped when the buyer already holds USDT)
+  let swapReceived: bigint | null = null;
+  if (!pass) {
+    const r = await read(op.swapTx!);
+    if ('error' in r) return unreadable(r.error);
+    if (!r.receipt) {
+      // not found is NOT failure: the transaction may still land. It stays pending and unspendable.
+      if (op.state === 'CONVERTING') setState(db, op.id, 'VERIFYING', 'transaction not found yet; waiting', now());
+      return getFundingOp(db, opId)!;
+    }
+    const v = verifyConversion(r.receipt, r.head, { usdt: cfg.usdt, reactor: cfg.reactor, recipient: cfg.converter.recipient, minBuyAtomic: op.minAtomic, minConfirmations: cfg.minConfirmations });
+    switch (v.kind) {
+      case 'pending': {
         const note = `waiting for confirmations (${v.confirmations}/${cfg.minConfirmations})`;
         const last = fundingEvents(db, op.id).at(-1);
         if (op.state !== 'VERIFYING') setState(db, op.id, 'VERIFYING', note, now());
         else if (last?.note !== note) event(db, op.id, 'VERIFYING', note, undefined, now());
+        return getFundingOp(db, opId)!;
       }
+      case 'reverted':
+        setState(db, op.id, 'FAILED', 'the conversion transaction reverted on-chain; nothing was converted or credited', now(), { failure_code: 'REVERTED' });
+        return getFundingOp(db, opId)!;
+      case 'mismatch':
+        setState(db, op.id, 'REVIEW', `verification failed: ${v.reason}. Nothing was credited; an operator must review.`, now(), { failure_code: 'VERIFICATION_MISMATCH', failure_message: v.reason });
+        return getFundingOp(db, opId)!;
+      case 'below_minimum':
+        setState(db, op.id, 'REVIEW', `received ${fmt(v.receivedAtomic)} ${op.buySymbol}, below the agreed minimum ${fmt(op.minAtomic)}. Nothing was credited; an operator must review.`, now(), { received_atomic: v.receivedAtomic, failure_code: 'BELOW_MINIMUM' });
+        return getFundingOp(db, opId)!;
+      case 'confirmed':
+        swapReceived = v.receivedAtomic;
+        break;
+    }
+  }
+
+  // ---- 2. the deposit hop: only USDT that actually reached custody from the buyer's own wallet is credited
+  if (!hop || !depositTo) {
+    return creditOnce(db, cfg, op, swapReceived!, now);
+  }
+  if (!op.depositTx) {
+    setState(db, op.id, 'REVIEW', swapReceived !== null
+      ? `the conversion is verified (${fmt(swapReceived)} ${op.buySymbol} is in your wallet) but no deposit transaction was recorded. Nothing was credited. Deposit that USDT to the marketplace address to credit it.`
+      : 'no deposit transaction was recorded; nothing was credited', now(), { received_atomic: swapReceived, failure_code: 'DEPOSIT_NOT_RECORDED', stage: 'deposit' });
+    return getFundingOp(db, opId)!;
+  }
+  const d = await read(op.depositTx);
+  if ('error' in d) return unreadable(d.error);
+  if (!d.receipt) {
+    if (op.stage !== 'deposit') setState(db, op.id, 'VERIFYING', 'conversion verified; waiting for the deposit transaction', now(), { stage: 'deposit' });
+    return getFundingOp(db, opId)!;
+  }
+  const dv = verifyDeposit(d.receipt, d.head, { usdt: cfg.usdt, from: cfg.converter.recipient, to: depositTo, minConfirmations: cfg.minConfirmations });
+  switch (dv.kind) {
+    case 'pending':
+      if (op.stage !== 'deposit') setState(db, op.id, 'VERIFYING', `conversion verified; deposit has ${dv.confirmations}/${cfg.minConfirmations} confirmations`, now(), { stage: 'deposit' });
       return getFundingOp(db, opId)!;
     case 'reverted':
-      setState(db, op.id, 'FAILED', 'the conversion transaction reverted on-chain; nothing was converted or credited', now(), { failure_code: 'REVERTED' });
+      setState(db, op.id, 'REVIEW', 'the deposit transaction reverted; nothing was credited. The USDT stays in your wallet.', now(), { received_atomic: swapReceived, failure_code: 'DEPOSIT_REVERTED', stage: 'deposit' });
       return getFundingOp(db, opId)!;
     case 'mismatch':
-      setState(db, op.id, 'REVIEW', `verification failed: ${v.reason}. Nothing was credited; an operator must review.`, now(), { failure_code: 'VERIFICATION_MISMATCH', failure_message: v.reason });
+      setState(db, op.id, 'REVIEW', `deposit verification failed: ${dv.reason}. Nothing was credited; an operator must review.`, now(), { received_atomic: swapReceived, failure_code: 'DEPOSIT_MISMATCH', failure_message: dv.reason, stage: 'deposit' });
       return getFundingOp(db, opId)!;
-    case 'below_minimum':
-      setState(db, op.id, 'REVIEW', `received ${fmt(v.receivedAtomic)} ${op.buySymbol}, below the agreed minimum ${fmt(op.minAtomic)}. Nothing was credited; an operator must review.`, now(), { received_atomic: v.receivedAtomic, failure_code: 'BELOW_MINIMUM' });
-      return getFundingOp(db, opId)!;
-    case 'confirmed': {
-      const credited = creditOnce(db, cfg, op, v.receivedAtomic, now);
-      return credited;
-    }
+    case 'confirmed':
+      return creditOnce(db, cfg, op, dv.receivedAtomic, now, swapReceived ?? undefined);
   }
 }
 
-function creditOnce(db: Db, cfg: FundingConfig, op: FundingOp, received: bigint, now: () => number): FundingOp {
-  // one swap transaction can fund one operation, for one buyer, ever
-  const claim = queryOne(db, 'SELECT op_id FROM funding_tx_claims WHERE tx_hash = ?', lower(op.swapTx!));
-  if (claim && String(claim.op_id) !== op.id) {
-    setState(db, op.id, 'REVIEW', 'this transaction was already used to fund a different operation; nothing was credited', now(), { failure_code: 'TX_ALREADY_CLAIMED' });
-    return getFundingOp(db, op.id)!;
+/**
+ * SIMULATION ONLY. The simulated chain lives in memory, so after a restart an unfinished simulated operation can never be
+ * confirmed. It is parked for review (never credited) so it does not block the buyer forever.
+ */
+export function parkSimulatedAfterRestart(db: Db, opId: string, now: () => number = Date.now): FundingOp {
+  const op = getFundingOp(db, opId);
+  if (!op) throw new FundingOpError('NOT_FOUND', 'no such funding operation');
+  if (op.mode !== 'simulated' || !['CONVERTING', 'VERIFYING', 'UNRESOLVED'].includes(op.state)) return op;
+  setState(db, op.id, 'REVIEW', 'the simulated chain was reset by a server restart, so this simulated operation can no longer be confirmed. Nothing was credited.', now(), { failure_code: 'SIMULATION_RESET' });
+  return getFundingOp(db, op.id)!;
+}
+
+/** Judge the buyer's USDT transfer to custody from its receipt: exact token, from the buyer's wallet, to the custody address. */
+export function verifyDeposit(
+  receipt: ChainReceipt,
+  head: bigint,
+  e: { usdt: string; from: string; to: string; minConfirmations: number },
+): { kind: 'pending'; confirmations: number } | { kind: 'reverted' } | { kind: 'mismatch'; reason: string } | { kind: 'confirmed'; receivedAtomic: bigint } {
+  if (receipt.status !== 'success') return { kind: 'reverted' };
+  const confirmations = Number(head - receipt.blockNumber) + 1;
+  if (confirmations < e.minConfirmations) return { kind: 'pending', confirmations };
+  let total = 0n;
+  for (const l of receipt.logs) {
+    if (lower(l.address) !== lower(e.usdt) || l.topics.length !== 3 || lower(l.topics[0]!) !== TRANSFER_TOPIC) continue;
+    if (topicAddr(l.topics[1]!) !== lower(e.from) || topicAddr(l.topics[2]!) !== lower(e.to)) continue;
+    if (/^0x[0-9a-fA-F]{64}$/.test(l.data)) total += BigInt(l.data);
   }
-  if (!claim) db.prepare('INSERT INTO funding_tx_claims (tx_hash, op_id, buyer_id, claimed_at) VALUES (?, ?, ?, ?)').run(lower(op.swapTx!), op.id, op.buyerId, iso(now()));
+  if (total <= 0n) return { kind: 'mismatch', reason: 'no USDT transfer from your wallet to the marketplace address was found in that transaction' };
+  return { kind: 'confirmed', receivedAtomic: total };
+}
+
+function creditOnce(db: Db, cfg: FundingConfig, op: FundingOp, received: bigint, now: () => number, swapReceived?: bigint): FundingOp {
+  // the credited transaction (the deposit when there is a hop, else the swap) can fund one operation, for one buyer, ever
+  const txs = [op.depositTx, op.swapTx].filter((x): x is string => Boolean(x)).map(lower);
+  for (const tx of txs) {
+    const claim = queryOne(db, 'SELECT op_id FROM funding_tx_claims WHERE tx_hash = ?', tx);
+    if (claim && String(claim.op_id) !== op.id) {
+      setState(db, op.id, 'REVIEW', 'this transaction was already used to fund a different operation; nothing was credited', now(), { failure_code: 'TX_ALREADY_CLAIMED' });
+      return getFundingOp(db, op.id)!;
+    }
+  }
+  for (const tx of txs) {
+    if (!queryOne(db, 'SELECT 1 AS x FROM funding_tx_claims WHERE tx_hash = ?', tx)) {
+      db.prepare('INSERT INTO funding_tx_claims (tx_hash, op_id, buyer_id, claimed_at) VALUES (?, ?, ?, ?)').run(tx, op.id, op.buyerId, iso(now()));
+    }
+  }
+  void swapReceived;
   const ref = `fund:${op.id}`;
   try {
     // ledger deposit is idempotent per ref; a second call returns created:false and credits nothing
@@ -393,6 +516,7 @@ export async function recoverFunding(db: Db, cfg: FundingConfig, now: () => numb
 // ------------------------------------------------------------------ views
 
 const fmt = (v: bigint, decimals = 6) => {
+  if (decimals === 0) return v.toString();
   const s = v.toString().padStart(decimals + 1, '0');
   const f = s.slice(-decimals).replace(/0+$/, '');
   return `${s.slice(0, -decimals)}${f ? `.${f}` : ''}`;
@@ -416,10 +540,12 @@ export function fundingView(op: FundingOp, now: number = Date.now()) {
     state: op.state,
     statusText: STATE_TEXT[op.state],
     spendable: op.state === 'CREDITED',
-    sell: { symbol: op.sellSymbol, atomic: op.sellAtomic.toString(), display: fmt(op.sellAtomic) },
+    asset: { symbol: op.sellSymbol, chainId: op.sellChainId, address: op.sellAddress, decimals: op.sellDecimals },
+    stage: op.stage,
+    sell: { symbol: op.sellSymbol, atomic: op.sellAtomic.toString(), display: fmt(op.sellAtomic, op.sellDecimals) },
     estimatedReceive: { symbol: op.buySymbol, atomic: op.expectedAtomic.toString(), display: fmt(op.expectedAtomic) },
     minimumReceive: { atomic: op.minAtomic.toString(), display: fmt(op.minAtomic) },
-    fee: { symbol: op.sellSymbol, atomic: op.feeAtomic.toString(), display: fmt(op.feeAtomic) },
+    fee: { symbol: op.sellSymbol, atomic: op.feeAtomic.toString(), display: fmt(op.feeAtomic, op.sellDecimals) },
     rate: op.rate,
     provider: op.provider,
     creditAsset: op.creditAsset,
@@ -429,7 +555,9 @@ export function fundingView(op: FundingOp, now: number = Date.now()) {
     quoteExpiresAt: op.quoteExpiresAt,
     expiresInSeconds: op.state === 'QUOTED' ? Math.max(0, Math.round((Date.parse(op.quoteExpiresAt) - now) / 1000)) : null,
     approvalDigest: op.state === 'QUOTED' ? op.approvalDigest : null,
-    txs: { approve: op.approveTxs, swap: op.swapTx },
+    txs: { approve: op.approveTxs, swap: op.swapTx, deposit: op.depositTx },
+    depositAddress: op.depositAddress,
+    taker: op.taker,
     creditRef: op.creditRef,
     failure: op.failureCode ? { code: op.failureCode, message: op.failureMessage } : null,
     createdAt: op.createdAt,

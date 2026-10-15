@@ -6,6 +6,7 @@ const OUT = process.argv[3];
 const b = await launch(9371, OUT, 1100, 1700);
 const res = [];
 const check = (n, ok, d = '') => res.push(`${ok ? 'PASS' : 'FAIL'}  ${n}${d ? '  -> ' + String(d).replace(/\s+/g, ' ').slice(0, 170) : ''}`);
+const prep = (scenario) => b.ev(`(() => { const sel=document.querySelectorAll('#fund select'); sel[0].value='cNGN'; sel[0].dispatchEvent(new Event('change',{bubbles:true})); document.querySelectorAll('#fund input')[0].value='1364'; document.querySelectorAll('#fund select')[1].value=${JSON.stringify(scenario)}; return 0; })()`);
 const fundText = () => b.text('#fund');
 const avail = async () => {
   const t = await b.text('#buyer');
@@ -17,7 +18,9 @@ check('before a buyer exists the funding card asks to start testing first', /Sta
 await b.click('#buyer button', 'Start testing');
 await b.sleep(2500);
 let t = await fundText();
-check('funding card is labelled SIMULATED, with limits and a plain flow', /SIMULATED conversion/.test(t) && /Limits per operation: 100–7000 cNGN/.test(t) && /nothing is converted yet/.test(t), t.split('\n').slice(0, 3).join(' | '));
+await b.ev(`(() => { const s=document.querySelector('#fund select'); s.value='cNGN'; s.dispatchEvent(new Event('change',{bubbles:true})); const a=[...document.querySelectorAll('#fund input')][0]; a.value='1364'; return 0; })()`);
+t = await fundText();
+check('funding card is labelled SIMULATED, with limits and a plain flow', /SIMULATED conversion/.test(t) && /Allowed per operation: 1364 to 95480000 cNGN/.test(t) && /nothing is converted yet/.test(t), t.split('\n').slice(0, 3).join(' | '));
 check('simulated funds are badged as test, not real USDT', /SIMULATED \/ TEST/.test(t) && !/REAL USDT/.test(t));
 const start = await avail();
 
@@ -43,7 +46,7 @@ await b.click('#fund button', 'Done');
 await b.sleep(800);
 
 // failure: reverted -> nothing credited
-await b.ev(`document.querySelector('#fund select').value = 'reverted'; 0`);
+await prep('reverted');
 await b.click('#fund button', 'Get a quote');
 await b.sleep(1200);
 await b.click('#fund button', 'Approve and convert');
@@ -54,7 +57,7 @@ await b.click('#fund button', 'Done');
 await b.sleep(800);
 
 // wrong token -> needs review, nothing credited
-await b.ev(`document.querySelector('#fund select').value = 'wrong_token'; 0`);
+await prep('wrong_token');
 await b.click('#fund button', 'Get a quote');
 await b.sleep(1200);
 await b.click('#fund button', 'Approve and convert');
@@ -65,7 +68,7 @@ await b.click('#fund button', 'Done');
 await b.sleep(800);
 
 // delayed confirmation: not spendable until verified, then credited after re-checks
-await b.ev(`document.querySelector('#fund select').value = 'slow'; 0`);
+await prep('slow');
 await b.click('#fund button', 'Get a quote');
 await b.sleep(1200);
 await b.click('#fund button', 'Approve and convert');

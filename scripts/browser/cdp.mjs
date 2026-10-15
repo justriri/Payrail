@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
 export async function launch(port, outDir, width = 1100, height = 1400) {
-  const edge = spawn(EDGE, ['--headless=new', '--disable-gpu', `--remote-debugging-port=${port}`, `--window-size=${width},${height}`, `--user-data-dir=${outDir}\\prof${port}`, 'about:blank'], { stdio: 'ignore' });
+  const edge = spawn(EDGE, ['--headless=new', '--disable-gpu', `--remote-debugging-port=${port}`, `--window-size=${width},${height}`, `--user-data-dir=${outDir}\\prof${port}-${Date.now()}`, 'about:blank'], { stdio: 'ignore' });
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   let targets;
   for (let i = 0; i < 40; i++) { try { targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json(); if (targets.length) break; } catch {} await sleep(250); }

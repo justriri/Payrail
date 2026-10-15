@@ -202,7 +202,7 @@ export interface SellerStatement {
   buckets: SettlementBucket[];
   /** off-chain ledger earnings available to request as a payout, per asset */
   ledgerBalances: Array<{ asset: string; available: { atomic: string; display: string }; pendingPayout: { atomic: string; display: string } }>;
-  payouts: Array<{ id: string; asset: string; amount: { atomic: string; display: string }; state: string; destination: string; requestedAt: string; settledAt: string | null; txHash: string | null }>;
+  payouts: Array<{ id: string; asset: string; amount: { atomic: string; display: string }; state: string; destination: string; requestedAt: string; settledAt: string | null; txHash: string | null; mode: string; stage: string | null; target: { symbol: string; decimals: number; expected: string | null; minimum: string | null; received: string | null; rate: string | null; deliveryAddress: string } | null; conversionTx: string | null; deliveryTx: string | null }>;
   payoutTotals: Array<{ asset: string; pending: { atomic: string; display: string }; completed: { atomic: string; display: string } }>;
   recentSales: Array<{ receiptId: string; at: string; listing: string; asset: string; gross: string; fee: string; earned: string; settlement: string; state: string }>;
   notes: string[];
@@ -240,7 +240,18 @@ export function sellerStatement(db: Db, sellerId: string): SellerStatement {
       available: money(balance(db, sellerId, 'seller_earnings', asset)),
       pendingPayout: money(balance(db, sellerId, 'payout_pending', asset)),
     })),
-    payouts: payouts.map((p) => ({ id: String(p.id), asset: String(p.asset), amount: money(BigInt(p.amount_atomic as bigint)), state: String(p.state), destination: String(p.destination), requestedAt: String(p.requested_at), settledAt: p.settled_at === null ? null : String(p.settled_at), txHash: p.tx_hash === null ? null : String(p.tx_hash) })),
+    payouts: payouts.map((p) => {
+      const dec = p.target_decimals === null || p.target_decimals === undefined ? 6 : Number(p.target_decimals);
+      const t = (v: unknown) => (v === null || v === undefined ? null : fmt(BigInt(String(v)), dec));
+      return {
+        id: String(p.id), asset: String(p.asset), amount: money(BigInt(p.amount_atomic as bigint)), state: String(p.state), destination: String(p.destination),
+        requestedAt: String(p.requested_at), settledAt: p.settled_at === null ? null : String(p.settled_at), txHash: p.tx_hash === null ? null : String(p.tx_hash),
+        mode: String(p.mode ?? 'usdt'), stage: p.stage === null || p.stage === undefined ? null : String(p.stage),
+        target: p.target_symbol === null || p.target_symbol === undefined ? null : { symbol: String(p.target_symbol), decimals: dec, expected: t(p.expected_target), minimum: t(p.min_target), received: t(p.received_target), rate: p.rate === null || p.rate === undefined ? null : String(p.rate), deliveryAddress: String(p.delivery_address) },
+        conversionTx: p.conversion_tx === null || p.conversion_tx === undefined ? null : String(p.conversion_tx),
+        deliveryTx: p.delivery_tx === null || p.delivery_tx === undefined ? null : String(p.delivery_tx),
+      };
+    }),
     payoutTotals: [...totals.entries()].map(([asset, t]) => ({ asset, pending: money(t.pending), completed: money(t.completed) })),
     recentSales: recent.map((r) => ({ receiptId: String(r.id), at: String(r.updated_at), listing: String(r.name), asset: String(r.asset), gross: fmt(BigInt(r.price_atomic as bigint)), fee: fmt(BigInt(r.fee_atomic as bigint)), earned: fmt(BigInt(r.seller_atomic as bigint)), settlement: String(r.settlement), state: String(r.state) })),
     notes: [

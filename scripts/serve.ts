@@ -33,6 +33,11 @@ import { runAmmSwap, runSwap } from '../src/swapexec.ts';
 import { createDemoNetwork, createSandboxNetwork, seedDemo } from '../src/demoapis.ts';
 import { createTestnetEscrow } from '../src/escrowtestnet.ts';
 import { createSimFunding } from '../src/simfunding.ts';
+import { RouteRegistry, seedConversionAssets } from '../src/conversion.ts';
+import { createSimProvider } from '../src/simconversion.ts';
+import { recoverAllFunding } from '../src/multifunding.ts';
+import type { ConversionRuntime } from '../src/multifunding.ts';
+import { recoverConversionPayouts } from '../src/payoutconv.ts';
 import { recoverFunding } from '../src/marketfunding.ts';
 import type { FundingConfig as MarketFundingConfig } from '../src/marketfunding.ts';
 import { TEXTILE_REACTOR } from '../src/config.ts';
@@ -273,6 +278,37 @@ const fundingCfg: MarketFundingConfig = {
   creditAsset: 'TESTUSDT',
 };
 await recoverFunding(marketDb, fundingCfg);
+
+// Stage 1 multi-currency (SIMULATED provider): route discovery, any-enabled-asset funding, payout preferences, payout conversion.
+seedConversionAssets(marketDb);
+const simProvider = createSimProvider({ reactor: TEXTILE_REACTOR, confirmedDepth: 12, autoAdvanceOnRead: true });
+const SIM_CUSTODY = `0x${'0'.repeat(34)}c0570d`;
+const SIM_DEPOSIT = `0x${'0'.repeat(34)}dec051`;
+const conversion: ConversionRuntime = {
+  registry: new RouteRegistry(marketDb, [simProvider]),
+  provider: simProvider,
+  reader: simProvider.reader,
+  reactor: TEXTILE_REACTOR,
+  usdt: usdtAddress,
+  chainId: 42220,
+  minConfirmations: 3,
+  creditAsset: 'TESTUSDT',
+  depositAddress: SIM_DEPOSIT,
+  maxPerDayBuyAtomic: 10_000_000_000n,
+  simulated: true,
+  payout: undefined,
+};
+conversion.payout = {
+  registry: conversion.registry,
+  provider: simProvider,
+  reader: simProvider.reader,
+  reactor: TEXTILE_REACTOR,
+  custody: SIM_CUSTODY,
+  minConfirmations: 3,
+  policy: { payableAssets: ['TESTUSDT'], minAtomic: 1n, maxAtomic: 1_000_000_000_000n },
+};
+await recoverAllFunding(marketDb, conversion, Date.now, { atStartup: true });
+await recoverConversionPayouts(marketDb, conversion.payout, Date.now, { atStartup: true });
 const market: MarketRuntime = {
   db: marketDb,
   keys: [vaultKey],
@@ -284,6 +320,7 @@ const market: MarketRuntime = {
     demoCall: { limiter: limiter(), fetchOptions: { resolver: demoNet.resolver, transport: demoNet.transport, timeoutMs: 3_000 } },
   },
   funding: fundingCfg,
+  conversion,
   testCall: { limiter: limiter(), fetchOptions: { resolver: sandbox.resolver, transport: sandbox.transport, timeoutMs: 8_000 } },
   domain: { txt: sandbox.txt, fetchOptions: { resolver: sandbox.resolver, transport: sandbox.transport } },
   buyCatalog: () => runtime.catalog(),

@@ -39,6 +39,24 @@ export interface Payout {
   sentAt: string | null;
   settledAt: string | null;
   note: string | null;
+  /** 'usdt' (no conversion) | 'convert-simulated' | 'convert-live' */
+  mode: string;
+  /** conversion sub-state while `state` is requested/approved/sent: quoted | confirmed | converting | converted | converted_undelivered | delivering | review */
+  stage: string | null;
+  target: { symbol: string; chainId: number; address: string; decimals: number; deliveryAddress: string } | null;
+  quoteId: string | null;
+  quoteExpiresAt: string | null;
+  approvalDigest: string | null;
+  expectedTarget: bigint | null;
+  minTarget: bigint | null;
+  receivedTarget: bigint | null;
+  rate: string | null;
+  feeTarget: bigint | null;
+  conversionTx: string | null;
+  deliveryTx: string | null;
+  preferenceVersion: number | null;
+  sellerConfirmedAt: string | null;
+  failure: string | null;
 }
 const toPayout = (r: Record<string, unknown>): Payout => ({
   id: String(r.id),
@@ -54,6 +72,25 @@ const toPayout = (r: Record<string, unknown>): Payout => ({
   sentAt: r.sent_at === null ? null : String(r.sent_at),
   settledAt: r.settled_at === null ? null : String(r.settled_at),
   note: r.note === null ? null : String(r.note),
+  mode: String(r.mode ?? 'usdt'),
+  stage: r.stage === null || r.stage === undefined ? null : String(r.stage),
+  target:
+    r.target_symbol === null || r.target_symbol === undefined
+      ? null
+      : { symbol: String(r.target_symbol), chainId: Number(r.target_chain_id), address: String(r.target_address), decimals: Number(r.target_decimals), deliveryAddress: String(r.delivery_address) },
+  quoteId: r.quote_id === null || r.quote_id === undefined ? null : String(r.quote_id),
+  quoteExpiresAt: r.quote_expires_at === null || r.quote_expires_at === undefined ? null : String(r.quote_expires_at),
+  approvalDigest: r.approval_digest === null || r.approval_digest === undefined ? null : String(r.approval_digest),
+  expectedTarget: r.expected_target === null || r.expected_target === undefined ? null : BigInt(String(r.expected_target)),
+  minTarget: r.min_target === null || r.min_target === undefined ? null : BigInt(String(r.min_target)),
+  receivedTarget: r.received_target === null || r.received_target === undefined ? null : BigInt(String(r.received_target)),
+  rate: r.rate === null || r.rate === undefined ? null : String(r.rate),
+  feeTarget: r.fee_target === null || r.fee_target === undefined ? null : BigInt(String(r.fee_target)),
+  conversionTx: r.conversion_tx === null || r.conversion_tx === undefined ? null : String(r.conversion_tx),
+  deliveryTx: r.delivery_tx === null || r.delivery_tx === undefined ? null : String(r.delivery_tx),
+  preferenceVersion: r.preference_version === null || r.preference_version === undefined ? null : Number(r.preference_version),
+  sellerConfirmedAt: r.seller_confirmed_at === null || r.seller_confirmed_at === undefined ? null : String(r.seller_confirmed_at),
+  failure: r.failure === null || r.failure === undefined ? null : String(r.failure),
 });
 const iso = (now: () => number) => new Date(now()).toISOString();
 
@@ -111,6 +148,9 @@ function transition(db: Db, id: string, from: PayoutState[], fn: (p: Payout) => 
 export function approvePayout(db: Db, id: string, operator: string, now: () => number = Date.now): Payout {
   const cur = getPayout(db, id);
   if (cur?.state === 'approved') return cur;
+  if (cur && cur.mode !== 'usdt' && cur.stage !== 'confirmed') {
+    throw new PayoutError('WRONG_STATE', 'the seller has not confirmed the conversion quote (or it expired); it cannot be approved yet');
+  }
   return transition(db, id, ['requested'], () => {
     db.prepare("UPDATE payouts SET state = 'approved', approved_at = ?, approved_by = ? WHERE id = ?").run(iso(now), operator.slice(0, 80), id);
     audit(db, operator, 'payout.approved', id, undefined, new Date(now()));
@@ -142,6 +182,25 @@ export function cancelPayout(db: Db, id: string, actor: string, now: () => numbe
   const cur = getPayout(db, id);
   if (cur?.state === 'cancelled') return cur;
   return transition(db, id, ['requested', 'approved'], (p) => giveBack(db, p, 'cancelled', 'cancelled before sending', actor, now));
+}
+
+/** A conversion payout whose swap provably did not happen: restore the USDT earnings (state sent -> failed). */
+export function failSentPayout(db: Db, id: string, note: string, now: () => number = Date.now): Payout {
+  return transition(db, id, ['sent', 'approved'], (p) => giveBack(db, p, 'failed', note, 'system', now));
+}
+
+/** The destination payment was verified: only now is a conversion payout complete (USDT leaves pending). */
+export function completeConvertedPayout(db: Db, id: string, received: bigint, now: () => number = Date.now): Payout {
+  const cur = getPayout(db, id);
+  if (cur?.state === 'confirmed') return cur;
+  return transition(db, id, ['sent'], (x) => {
+    post(db, 'payout_confirm', null, x.id, 'conversion payout delivered and verified', [
+      { owner: x.sellerId, kind: 'payout_pending', asset: x.asset, amount: -x.amountAtomic },
+      { owner: 'platform', kind: 'external_funding', asset: x.asset, amount: x.amountAtomic },
+    ], now);
+    db.prepare("UPDATE payouts SET state = 'confirmed', settled_at = ?, stage = 'delivered', received_target = ? WHERE id = ?").run(iso(now), received.toString(), x.id);
+    audit(db, 'system', 'payout.confirmed', x.id, { receivedTarget: received.toString(), conversionTx: x.conversionTx, deliveryTx: x.deliveryTx }, new Date(now()));
+  });
 }
 
 export interface PayoutVerifyConfig {
