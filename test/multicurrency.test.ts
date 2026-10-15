@@ -397,9 +397,12 @@ test('quotes expire; a stale quote cannot be confirmed or executed; re-quoting k
 test('payout requests refuse unsupported routes, missing addresses, floor and depth, and a changed preference never alters an existing payout', async () => {
   const w = world();
   const cfg = payCfg(w);
-  // preference USDT: use the plain payout, not a conversion
+  // preference USDT: in SIMULATION this is a labelled demo lifecycle; the live provider still refuses it
   const usdt = await earningSeller(w, 5_000_000n, 'USDT');
-  assert.equal(await code(requestConversionPayout(w.db, cfg, { sellerId: usdt.id, amountAtomic: 2_000_000n, asset: 'TESTUSDT' }, w.now)), 'BAD_INPUT');
+  const up = await requestConversionPayout(w.db, cfg, { sellerId: usdt.id, amountAtomic: 2_000_000n, asset: 'TESTUSDT' }, w.now);
+  assert.equal(up.mode, 'usdt-simulated');
+  assert.equal(up.stage, 'quoted');
+  cancelPayout(w.db, up.id, usdt.id, w.now);
 
   const s = await earningSeller(w);
   assert.equal(await code(requestConversionPayout(w.db, cfg, { sellerId: s.id, amountAtomic: 500_000n, asset: 'TESTUSDT' }, w.now)), 'BELOW_FLOOR');
@@ -462,4 +465,49 @@ test('simulation restart: unfinished simulated operations are parked for review,
   // a finished operation is left alone
   const ok = await mk2('ok');
   assert.equal(parkSimulatedAfterRestart(w.db, ok.id, w.now).state, 'CREDITED');
+});
+
+test('simulated USDT payout lifecycle: quote, confirm, approve, deliver and verify; failures restore only when nothing left custody', async () => {
+  const w = world();
+  const s = await earningSeller(w, 5_000_000n, 'USDT');
+  const cfg = payCfg(w);
+  const p = await requestConversionPayout(w.db, cfg, { sellerId: s.id, amountAtomic: 2_000_000n, asset: 'TESTUSDT' }, w.now);
+  assert.equal(p.mode, 'usdt-simulated');
+  assert.equal(p.expectedTarget, 2_000_000n);
+  assert.equal(balance(w.db, s.id, 'payout_pending', 'TESTUSDT'), 2_000_000n);
+  assert.equal(await code(() => approvePayout(w.db, p.id, 'operator', w.now)), 'WRONG_STATE', 'unconfirmed quote cannot be approved');
+  confirmConversionQuote(w.db, { sellerId: s.id, payoutId: p.id, digest: p.approvalDigest! }, w.now);
+  approvePayout(w.db, p.id, 'operator', w.now);
+  const r = await executeConversionPayout(w.db, cfg, { payoutId: p.id }, w.now);
+  assert.equal(r.outcome, 'completed');
+  const done = getPayout(w.db, p.id)!;
+  assert.equal(done.state, 'confirmed');
+  assert.ok(done.deliveryTx && !done.conversionTx, 'a delivery transfer only; there was no swap');
+  assert.equal(balance(w.db, s.id, 'payout_pending', 'TESTUSDT'), 0n);
+  assert.deepEqual(verifyLedger(w.db), { ok: true, problems: [] });
+
+  // refused / reverted: nothing left custody, earnings restored
+  for (const sc of ['refused', 'reverted']) {
+    const x = world();
+    const sx = await earningSeller(x, 5_000_000n, 'USDT');
+    const c2 = payCfg(x);
+    const q = await requestConversionPayout(x.db, c2, { sellerId: sx.id, amountAtomic: 2_000_000n, asset: 'TESTUSDT' }, x.now);
+    confirmConversionQuote(x.db, { sellerId: sx.id, payoutId: q.id, digest: q.approvalDigest! }, x.now);
+    approvePayout(x.db, q.id, 'operator', x.now);
+    assert.equal((await executeConversionPayout(x.db, c2, { payoutId: q.id, scenario: sc }, x.now)).outcome, 'restored', sc);
+    assert.equal(balance(x.db, sx.id, 'seller_earnings', 'TESTUSDT'), 5_000_000n);
+    assert.deepEqual(verifyLedger(x.db), { ok: true, problems: [] });
+  }
+  // short / wrong recipient: never completed and never refunded
+  for (const sc of ['short', 'wrong_recipient']) {
+    const x = world();
+    const sx = await earningSeller(x, 5_000_000n, 'USDT');
+    const c2 = payCfg(x);
+    const q = await requestConversionPayout(x.db, c2, { sellerId: sx.id, amountAtomic: 2_000_000n, asset: 'TESTUSDT' }, x.now);
+    confirmConversionQuote(x.db, { sellerId: sx.id, payoutId: q.id, digest: q.approvalDigest! }, x.now);
+    approvePayout(x.db, q.id, 'operator', x.now);
+    assert.equal((await executeConversionPayout(x.db, c2, { payoutId: q.id, scenario: sc }, x.now)).outcome, 'needs_review', sc);
+    assert.equal(balance(x.db, sx.id, 'payout_pending', 'TESTUSDT'), 2_000_000n, 'still reserved');
+    assert.notEqual(getPayout(x.db, q.id)!.state, 'confirmed');
+  }
 });

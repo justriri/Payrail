@@ -20,7 +20,8 @@ import { randomBytes, createHash, createHmac } from 'node:crypto';
 import { privateKeyToAccount } from 'viem/accounts';
 import { isSandboxHost } from './demoapis.ts';
 import { AgentError, authenticateAgent, createAgent, executeAsAgent, listAgents, revokeAgent } from './agents.ts';
-import { FundingError, confirmDeposit, fundingMessage, fundingWallets, registerFundingWallet } from './funding.ts';
+import { FundingError, confirmDeposit, fundingMessage, fundingMessageOnChain, fundingWallets, registerFundingWallet } from './funding.ts';
+import { takerControlTypedData, verifyTakerProof } from './takerproof.ts';
 import type { FundingConfig } from './funding.ts';
 import { PayoutError, cancelPayout, payoutsOf, requestPayout } from './payouts.ts';
 import { publishReadiness, updateListingDetails } from './seller.ts';
@@ -634,9 +635,68 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
   if (path.startsWith('/fund/') && rt.conversion) {
     const id = buyer();
     const c = rt.conversion;
+    // defence in depth: a live provider is never used unless real-funds mode was explicitly enabled
+    if (!c.simulated && !rt.live) throw new ApiError(409, 'LIVE_DISABLED', 'live conversion is disabled: real-funds mode is not enabled');
+    const walletOf = (buyerId: string): string | undefined => fundingWallets(db, buyerId)[0];
+    const demoKey = () => privateKeyToAccount(sandboxSeed(rt.activeKey, `fund-wallet:${id}`));
+    if (method === 'GET' && path === '/fund/wallet') {
+      return ok({
+        expectedChainId: c.chainId,
+        wallets: fundingWallets(db, id),
+        messageTemplate: fundingMessageOnChain(id, '<your wallet address in lowercase>', c.chainId),
+        demoAvailable: Boolean(rt.sandbox) && !rt.live && c.simulated,
+        simulated: c.simulated,
+        note: 'Connecting a wallet proves you control it. It never gives Payrail access to your funds. Only transfers FROM this wallet can be credited to you.',
+      });
+    }
+    if (method === 'POST' && path === '/fund/wallet') {
+      const chainId = Number(body.chainId ?? c.chainId);
+      if (chainId !== c.chainId) throw new ApiError(422, 'WRONG_NETWORK', `connect your wallet to chain ${c.chainId} (Celo mainnet); it reported chain ${chainId}`);
+      let wallet = typeof body.wallet === 'string' ? body.wallet : '';
+      let signature = typeof body.signature === 'string' ? body.signature : '';
+      let demo = false;
+      if (body.demo === true) {
+        if (!rt.sandbox || rt.live || !c.simulated) throw new ApiError(409, 'SANDBOX_DISABLED', 'the demo wallet exists only in simulation');
+        const k = demoKey();
+        wallet = k.address;
+        signature = await k.signMessage({ message: fundingMessageOnChain(id, k.address.toLowerCase(), c.chainId) });
+        demo = true;
+      }
+      const r = await registerFundingWallet(db, id, wallet, signature, now, c.chainId);
+      return ok({ address: r.address, chainId: c.chainId, demo, simulated: c.simulated }, 201);
+    }
+    if (method === 'POST' && path === '/fund/wallet/authorization-check') {
+      // Proves the connected wallet can produce the TakerControl authorization Textile needs. Sends NOTHING to Textile.
+      const w = walletOf(id);
+      if (!w) throw new ApiError(409, 'NO_FUNDING_WALLET', 'connect and verify a wallet first');
+      const issued = Number(body.issuedAt);
+      if (typeof body.signature !== 'string') {
+        const nonce = `0x${randomBytes(32).toString('hex')}` as `0x${string}`;
+        const issuedAt = now();
+        const t = takerControlTypedData(w as `0x${string}`, c.chainId, nonce, issuedAt);
+        return ok({
+          typedData: { domain: t.domain, types: t.types, primaryType: t.primaryType, message: { taker: t.message.taker, chainId: String(t.message.chainId), nonce, issuedAt: String(issuedAt) } },
+          nonce, issuedAt, wallet: w,
+          note: 'Sign this in your wallet. It is checked here and is NOT sent to Textile; no quote is requested and nothing is converted.',
+        });
+      }
+      if (!Number.isFinite(issued) || Math.abs(now() - issued) > 5 * 60_000) throw new ApiError(422, 'PROOF_EXPIRED', 'the authorization request is stale; start again');
+      let signature = body.signature;
+      if (body.demo === true) {
+        if (!rt.sandbox || rt.live || !c.simulated) throw new ApiError(409, 'SANDBOX_DISABLED', 'the demo wallet exists only in simulation');
+        const k = demoKey();
+        const t = takerControlTypedData(k.address, c.chainId, str(body.nonce, 'nonce', 70) as `0x${string}`, issued);
+        signature = await k.signTypedData({ domain: t.domain, types: t.types, primaryType: t.primaryType, message: t.message });
+      }
+      const okSig = await verifyTakerProof({ taker: w as `0x${string}`, chainId: c.chainId, nonce: str(body.nonce, 'nonce', 70) as `0x${string}`, issuedAtMs: issued, signature: signature as `0x${string}` });
+      if (!okSig) throw new ApiError(422, 'BAD_SIGNATURE', 'the signature was not made by your verified wallet over this authorization');
+      audit(db, id, 'funding.taker_authorization_checked', w, undefined, new Date(now()));
+      return ok({ verified: true, wallet: w, sentToTextile: false });
+    }
     const routeView = (r: Awaited<ReturnType<typeof c.registry.routes>>[number]) => ({
       symbol: (r.from.symbol), chainId: r.from.chainId, address: r.from.address, decimals: r.from.decimals,
       passthrough: r.passthrough === true, available: r.available, enabled: r.enabled, usable: r.usable, reason: r.reason,
+      evidence: r.evidence,
       min: fmtUnits(r.minInputAtomic, r.from.decimals), max: fmtUnits(r.maxInputAtomic, r.from.decimals), provider: r.provider,
     });
     if (method === 'GET' && path === '/fund/routes') {
@@ -678,7 +738,10 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
       const amount = parseUnitsText(body.amount, route.from.decimals);
       const key = typeof body.idempotencyKey === 'string' && /^[\w.:-]{8,100}$/.test(body.idempotencyKey) ? body.idempotencyKey : `q-${randomBytes(12).toString('hex')}`;
       const scenario = c.simulated && typeof body.scenario === 'string' && (SIM_FUNDING_SCENARIOS as readonly string[]).includes(body.scenario) ? body.scenario : undefined;
-      const cfg = fundingConfigFor(c, route.from, id, routeLimits(route));
+      const w = walletOf(id);
+      // simulation may use a stand-in wallet; anything live needs a wallet the buyer proved
+      if (!c.simulated && !w) throw new ApiError(409, 'NO_FUNDING_WALLET', 'connect and verify your wallet before requesting a funding quote');
+      const cfg = fundingConfigFor(c, route.from, id, routeLimits(route), w);
       const o = await requestFundingQuote(db, cfg, { buyerId: id, sellAtomic: amount, idempotencyKey: key, ...(scenario ? { scenario } : {}) }, now);
       return ok({ operation: fundingView(o, now()) }, 201);
     }
@@ -812,7 +875,9 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
       const p = getPayout(db, pid)!;
       const dec = p.target?.decimals ?? 6;
       return {
-        id: p.id, state: p.state, stage: p.stage, mode: p.mode, simulated: p.mode === 'convert-simulated',
+        id: p.id, state: p.state, stage: p.stage, mode: p.mode, simulated: p.mode === 'convert-simulated' || p.mode === 'usdt-simulated',
+        // one word for the whole lifecycle: nothing is 'completed' until the destination payment was verified
+        lifecycle: p.state === 'confirmed' ? 'completed' : p.state === 'failed' || p.state === 'cancelled' ? 'failed' : p.stage === 'review' || p.stage === 'converted_undelivered' ? 'review-required' : 'pending',
         usdt: { atomic: p.amountAtomic.toString(), display: formatAtomic(p.amountAtomic), asset: p.asset },
         target: p.target ? { symbol: p.target.symbol, chainId: p.target.chainId, address: p.target.address, decimals: dec, deliveryAddress: p.target.deliveryAddress } : null,
         rate: p.rate,
@@ -841,7 +906,7 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
         preference: { symbol: pref.asset.symbol, version: pref.version, source: pref.source },
         options: routes.map((r) => ({
           symbol: r.to.symbol, chainId: r.to.chainId, address: r.to.address, decimals: r.to.decimals, passthrough: r.passthrough === true,
-          available: r.available, enabled: r.enabled, usable: r.usable, reason: r.reason,
+          available: r.available, enabled: r.enabled, usable: r.usable, reason: r.reason, evidence: r.evidence,
           minUsdt: formatAtomic(r.passthrough ? 0n : r.minInputAtomic), maxUsdt: formatAtomic(r.maxInputAtomic),
         })),
         addresses: payoutAddresses(db, sid),

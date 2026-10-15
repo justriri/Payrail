@@ -306,3 +306,31 @@ simulated and real-funds mode is off.
 bounded custody signer for payout conversion, a live Textile provider, per-asset live liquidity re-checks at quote time
 against the real API, an operator tool to resolve `REVIEW` states, and Textile test-key verification on Base Sepolia/BNB
 testnet. CWT remains unsupported (no route, token unidentified).
+
+---
+
+## Status after the 2026-10-15 hardening pass
+
+**Route evidence (Task 1).** `docs/ROUTE-MATRIX.md` (generated read-only by `scripts/route-matrix.ts`) labels every route
+live-executed / live-quoted / documented / simulated / none. Only USDT→cNGN and cNGN→USDT were ever executed by our code.
+A route in one direction says nothing about the other. CWT appears on no ladder, address book or spec: unsupported.
+`src/textileroutes.ts` is a read-only discovery/indicative-quote provider; it has no execute path.
+
+**Buyer wallet (Task 2).** Textile's reactor pays output to `msg.sender`; there is no recipient field. Therefore a buyer's
+conversion must be signed by the buyer's own wallet, and the resulting USDT must then be *transferred* to custody and
+verified (sender = the buyer's proven wallet, recipient = custody, token, amount, confirmations) before credit.
+Implemented and tested: wallet ownership proof bound to buyer and chain, TakerControl authorization check (server verifies,
+sends nothing to Textile), taker = proven wallet in quotes, deposit attribution. **Blocker (not worked around):** live
+execution from a browser wallet (ERC-20 approval + `executeBatch` signed client-side, then the USDT deposit) is not built, and
+the operator wallet is never used to fund a buyer. Live funding therefore stays unwired.
+
+**Seller payouts (Task 3).** USDT or any live+enabled asset; destination must be proven by signature; quote (rate, fee,
+minimum, expiry) confirmed by digest; lifecycle shown as pending / completed / failed / review-required; a swap that succeeds
+but is not delivered keeps the target-asset obligation and retries only delivery. Plain USDT payouts have a **simulated**
+lifecycle only (custody → verified address, delivery verified). A real USDT payout still goes through the operator payout flow.
+Test-credit earnings can never be paid out as real funds (unchanged). A bounded operator signer (per-payout cap, allow-listed
+verified destinations, daily limit, HSM/KMS-held key, human approval) is the proposed design for live payouts; it is NOT
+implemented because it introduces custody and needs its own security review.
+
+**Operator recovery (Task 4).** `src/operator.ts`, `scripts/operator.ts`, `docs/OPERATOR-GUIDE.md`. No action marks anything
+paid; evidence is always re-verified from the chain; unverifiable items stay review-required; closing needs reason+evidence.

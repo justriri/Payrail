@@ -8,6 +8,8 @@
 // interface and the marketplace code does not change.
 import { audit, query } from './db.ts';
 import type { Db } from './db.ts';
+import { evidenceFor } from './routeevidence.ts';
+import type { RouteEvidence } from './routeevidence.ts';
 
 export interface AssetRef {
   chainId: number;
@@ -128,6 +130,8 @@ export interface RouteView extends Route {
   /** available now AND enabled */
   usable: boolean;
   reason: string | null;
+  /** how we know this route exists: simulated, documented, live-quoted or live-executed (never blurred) */
+  evidence: RouteEvidence;
 }
 
 const REASON_TEXT: Record<UnavailableReason, string> = {
@@ -157,6 +161,7 @@ export class RouteRegistry {
     out.push({
       provider: 'none', direction, from: USDT_CELO, to: USDT_CELO, available: true, minInputAtomic: 1n, maxInputAtomic: 10_000_000_000n,
       passthrough: true, discoveredAt: Date.now(), enabled: true, usable: true, reason: null,
+      evidence: evidenceFor(direction, 'USDT', { providerSimulated: false }),
     });
     const seen = new Set<string>();
     for (const p of this.providers) {
@@ -179,6 +184,7 @@ export class RouteRegistry {
           enabled,
           usable,
           reason: usable ? null : !r.available ? REASON_TEXT[r.unavailableReason ?? 'provider_error'] : REASON_TEXT.not_enabled,
+          evidence: evidenceFor(direction, asset.symbol, { providerSimulated: p.simulated, ...('asOf' in r && typeof (r as { asOf?: string }).asOf === 'string' ? { liveAsOf: (r as { asOf: string }).asOf } : {}), liveAvailable: r.available }),
         });
       }
     }
@@ -190,6 +196,7 @@ export class RouteRegistry {
         provider: 'none', direction, from: direction === 'funding' ? a : USDT_CELO, to: direction === 'funding' ? USDT_CELO : a,
         available: false, unavailableReason: 'not_on_ladder', minInputAtomic: 0n, maxInputAtomic: 0n, discoveredAt: Date.now(),
         enabled: false, usable: false, reason: REASON_TEXT.not_on_ladder,
+        evidence: { level: 'none', basis: 'No provider lists this asset: there is no evidence of a route.', executableLive: false },
       });
     }
     return out;

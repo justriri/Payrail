@@ -15,6 +15,7 @@ import { DEFAULT_SWAP_LIMITS } from './swapexec.ts';
 import type { ApprovalSummary, SwapDeps, SwapSummary } from './swapexec.ts';
 import { cancelRfq, firmQuote, getRfqStatus } from './textile.ts';
 import type { TakerProof } from './textile.ts';
+import { takerControlTypedData } from './takerproof.ts';
 
 type Live = ReturnType<typeof createLive>;
 
@@ -43,19 +44,8 @@ export function createConversionDeps(live: Live, policy: ConversionDeps['policy'
 async function takerProofFor(account: LocalAccount, chainId: number): Promise<TakerProof> {
   const nonce = toHex(randomBytes(32));
   const issuedAt = Date.now();
-  const signature = await account.signTypedData({
-    domain: { name: 'Textile Taker Control', version: '1', chainId },
-    types: {
-      TakerControl: [
-        { name: 'taker', type: 'address' },
-        { name: 'chainId', type: 'uint256' },
-        { name: 'nonce', type: 'bytes32' },
-        { name: 'issuedAt', type: 'uint256' },
-      ],
-    },
-    primaryType: 'TakerControl',
-    message: { taker: account.address, chainId: BigInt(chainId), nonce, issuedAt: BigInt(issuedAt) },
-  });
+  const t = takerControlTypedData(account.address, chainId, nonce, issuedAt);
+  const signature = await account.signTypedData({ domain: t.domain, types: t.types, primaryType: t.primaryType, message: t.message });
   return { nonce, issuedAt, signature };
 }
 

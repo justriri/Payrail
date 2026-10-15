@@ -170,7 +170,23 @@ export async function requestConversionPayout(
   now: () => number = Date.now,
 ): Promise<Payout> {
   const pref = getPayoutPreference(db, a.sellerId, a.listingId ?? null);
-  if (pref.asset.symbol === 'USDT') throw new PayoutConvError('BAD_INPUT', 'your payout preference is USDT: use a normal USDT payout (no conversion)');
+  if (pref.asset.symbol === 'USDT') {
+    // plain USDT payout. Real ones go through the operator payout flow; only the SIMULATED lifecycle lives here.
+    if (!cfg.provider.simulated) throw new PayoutConvError('BAD_INPUT', 'your payout preference is USDT: use a normal USDT payout (no conversion)');
+    const dest = payoutAddresses(db, a.sellerId).find((x) => x.chainId === USDT_CELO.chainId);
+    if (!dest) throw new PayoutConvError('ADDRESS_REQUIRED', `verify a payout address on chain ${USDT_CELO.chainId} first`);
+    const sp = requestPayout(db, a.sellerId, { asset: a.asset, amountAtomic: a.amountAtomic }, cfg.policy, now);
+    const qid = `usdtq_${sp.id}`;
+    const exp = now() + (cfg.quoteTtlMs ?? 10 * 60_000);
+    const q0: ConversionQuote = { id: qid, provider: 'none (USDT, no conversion)', direction: 'payout', from: USDT_CELO, to: USDT_CELO, inputAtomic: a.amountAtomic, expectedOutputAtomic: a.amountAtomic, minOutputAtomic: a.amountAtomic, feeAtomic: 0n, rate: '1 USDT = 1 USDT', expiresAtMs: exp, notes: [] };
+    const dg = digestOf(sp.id, a.sellerId, q0, dest.address, 'usdt-simulated');
+    db.prepare(
+      `UPDATE payouts SET mode = 'usdt-simulated', stage = 'quoted', target_symbol = 'USDT', target_chain_id = ?, target_address = ?, target_decimals = 6, delivery_address = ?, quote_id = ?, quote_expires_at = ?,
+         approval_digest = ?, expected_target = ?, min_target = ?, rate = '1 USDT = 1 USDT', fee_target = '0', preference_version = ? WHERE id = ?`,
+    ).run(USDT_CELO.chainId, lower(USDT_CELO.address), dest.address, qid, iso(exp), dg, a.amountAtomic.toString(), a.amountAtomic.toString(), pref.version, sp.id);
+    event(db, sp.id, 'quoted', `USDT payout ${a.amountAtomic} (atomic) to ${dest.address}; no conversion; nothing sent`, now());
+    return getPayout(db, sp.id)!;
+  }
   const route = await cfg.registry.find('payout', pref.asset.address);
   if (!route || !route.usable) throw new PayoutConvError('ROUTE_UNAVAILABLE', `${pref.asset.symbol} payouts are not available right now (${route?.reason ?? 'unknown'}); choose USDT or try later`);
   if (a.amountAtomic < route.minInputAtomic) throw new PayoutConvError('BELOW_FLOOR', `the provider minimum is ${route.minInputAtomic} (atomic USDT); let earnings accumulate`);
@@ -216,6 +232,14 @@ export async function requoteConversionPayout(db: Db, cfg: PayoutConversionConfi
   if (!p) throw new PayoutConvError('NOT_FOUND', 'no such payout');
   if (p.sellerId !== a.sellerId) throw new PayoutConvError('NOT_OWNER', 'not your payout');
   if (p.mode === 'usdt' || !p.target) throw new PayoutConvError('WRONG_STATE', 'not a conversion payout');
+  if (p.mode === 'usdt-simulated') {
+    const exp = now() + (cfg.quoteTtlMs ?? 10 * 60_000);
+    const q1: ConversionQuote = { id: `usdtq_${p.id}_${now()}`, provider: 'none (USDT, no conversion)', direction: 'payout', from: USDT_CELO, to: USDT_CELO, inputAtomic: p.amountAtomic, expectedOutputAtomic: p.amountAtomic, minOutputAtomic: p.amountAtomic, feeAtomic: 0n, rate: '1 USDT = 1 USDT', expiresAtMs: exp, notes: [] };
+    const dg = digestOf(p.id, a.sellerId, q1, p.target.deliveryAddress, 'usdt-simulated');
+    db.prepare("UPDATE payouts SET stage = 'quoted', state = 'requested', approved_at = NULL, approved_by = NULL, seller_confirmed_at = NULL, quote_id = ?, quote_expires_at = ?, approval_digest = ? WHERE id = ?").run(q1.id, iso(exp), dg, p.id);
+    event(db, p.id, 'quoted', 'new USDT payout confirmation requested', now());
+    return getPayout(db, p.id)!;
+  }
   if (!['requested', 'approved'].includes(p.state) || ['converting', 'converted', 'converted_undelivered', 'delivering'].includes(p.stage ?? '')) throw new PayoutConvError('WRONG_STATE', 'the conversion has already started');
   const route = await cfg.registry.find('payout', p.target.address);
   if (!route || !route.usable) throw new PayoutConvError('ROUTE_UNAVAILABLE', 'the route is no longer available; cancel to restore your USDT earnings');
@@ -243,6 +267,18 @@ export async function executeConversionPayout(db: Db, cfg: PayoutConversionConfi
   if (p0.state !== 'approved' || p0.stage !== 'confirmed') throw new PayoutConvError('WRONG_STATE', `payout is ${p0.state}/${p0.stage ?? '-'}: it must be seller-confirmed and operator-approved`);
   if (Date.parse(p0.quoteExpiresAt!) <= now()) throw new PayoutConvError('QUOTE_EXPIRED', 'the quote expired; the seller must confirm a new one');
   const provider = cfg.registry.provider(cfg.provider.id) ?? cfg.provider;
+  if (p0.mode === 'usdt-simulated') {
+    const u = await (provider as SimProvider).executeUsdtPayout({ custody: cfg.custody, deliveryAddress: p0.target.deliveryAddress, amountAtomic: p0.amountAtomic, ...(a.scenario ? { scenario: a.scenario } : {}) });
+    if (u.kind === 'failed' || (u.kind === 'submitted' && u.deliveryTx === null)) {
+      // nothing left custody: restore the earnings
+      const out = failSentPayout(db, p0.id, u.kind === 'failed' ? `the transfer did not happen: ${u.message}` : 'no transfer was made; nothing left custody', now);
+      event(db, p0.id, 'failed', 'USDT transfer did not happen; earnings restored', now());
+      return { outcome: 'restored', payout: out, detail: u.kind === 'failed' ? u.message : 'no transfer' };
+    }
+    markSent(db, p0.id, u.deliveryTx!, 'custody-bounded-signer', now);
+    setStage(db, p0.id, 'delivering', 'USDT transfer submitted from custody; verifying', now(), { delivery_tx: lower(u.deliveryTx!) });
+    return recheckConversionPayout(db, cfg, p0.id, now);
+  }
   if (!('executePayout' in provider)) throw new PayoutConvError('WRONG_STATE', 'this provider cannot execute payouts here');
   const quote: ConversionQuote = {
     id: p0.quoteId!, provider: provider.id, direction: 'payout', from: USDT_CELO,
@@ -267,6 +303,32 @@ export async function recheckConversionPayout(db: Db, cfg: PayoutConversionConfi
   if (!p || !p.target) throw new PayoutConvError('NOT_FOUND', 'no such conversion payout');
   if (p.state === 'confirmed') return { outcome: 'completed', payout: p, detail: 'complete' };
   if (p.state === 'failed' || p.state === 'cancelled') return { outcome: 'restored', payout: p, detail: p.state };
+  if (p.mode === 'usdt-simulated') {
+    if (!p.deliveryTx) return { outcome: 'in_progress', payout: p, detail: 'no transfer recorded yet' };
+    let r: { receipt: Awaited<ReturnType<ChainReader['receipt']>>; head: bigint } | null = null;
+    try {
+      r = { receipt: await cfg.reader.receipt(p.deliveryTx), head: await cfg.reader.blockNumber() };
+    } catch {
+      r = null;
+    }
+    if (!r) return { outcome: 'in_progress', payout: p, detail: 'chain unreadable; will re-check' };
+    if (!r.receipt) return { outcome: 'in_progress', payout: p, detail: 'transfer not visible yet; unresolved, not refunded' };
+    const dv = verifyDeposit(r.receipt, r.head, { usdt: USDT_CELO.address, from: cfg.custody, to: p.target!.deliveryAddress, minConfirmations: cfg.minConfirmations });
+    if (dv.kind === 'pending') return { outcome: 'in_progress', payout: p, detail: `transfer has ${dv.confirmations}/${cfg.minConfirmations} confirmations` };
+    if (dv.kind === 'reverted') {
+      const out = failSentPayout(db, p.id, 'the USDT transfer reverted on-chain; funds never left custody', now);
+      event(db, p.id, 'failed', 'transfer reverted; earnings restored', now());
+      return { outcome: 'restored', payout: out, detail: 'transfer reverted' };
+    }
+    if (dv.kind === 'mismatch' || dv.receivedAtomic < p.amountAtomic) {
+      const why = dv.kind === 'mismatch' ? dv.reason : `delivered ${dv.receivedAtomic}, less than ${p.amountAtomic}`;
+      setStage(db, p.id, 'review', `delivery verification failed: ${why}. Not marked paid, not refunded; an operator must review.`, now(), { failure: why.slice(0, 200) });
+      return { outcome: 'needs_review', payout: getPayout(db, p.id)!, detail: why };
+    }
+    const fin = completeConvertedPayout(db, p.id, dv.receivedAtomic, now);
+    event(db, p.id, 'delivered', `USDT delivered and verified: ${dv.receivedAtomic} (atomic) to ${p.target!.deliveryAddress}`, now());
+    return { outcome: 'completed', payout: fin, detail: 'delivered and verified' };
+  }
   if (!p.conversionTx) return { outcome: 'in_progress', payout: p, detail: 'no conversion transaction recorded yet' };
   const read = async (h: string) => {
     try {
@@ -346,7 +408,7 @@ export async function recoverConversionPayouts(db: Db, cfg: PayoutConversionConf
     const s = await recheckConversionPayout(db, cfg, String(r.id), now);
     out.push({ id: String(r.id), outcome: s.outcome });
     // SIMULATION ONLY: the fake chain does not survive a restart. Park what it can no longer confirm (never complete, never refund).
-    if (o.atStartup && cfg.provider.simulated && s.outcome === 'in_progress' && s.payout.mode === 'convert-simulated') {
+    if (o.atStartup && cfg.provider.simulated && s.outcome === 'in_progress' && (s.payout.mode === 'convert-simulated' || s.payout.mode === 'usdt-simulated')) {
       setStage(db, s.payout.id, 'review', 'the simulated chain was reset by a server restart; this simulated payout can no longer be confirmed. Not marked paid, not refunded.', now());
     }
   }

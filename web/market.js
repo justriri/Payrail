@@ -14,6 +14,8 @@ function el(tag, attrs, ...kids) {
   for (const k of kids) if (k !== null && k !== undefined && k !== false) e.append(k.nodeType ? k : document.createTextNode(String(k)));
   return e;
 }
+const EVIDENCE_TEXT = { 'live-executed': 'LIVE-EXECUTED', 'live-quoted': 'LIVE-QUOTED', documented: 'DOCUMENTED', simulated: 'SIMULATED', none: 'NO EVIDENCE' };
+const evidenceLine = (r) => (r.evidence ? `${EVIDENCE_TEXT[r.evidence.level] || r.evidence.level}: ${r.evidence.basis}` : '');
 const clear = (n) => { while (n.firstChild) n.removeChild(n.firstChild); };
 // conditional children (cond && el(...)) may be false/null: never render them as text
 const _append = Element.prototype.append;
@@ -236,6 +238,66 @@ const FUND_BADGE = { CREDITED: 'ok', FAILED: 'bad', REVIEW: 'bad', UNRESOLVED: '
 
 function stopFundTimers() { if (fund.timer) { clearInterval(fund.timer); fund.timer = null; } if (fund.tick) { clearInterval(fund.tick); fund.tick = null; } }
 
+async function connectBuyerWallet(msgEl) {
+  if (!window.ethereum) throw new Error('No browser wallet found. Install a wallet extension, or use the demo wallet in this simulation.');
+  const [account] = await window.ethereum.request({ method: 'eth_requestAccounts' });
+  const cfg = await api('/fund/wallet', { bearer: session.buyer });
+  if (!cfg.ok) throw new Error(fail(cfg));
+  let chainHex = await window.ethereum.request({ method: 'eth_chainId' });
+  if (parseInt(chainHex, 16) !== cfg.expectedChainId) {
+    msgEl.textContent = `Switching your wallet to chain ${cfg.expectedChainId}…`;
+    await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: `0x${cfg.expectedChainId.toString(16)}` }] });
+    chainHex = await window.ethereum.request({ method: 'eth_chainId' });
+    if (parseInt(chainHex, 16) !== cfg.expectedChainId) throw new Error('Your wallet is not on the required network.');
+  }
+  const me = await api('/me', { bearer: session.buyer });
+  const message = cfg.messageTemplate.replace('<your wallet address in lowercase>', account.toLowerCase()).replace(/Buyer: .*\n/, `Buyer: ${me.accountId}\n`);
+  const signature = await window.ethereum.request({ method: 'personal_sign', params: [message, account] });
+  const r = await api('/fund/wallet', { body: { wallet: account, signature, chainId: parseInt(chainHex, 16) }, bearer: session.buyer });
+  if (!r.ok) throw new Error(fail(r));
+}
+
+function walletPanel(box, w) {
+  const msg = el('p', { class: 'muted', role: 'status' });
+  const panel = el('div', { class: 'notice' });
+  const addr = w.wallets[0];
+  panel.append(el('strong', { text: addr ? `Funding wallet verified: ${addr}` : 'No funding wallet connected yet' }), ' ',
+    el('span', { class: `badge ${addr ? 'ok' : 'warn'}`, text: addr ? `chain ${w.expectedChainId}` : 'not connected' }),
+    el('p', { class: 'muted', text: w.note }));
+  const row = el('div', { class: 'row' });
+  if (!addr) {
+    row.append(el('button', { type: 'button', text: 'Connect wallet', onclick: async () => {
+      try { msg.textContent = 'Check your wallet…'; await connectBuyerWallet(msg); renderAddFunds(); } catch (e) { msg.textContent = e.message; msg.className = 'problem'; }
+    } }));
+    if (w.demoAvailable) {
+      row.append(el('button', { type: 'button', class: 'secondary', text: 'Use a DEMO wallet (simulation only)', onclick: async () => {
+        const r = await api('/fund/wallet', { body: { demo: true, chainId: w.expectedChainId }, bearer: session.buyer });
+        if (!r.ok) { msg.textContent = fail(r); msg.className = 'problem'; return; }
+        renderAddFunds();
+      } }));
+    }
+  } else {
+    row.append(el('button', { type: 'button', class: 'secondary', text: 'Check transaction authorization (nothing is sent)', onclick: async () => {
+      try {
+        msg.textContent = 'Preparing…';
+        const q = await api('/fund/wallet/authorization-check', { body: {}, bearer: session.buyer });
+        if (!q.ok) throw new Error(fail(q));
+        let result;
+        if (window.ethereum && !w.demoAvailable) {
+          const sig = await window.ethereum.request({ method: 'eth_signTypedData_v4', params: [addr, JSON.stringify({ ...q.typedData, types: { EIP712Domain: [{ name: 'name', type: 'string' }, { name: 'version', type: 'string' }, { name: 'chainId', type: 'uint256' }], ...q.typedData.types } })] });
+          result = await api('/fund/wallet/authorization-check', { body: { nonce: q.nonce, issuedAt: q.issuedAt, signature: sig }, bearer: session.buyer });
+        } else {
+          result = await api('/fund/wallet/authorization-check', { body: { nonce: q.nonce, issuedAt: q.issuedAt, signature: '0x', demo: true }, bearer: session.buyer });
+        }
+        msg.textContent = result.ok ? 'Verified: this wallet can authorize Textile conversions. Nothing was sent to Textile.' : fail(result);
+        msg.className = result.ok ? 'notice' : 'problem';
+      } catch (e) { msg.textContent = e.message; msg.className = 'problem'; }
+    } }));
+  }
+  panel.append(row, msg);
+  box.append(panel);
+}
+
 async function renderAddFunds() {
   const box = $('fund');
   stopFundTimers();
@@ -250,6 +312,10 @@ async function renderAddFunds() {
   box.append(el('div', { class: sim ? 'banner sim' : 'banner live', text: cfgR.banner }));
   if (ops.ok) {
     box.append(el('p', {}, el('strong', { text: `Available: ${ops.balances.available} ${ops.balances.asset}` }), `  ·  held for pending requests: ${ops.balances.held}  `, el('span', { class: 'badge', text: sim ? 'SIMULATED / TEST' : 'REAL USDT' })));
+  }
+  if (cfgR.multiAsset) {
+    const wr = await api('/fund/wallet', { bearer: session.buyer });
+    if (wr.ok) walletPanel(box, wr);
   }
   // legacy single-asset config keeps its own limits line
   const routes = routesR && routesR.ok ? routesR.routes : [{ symbol: cfgR.sell || 'cNGN', decimals: 6, usable: true, min: cfgR.limits ? cfgR.limits.min : '', max: cfgR.limits ? cfgR.limits.max : '', passthrough: false }];
@@ -320,6 +386,7 @@ function renderFundOp(box) {
     ['Guaranteed minimum', `${op.minimumReceive.display} USDT (anything lower is never credited)`],
     ['Credited to your marketplace balance', op.willBeCredited.display + ` ${op.creditAsset}`],
   ];
+  if (op.taker) rows.push(['Wallet that converts and receives the USDT', op.taker]);
   if (op.depositAddress) rows.push(['Then deposited to', `${op.depositAddress} (only USDT that arrives there from your wallet is credited)`]);
   const card = el('div', { class: 'notice' },
     el('h3', { text: op.simulated ? 'Quote summary (SIMULATED)' : 'Quote summary' }),
@@ -590,6 +657,11 @@ function payoutSettingsPage(st) {
     wrap.append(el('details', {}, el('summary', { text: `Not available as a payout asset (${blocked.length})` }),
       el('ul', {}, ...blocked.map((o) => el('li', { text: `${o.symbol}: ${o.reason || 'unavailable'}` })))));
   }
+  const okOpts = st.options.filter((o) => o.usable && !o.passthrough);
+  if (okOpts.length) {
+    wrap.append(el('details', {}, el('summary', { text: 'How we know these payout routes work' }),
+      el('ul', {}, ...okOpts.map((o) => el('li', { text: `${o.symbol}: ${evidenceLine(o)}` })))));
+  }
   wrap.append(el('h3', { text: 'Verified payout addresses' }));
   if (!st.addresses.length) wrap.append(el('p', { class: 'muted', text: 'None yet. A converted payout is only ever delivered to an address you prove you control.' }));
   else wrap.append(el('ul', {}, ...st.addresses.map((a) => el('li', { text: `chain ${a.chainId}: ${a.address}` }))));
@@ -630,7 +702,7 @@ function payoutCard(p, box) {
   };
   const card = el('div', { class: 'notice' },
     el('strong', { text: `${p.usdt.display} ${p.usdt.asset} → ${t ? t.symbol : 'USDT'}` }), ' ',
-    el('span', { class: `badge ${p.state === 'confirmed' ? 'ok' : p.state === 'failed' ? 'bad' : 'warn'}`, text: p.state }), ' ', p.simulated && el('span', { class: 'badge o-sim', text: 'SIMULATED' }),
+    el('span', { class: `badge ${p.state === 'confirmed' ? 'ok' : p.state === 'failed' ? 'bad' : 'warn'}`, text: p.lifecycle || p.state }), ' ', p.simulated ? el('span', { class: 'badge o-sim', text: 'SIMULATED, no real funds' }) : el('span', { class: 'badge', text: 'REAL' }),
     el('p', { class: 'muted', text: PAYOUT_STAGE[p.stage] || p.stage || '' }));
   if (t) {
     card.append(el('table', { class: 'quote' },
@@ -648,9 +720,9 @@ function payoutCard(p, box) {
   }
   if (p.stage === 'confirmed' && p.state === 'requested' && p.simulated) row.append(el('button', { type: 'button', class: 'secondary', text: 'Simulate operator approval', onclick: () => act('simulate-approve') }));
   if (p.stage === 'confirmed' && p.state === 'approved' && p.simulated) {
-    const sc = el('select', { 'aria-label': 'Simulation outcome' }, ...['ok', 'reverted', 'short', 'wrong_token', 'delivery_missing', 'delivery_reverted', 'uncertain', 'refused'].map((x) => el('option', { value: x, text: x })));
+    const sc = el('select', { 'aria-label': 'Simulation outcome' }, ...(p.mode === 'usdt-simulated' ? ['ok', 'reverted', 'short', 'wrong_recipient', 'delivery_missing', 'uncertain', 'refused'] : ['ok', 'reverted', 'short', 'wrong_token', 'delivery_missing', 'delivery_reverted', 'uncertain', 'refused']).map((x) => el('option', { value: x, text: x })));
     row.append(el('label', { class: 'muted', text: 'Simulation outcome (testing only)' }), sc,
-      el('button', { type: 'button', text: 'Execute conversion (simulated)', onclick: () => act('simulate-execute', { scenario: sc.value }) }));
+      el('button', { type: 'button', text: p.mode === 'usdt-simulated' ? 'Send payout (simulated)' : 'Execute conversion (simulated)', onclick: () => act('simulate-execute', { scenario: sc.value }) }));
   }
   if (['converting', 'converted', 'delivering'].includes(p.stage)) row.append(el('button', { type: 'button', class: 'secondary', text: 'Check status', onclick: () => act('check') }));
   if (p.stage === 'converted_undelivered') row.append(el('button', { type: 'button', text: 'Retry delivery', onclick: () => act('retry-delivery') }));
@@ -679,11 +751,11 @@ function earningsPage(sm, payoutSettings) {
     wrap.append(el('p', { text: `${l.asset}: available to pay out ${l.available.display} · payout pending ${l.pendingPayout.display}` }));
   }
   for (const t of sm.payoutTotals) wrap.append(el('p', { text: `${t.asset} payouts: pending ${t.pending.display} · completed ${t.completed.display}` }));
-  if (payoutSettings && payoutSettings.preference.symbol !== 'USDT') {
+  if (payoutSettings && (payoutSettings.preference.symbol !== 'USDT' || payoutSettings.simulated)) {
     const amt = el('input', { value: '3', 'aria-label': 'USDT amount to pay out' });
     const pm = el('p', { class: 'muted', role: 'status' });
     const scen = null;
-    wrap.append(el('h3', { text: `Request a payout in ${payoutSettings.preference.symbol}` }),
+    wrap.append(el('h3', { text: payoutSettings.preference.symbol === 'USDT' ? 'Request a payout in USDT (SIMULATED demo)' : `Request a payout in ${payoutSettings.preference.symbol}` }),
       el('p', { class: 'muted', text: 'Your earnings are in USDT. You will see the expected amount, rate, fee and guaranteed minimum before anything is converted, and you confirm that exact quote.' }),
       el('label', { text: 'USDT to pay out' }), amt,
       el('div', { class: 'row' }, el('button', { type: 'button', text: 'Get a payout quote', onclick: async () => {

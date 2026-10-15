@@ -68,13 +68,22 @@ export function fundingMessage(buyerId: string, wallet: string): string {
   return `Payrail funding wallet\nBuyer: ${buyerId}\nWallet: ${lower(wallet)}\nI control this wallet and will send deposits from it.`;
 }
 
+/** Chain-bound variant used by the buyer wallet connection: the signed text names the network. */
+export function fundingMessageOnChain(buyerId: string, wallet: string, chainId: number): string {
+  return `Payrail funding wallet
+Buyer: ${buyerId}
+Wallet: ${lower(wallet)}
+Chain: ${chainId}
+I control this wallet and will send deposits from it.`;
+}
+
 /** Register the wallet a buyer will deposit from. One wallet belongs to one buyer. */
-export async function registerFundingWallet(db: Db, buyerId: string, wallet: string, signature: string, now: () => number = Date.now): Promise<{ address: string }> {
+export async function registerFundingWallet(db: Db, buyerId: string, wallet: string, signature: string, now: () => number = Date.now, chainId?: number): Promise<{ address: string }> {
   if (!isAddress(wallet)) throw new FundingError('BAD_INPUT', 'wallet must be a 0x address');
   const addr = lower(wallet);
   let ok = false;
   try {
-    ok = await verifyMessage({ address: getAddress(wallet), message: fundingMessage(buyerId, addr), signature: signature as `0x${string}` });
+    ok = await verifyMessage({ address: getAddress(wallet), message: chainId === undefined ? fundingMessage(buyerId, addr) : fundingMessageOnChain(buyerId, addr, chainId), signature: signature as `0x${string}` });
   } catch {
     ok = false;
   }

@@ -81,6 +81,12 @@ export interface SimProvider extends ConversionProvider {
     | { kind: 'failed'; code: string; message: string }
     | { kind: 'uncertain'; conversionTx: string; message: string }
   >;
+  /** a plain USDT payout from custody (no swap): only a delivery transfer exists */
+  executeUsdtPayout(a: { custody: string; deliveryAddress: string; amountAtomic: bigint; scenario?: string }): Promise<
+    | { kind: 'submitted'; deliveryTx: string | null }
+    | { kind: 'failed'; code: string; message: string }
+    | { kind: 'uncertain'; deliveryTx: string; message: string }
+  >;
   /** simulated retry of only the delivery leg after a swap that was verified */
   retryDelivery(a: { token: AssetRef; custody: string; deliveryAddress: string; amountAtomic: bigint }): { deliveryTx: string };
 }
@@ -263,6 +269,27 @@ export function createSimProvider(o: SimProviderOptions): SimProvider {
       const to = sc === 'wrong_recipient' ? OTHER : deliveryAddress;
       receipts.set(deliveryTx.toLowerCase(), { status: 'success', ...base, logs: [transfer(token, custody, to, received)] });
       return { kind: 'submitted', conversionTx, deliveryTx };
+    },
+
+    async executeUsdtPayout({ custody, deliveryAddress, amountAtomic, scenario }) {
+      self.executions.payout += 1;
+      const sc = scenario ?? 'ok';
+      if (sc === 'refused') return { kind: 'failed', code: 'REFUSED', message: 'the transfer was refused (simulated)' };
+      if (sc === 'delivery_missing') return { kind: 'submitted', deliveryTx: null };
+      const deliveryTx = hash('d3');
+      const base = { blockNumber: sc === 'slow' ? head : head - depth };
+      if (sc === 'uncertain') {
+        pending.set(deliveryTx.toLowerCase(), () => ({ status: 'success', blockNumber: head, logs: [transfer(USDT_CELO.address, custody, deliveryAddress, amountAtomic)] }));
+        return { kind: 'uncertain', deliveryTx, message: 'the transfer was sent but no confirmation was received (simulated)' };
+      }
+      if (sc === 'delivery_reverted' || sc === 'reverted') {
+        receipts.set(deliveryTx.toLowerCase(), { status: 'reverted', ...base, logs: [] });
+        return { kind: 'submitted', deliveryTx };
+      }
+      const to = sc === 'wrong_recipient' ? OTHER : deliveryAddress;
+      const amount = sc === 'short' ? amountAtomic / 2n : amountAtomic;
+      receipts.set(deliveryTx.toLowerCase(), { status: 'success', ...base, logs: [transfer(USDT_CELO.address, custody, to, amount)] });
+      return { kind: 'submitted', deliveryTx };
     },
 
     retryDelivery({ token, custody, deliveryAddress, amountAtomic }) {

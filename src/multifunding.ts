@@ -33,10 +33,11 @@ export interface ConversionRuntime {
 /** A deterministic stand-in for "the buyer's own wallet" in simulation. A live design uses the wallet the buyer proved. */
 export const simBuyerWallet = (buyerId: string): string => `0x${createHash('sha256').update(`sim-buyer-wallet:${buyerId}`).digest('hex').slice(0, 40)}`;
 
-export function fundingConfigFor(rt: ConversionRuntime, asset: AssetRef, buyerId: string, limits?: { min: bigint; max: bigint }): FundingConfig {
+export function fundingConfigFor(rt: ConversionRuntime, asset: AssetRef, buyerId: string, limits?: { min: bigint; max: bigint }, wallet?: string): FundingConfig {
   const isUsdt = asset.symbol === 'USDT';
   return {
-    converter: rt.provider.fundingConverter(isUsdt ? USDT_CELO : asset, { taker: simBuyerWallet(buyerId), depositAddress: rt.depositAddress }),
+    // the wallet the buyer PROVED they control, when there is one; the stand-in only exists in simulation
+    converter: rt.provider.fundingConverter(isUsdt ? USDT_CELO : asset, { taker: wallet ?? simBuyerWallet(buyerId), depositAddress: rt.depositAddress }),
     reader: rt.reader,
     usdt: rt.usdt,
     reactor: rt.reactor,
@@ -59,7 +60,7 @@ export function fundingConfigForOp(rt: ConversionRuntime, op: FundingOp): Fundin
   const asset: AssetRef = op.sellSymbol === 'USDT'
     ? USDT_CELO
     : { chainId: op.sellChainId ?? rt.chainId, address: op.sellAddress ?? '', symbol: op.sellSymbol, decimals: op.sellDecimals };
-  return fundingConfigFor(rt, asset, op.buyerId);
+  return fundingConfigFor(rt, asset, op.buyerId, undefined, op.taker ?? undefined);
 }
 
 /** Re-examine every unfinished operation (any asset). Never fails an unseen transaction, never credits twice. */
