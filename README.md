@@ -231,8 +231,12 @@ Payrail also runs an outcome-based API marketplace: sellers list APIs, buyers pa
 seller-approved contract (3% platform fee). Everything below runs in **simulation / test credits**; no real funds move.
 
 ```
-node scripts/serve.ts --simulate --port 4402 --market-db data/marketplace.db   # then open http://127.0.0.1:4402/market.html
+node scripts/serve.ts --simulate --port 4402 --market-db data/marketplace.db   # landing page: http://127.0.0.1:4402/  app: /market.html
 ```
+
+`/` is the Payrail landing page, `/market.html` is the dashboard (Buyer: Overview, Explore APIs, My API usage, Wallet and funding,
+Transactions; Seller: Overview, My APIs, Create API, Earnings, Payout settings, Payout history), and `/index.html` is the
+original wallet payment page (Buy gateway). Browser regressions: `scripts/browser/verify-*.mjs` (including `verify-ui.mjs`).
 
 Demo: Buyer tab -> Start testing -> add funds (pick cNGN/wARS/USDT, approve the quote, see the verified credit) -> buy a
 demo API. Seller tab -> sandbox seller -> Payout settings -> verify address -> Earnings -> request, confirm and (simulated)

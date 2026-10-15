@@ -35,6 +35,12 @@ import { createTestnetEscrow } from '../src/escrowtestnet.ts';
 import { createSimFunding } from '../src/simfunding.ts';
 import { RouteRegistry, seedConversionAssets } from '../src/conversion.ts';
 import { createSimProvider } from '../src/simconversion.ts';
+import type { SimProvider } from '../src/simconversion.ts';
+import { createBuyerSwapRuntime } from '../src/buyerswap.ts';
+import type { BuyerSwapRuntime } from '../src/buyerswap.ts';
+import { createTextileRouteProvider } from '../src/textileroutes.ts';
+import { firmQuote } from '../src/textile.ts';
+import { erc20Abi } from 'viem';
 import { recoverAllFunding } from '../src/multifunding.ts';
 import type { ConversionRuntime } from '../src/multifunding.ts';
 import { recoverConversionPayouts } from '../src/payoutconv.ts';
@@ -64,6 +70,9 @@ const line = (s = '') => console.log(s);
 
 let runtime: WebRuntime;
 let liveMarket: MarketRuntime['live'];
+// buyer-signed conversion: only ever set when BOTH PAYRAIL_MARKET_LIVE=1 and PAYRAIL_BUYER_SWAP=1 (off by default)
+let liveBuyerSwap: BuyerSwapRuntime | undefined;
+let liveTextile: ReturnType<typeof createTextileRouteProvider> | undefined;
 if (args.includes('--simulate')) {
   const scenario = (opt('scenario') ?? 'ok') as SimScenario;
   if (!['ok', 'swap_fails', 'payment_uncertain', 'price_rises'].includes(scenario)) {
@@ -114,6 +123,19 @@ if (args.includes('--simulate')) {
       },
       payout: { payableAssets: ['USDT'], minAtomic: 1_000_000n, maxAtomic: cap },
     };
+    // Buyer-signed conversion is a SEPARATE explicit opt-in on top of real-funds mode. The buyer's own wallet signs every
+    // transaction; this server holds no buyer key and spends no operator funds on a buyer's behalf.
+    if (process.env.PAYRAIL_BUYER_SWAP === '1') {
+      liveTextile = createTextileRouteProvider();
+      liveBuyerSwap = createBuyerSwapRuntime({
+        firmQuote,
+        getAllowance: (token, owner, spender) => live.client.readContract({ address: token, abi: erc20Abi, functionName: 'allowance', args: [owner, spender] }),
+        provider: liveTextile,
+        chainId: cfg.chainId,
+        tag: cfg.attributionTag,
+      });
+      line('BUYER-SIGNED CONVERSION ENABLED: buyers convert with their own wallets (Textile firm quotes validated server-side).');
+    }
     line(`REAL-FUNDS MARKETPLACE ENABLED: deposits to ${depositAddress} are credited after ${liveMarket.funding.minConfirmations} confirmations (cap ${cap / 1_000_000n} USDT each). Payouts need operator approval via scripts/payouts.ts.`);
   }
   const reader = createChainReader(live.client as never, live.getBalance, live.reads);
@@ -307,8 +329,33 @@ conversion.payout = {
   minConfirmations: 3,
   policy: { payableAssets: ['TESTUSDT'], minAtomic: 1n, maxAtomic: 1_000_000_000_000n },
 };
-await recoverAllFunding(marketDb, conversion, Date.now, { atStartup: true });
-await recoverConversionPayouts(marketDb, conversion.payout, Date.now, { atStartup: true });
+if (process.env.PAYRAIL_BUYER_SWAP === '1' && !liveBuyerSwap) {
+  line('[STOP] PAYRAIL_BUYER_SWAP=1 requires PAYRAIL_MARKET_LIVE=1 (real-funds mode). Buyer-signed conversion is never available in simulation.');
+  process.exit(1);
+}
+let conversionRt: ConversionRuntime = conversion;
+if (liveMarket && liveBuyerSwap && liveTextile) {
+  // REAL conversion runtime: Textile route discovery (read-only), the real chain reader, buyer-signed transactions.
+  // Payout conversion stays off (payouts remain operator-approved USDT only).
+  conversionRt = {
+    registry: new RouteRegistry(marketDb, [liveTextile]),
+    provider: liveTextile as unknown as SimProvider,
+    reader: liveMarket.funding.reader,
+    reactor: TEXTILE_REACTOR,
+    usdt: usdtAddress,
+    chainId: liveMarket.funding.chainId,
+    minConfirmations: liveMarket.funding.minConfirmations,
+    creditAsset: 'USDT',
+    depositAddress: liveMarket.funding.depositAddress,
+    maxPerDayBuyAtomic: liveMarket.funding.maxDepositAtomic * 5n,
+    simulated: false,
+    buyerSwap: liveBuyerSwap,
+  };
+  await recoverAllFunding(marketDb, conversionRt, Date.now);
+} else {
+  await recoverAllFunding(marketDb, conversion, Date.now, { atStartup: true });
+  await recoverConversionPayouts(marketDb, conversion.payout, Date.now, { atStartup: true });
+}
 const market: MarketRuntime = {
   db: marketDb,
   keys: [vaultKey],
@@ -320,7 +367,7 @@ const market: MarketRuntime = {
     demoCall: { limiter: limiter(), fetchOptions: { resolver: demoNet.resolver, transport: demoNet.transport, timeoutMs: 3_000 } },
   },
   funding: fundingCfg,
-  conversion,
+  conversion: conversionRt,
   testCall: { limiter: limiter(), fetchOptions: { resolver: sandbox.resolver, transport: sandbox.transport, timeoutMs: 8_000 } },
   domain: { txt: sandbox.txt, fetchOptions: { resolver: sandbox.resolver, transport: sandbox.transport } },
   buyCatalog: () => runtime.catalog(),

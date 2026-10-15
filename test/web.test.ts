@@ -121,7 +121,7 @@ test('status: simulated mode, wallet, balances, limits; the page is served with 
     assert.ok(s.body.balances.some((b: any) => b.symbol === 'cNGN' && b.amount === '1365.928991'));
     assert.equal(s.body.limits.perPaymentUsd, '$0.01');
 
-    const page = await h.get('/');
+    const page = await h.get('/index.html');
     assert.equal(page.status, 200);
     assert.match(page.body, /name="payrail-token" content="test-token"/);
     assert.match(page.body, /name="payrail-mode" content="simulated"/);

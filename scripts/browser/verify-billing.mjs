@@ -35,6 +35,9 @@ await b.sleep(4500);
 r = await b.text('#run-result');
 check('timeout is shown as unresolved: held, not charged', /Outcome unknown/.test(r) && /Held \(not charged\)\s+0\.02/.test(r) && /Charged\s+0 TESTUSDT/.test(r), r.split('\n').slice(0, 2).join(' | '));
 
+// history and the statement live in the Transactions panel of the redesigned dashboard
+await b.ev(`location.hash = '#/buyer/transactions'; 0`);
+await b.sleep(1500);
 const hist = await b.text('#history');
 const stmt = await b.text('#statement');
 check('history lists all three requests with plain outcomes', /charged 0\.02/.test(hist) && /not charged/.test(hist) && /outcome unknown, not charged/.test(hist));

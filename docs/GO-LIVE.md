@@ -12,7 +12,7 @@
 
 Payouts stay operator-approved (`scripts/payouts.ts`); nothing is sent by the server on its own.
 
-## 2. Buyer-signed conversion (built and tested against fakes; NOT enabled in `scripts/serve.ts`)
+## 2. Buyer-signed conversion (built; wired behind `PAYRAIL_BUYER_SWAP=1`; tested against fakes only)
 Flow: quote (indicative) -> buyer approves -> buyer's wallet signs the Textile TakerControl proof -> server requests a firm
 quote and validates it (taker, reactor, spender, exact approval, single order, amounts, expiry, calldata) -> server returns
 only validated, tagged steps -> the buyer's wallet sends approve + swap -> buyer's wallet sends the USDT to the deposit
@@ -22,10 +22,14 @@ deposit sender = the buyer's wallet, recipient = custody) and credits once.
 Code: `src/buyerswap.ts`, `recordClientTx` in `src/marketfunding.ts`, routes `POST /fund/prepare` and `POST /fund/tx`,
 UI `buyerSignedPanel` in `web/market.js`, tests in `test/buyersigned.test.ts`.
 
-**Not wired into the running server.** Enabling it means constructing the real conversion runtime in `scripts/serve.ts`
-(Textile route provider + `createBuyerSwapRuntime` + live reader) behind an explicit `PAYRAIL_BUYER_SWAP=1`. That wiring
-edit was blocked by the environment's permission guard, so it needs your explicit go-ahead. The runtime shape is
-`ConversionRuntime.buyerSwap` in `src/multifunding.ts`.
+**Wiring.** `scripts/serve.ts` builds the real conversion runtime (Textile route provider, `createBuyerSwapRuntime`, the
+live chain reader) only when BOTH `PAYRAIL_MARKET_LIVE=1` and `PAYRAIL_BUYER_SWAP=1` are set. Both are off by default.
+`PAYRAIL_BUYER_SWAP=1` without live mode stops the server with an explanation, and simulation never uses it. Payout
+conversion stays off in this runtime (payouts remain operator-approved USDT).
+
+**What is verified:** the server prepares only validated steps, verifies receipts and credits once (`test/buyersigned.test.ts`),
+and a simulated start never enables it. **What is NOT verified:** a firm quote from the live Textile API, a real browser
+wallet sending these transactions, and any real swap. Run it first with a tiny cNGN amount and watch the engine states.
 
 Known limits: the approve and swap are sent a few seconds apart (the UI waits ~6 s; a very slow block can make the swap
 simulate as failing and nothing is spent); the firm quote lives about a minute; no asset is enabled until one verified

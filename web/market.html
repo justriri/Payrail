@@ -7,31 +7,58 @@
   <meta name="payrail-mode" content="__PAYRAIL_MODE__">
   <title>Payrail Marketplace</title>
   <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/site.css">
 </head>
-<body>
-  <header>
-    <h1>Payrail Marketplace</h1>
-    <p class="tagline">Pay only for API responses that meet the written contract. <a href="/">Back to Pay (Buy gateway)</a></p>
-    <nav class="tabs" role="tablist" aria-label="Marketplace mode">
+<body class="app" data-mode="buyer">
+<div class="shell">
+  <aside class="sidebar" id="sidebar" aria-label="Main navigation">
+    <a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>Payrail</a>
+    <nav class="modeswitch tabs" role="tablist" aria-label="Marketplace mode">
       <a id="tab-buyer" class="tab active" role="tab" href="/market.html#/buyer" aria-selected="true"><span class="tab-title">Buyer</span><span class="tab-sub">Browse, run, pay</span></a>
       <a id="tab-seller" class="tab" role="tab" href="/market.html#/seller" aria-selected="false"><span class="tab-title">Seller</span><span class="tab-sub">List, verify, earn</span></a>
     </nav>
-    <p id="mode-line" class="mode-line">You are in Buyer mode</p>
-    <div class="banner" id="mode-banner">Loading…</div>
-  </header>
+    <nav class="side-nav" id="nav-buyer" aria-label="Buyer sections">
+      <a data-nav="overview" href="#/buyer">Overview</a>
+      <a data-nav="explore" href="#/buyer/explore">Explore APIs</a>
+      <a data-nav="usage" href="#/buyer/usage">My API usage</a>
+      <a data-nav="funding" href="#/buyer/funding">Wallet and funding</a>
+      <a data-nav="transactions" href="#/buyer/transactions">Transactions and receipts</a>
+    </nav>
+    <nav class="side-nav" id="nav-seller" aria-label="Seller sections" hidden>
+      <a data-nav="overview" href="#/seller/overview">Overview</a>
+      <a data-nav="apis" href="#/seller">My APIs</a>
+      <a data-nav="new" href="#/seller/new">Create API</a>
+      <a data-nav="earnings" href="#/seller/earnings">Earnings</a>
+      <a data-nav="payout-settings" href="#/seller/payout-settings">Payout settings</a>
+      <a data-nav="payouts" href="#/seller/payouts">Payout history</a>
+    </nav>
+    <div class="side-foot">
+      <a href="/index.html">Pay a service with my wallet</a>
+      <a href="/">Payrail home</a>
+    </div>
+  </aside>
 
-  <main>
-    <section class="card" id="buyer-card" data-view="buyer">
+  <div class="content">
+    <div class="topbar">
+      <button id="menu-btn" class="menu-btn secondary" type="button" aria-expanded="false" aria-controls="sidebar">Menu</button>
+      <h1 id="page-title">Payrail Marketplace</h1>
+      <span class="grow"></span>
+      <div class="banner" id="mode-banner">Loading…</div>
+    </div>
+    <p id="mode-line" class="mode-line">You are in Buyer mode</p>
+
+    <main class="workspace" id="workspace">
+    <section class="card" id="buyer-card" data-view="buyer" data-panel="overview funding" data-span="5">
       <h2>Buyer: test credits</h2>
       <div id="buyer"></div>
     </section>
 
-    <section class="card" id="fund-card" data-view="buyer">
+    <section class="card" id="fund-card" data-view="buyer" data-panel="overview funding" data-span="7">
       <h2>Add funds: cNGN to USDT through Textile</h2>
       <div id="fund"></div>
     </section>
 
-    <section class="card" id="services-card" data-view="buyer">
+    <section class="card" id="services-card" data-view="buyer" data-panel="explore" data-span="7">
       <h2>Services</h2>
       <details><summary>Where does each service come from?</summary><ul id="legend" class="legend"></ul></details>
       <div class="filters"><input id="q" type="search" placeholder="Search services" autocomplete="off"></div>
@@ -39,7 +66,7 @@
       <div id="cat-list" class="cards"></div>
     </section>
 
-    <section class="card" id="run-card" data-view="buyer" hidden>
+    <section class="card" id="run-card" data-view="buyer" data-panel="explore" data-span="5" hidden>
       <h2 id="run-title">Run</h2>
       <div id="run-quote"></div>
       <label for="run-input">Input (JSON object)</label>
@@ -50,35 +77,37 @@
       <div id="run-result"></div>
     </section>
 
-    <section class="card" id="history-card" data-view="buyer">
+    <section class="card" id="history-card" data-view="buyer" data-panel="overview usage transactions" data-span="12">
       <h2>Your requests and transaction history</h2>
       <div id="statement"></div>
       <div id="history" class="muted">Start testing first.</div>
     </section>
 
-    <section class="card" id="seller-card" data-view="seller">
+    <section class="card" id="seller-card" data-view="seller" data-panel="overview apis new earnings payout-settings payouts edit" data-span="12">
       <h2>Seller dashboard</h2>
       <p class="hint">My APIs is your private view of your listings. Credentials are encrypted and never shown again. Nothing here moves real money.</p>
       <div id="seller-status" class="status-bar" role="status" aria-live="polite" hidden></div>
       <div id="seller"></div>
     </section>
 
-    <section class="card" id="agents-card" data-view="buyer">
+    <section class="card" id="agents-card" data-view="buyer" data-panel="usage" data-span="5">
       <h2>AI agent access</h2>
       <div id="agents"></div>
     </section>
 
-    <section class="card" id="escrow-card" data-view="buyer">
+    <section class="card" id="escrow-card" data-view="buyer" data-panel="funding" data-span="12">
       <h2>Escrow settlement (testnet only)</h2>
       <div id="escrow"></div>
     </section>
 
-    <section class="card" id="funding-card" data-view="buyer">
+    <section class="card" id="funding-card" data-view="buyer" data-panel="funding" data-span="12">
       <h2>Payment options</h2>
-      <p class="hint">Pay a Buy gateway service directly with your own wallet and currency conversion: <a href="/">open the wallet payment page</a>.</p>
+      <p class="hint">Pay a Buy gateway service directly with your own wallet and currency conversion: <a href="/index.html">open the wallet payment page</a>.</p>
       <div id="funding"></div>
     </section>
   </main>
-  <script src="/market.js"></script>
+  </div>
+</div>
+<script src="/market.js"></script>
 </body>
 </html>

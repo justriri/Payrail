@@ -51,6 +51,7 @@ async function loadConfig() {
   if (d.sandbox) parts.push('sandbox sellers on');
   if (d.escrow) parts.push('testnet escrow on (Celo Sepolia, mock token)');
   $('mode-banner').textContent = `${parts.join(' · ')}. The Buy payment flow is separate and unchanged.`;
+  $('mode-banner').className = `banner ${d.realFunds ? 'live' : 'sim'}`;
   const lg = $('legend');
   clear(lg);
   for (const [k, v] of Object.entries(d.legend || {})) lg.append(el('li', {}, el('span', { class: `badge ${ORIGIN_CLASS[k] || ''}`, text: ORIGIN_SHORT[k] || k }), ' ', v));
@@ -148,6 +149,7 @@ async function select(it) {
   const d = await api(`/listing/${encodeURIComponent(it.id)}`);
   if (!d.ok) return alert(fail(d));
   selected = d.listing;
+  if (currentPanel() !== 'explore') location.hash = '#/buyer/explore';
   $('run-card').hidden = false;
   $('run-title').textContent = `Run: ${selected.name}`;
   renderQuote(d.quote);
@@ -659,8 +661,10 @@ const memSecrets = {};
 let renderToken = 0;
 
 function sellerRoute() {
-  const m = /^#\/seller(?:\/(new|earnings|payout-settings|api\/([\w-]{1,80})))?$/.exec(location.hash);
+  const m = /^#\/seller(?:\/(new|earnings|overview|payouts|payout-settings|api\/([\w-]{1,80})))?$/.exec(location.hash);
   if (!m || !m[1]) return { page: 'apis' };
+  if (m[1] === 'overview') return { page: 'overview' };
+  if (m[1] === 'payouts') return { page: 'payouts' };
   if (m[1] === 'new') return { page: 'new' };
   if (m[1] === 'earnings') return { page: 'earnings' };
   if (m[1] === 'payout-settings') return { page: 'payout-settings' };
@@ -740,13 +744,23 @@ async function renderSeller() {
       el('button', { type: 'button', class: 'secondary', text: 'Sign out', onclick: signOutSeller })),
     el('p', { class: 'muted', text: `${listings.length} API${listings.length === 1 ? '' : 's'} · ${published} published · payouts: ${config.realFunds ? 'available once you have real earnings' : 'disabled (test credits cannot be paid out)'}` }),
     el('nav', { class: 'subtabs', 'aria-label': 'Seller sections' },
+      el('a', { class: `subtab${route.page === 'overview' ? ' active' : ''}`, href: '#/seller/overview', text: 'Overview' }),
       el('a', { class: `subtab${route.page === 'apis' ? ' active' : ''}`, href: '#/seller', text: `My APIs (${listings.length})` }),
       el('a', { class: `subtab${route.page === 'new' ? ' active' : ''}`, href: '#/seller/new', text: 'New listing' }),
       el('a', { class: `subtab${route.page === 'earnings' ? ' active' : ''}`, href: '#/seller/earnings', text: 'Earnings & payouts' }),
       el('a', { class: `subtab${route.page === 'payout-settings' ? ' active' : ''}`, href: '#/seller/payout-settings', text: 'Payout settings' }),
+      el('a', { class: `subtab${route.page === 'payouts' ? ' active' : ''}`, href: '#/seller/payouts', text: 'Payout history' }),
       route.page === 'edit' && el('span', { class: 'subtab active', text: 'Manage API' })),
   );
-  if (route.page === 'payout-settings') {
+  if (route.page === 'overview') {
+    const [sm, pl] = await Promise.all([api('/seller/statement', { bearer: session.seller }), api('/seller/payout/settings', { bearer: session.seller })]);
+    if (mine !== renderToken) return;
+    box.append(sm.ok ? sellerOverviewPage(sm.statement, pl.ok ? pl : null, listings) : el('p', { class: 'problem', text: fail(sm) }));
+  } else if (route.page === 'payouts') {
+    const [sm, pl] = await Promise.all([api('/seller/statement', { bearer: session.seller }), api('/seller/payout/settings', { bearer: session.seller })]);
+    if (mine !== renderToken) return;
+    box.append(sm.ok ? payoutHistoryPage(sm.statement, pl.ok ? pl : null) : el('p', { class: 'problem', text: fail(sm) }));
+  } else if (route.page === 'payout-settings') {
     const st = await api('/seller/payout/settings', { bearer: session.seller });
     if (mine !== renderToken) return;
     box.append(st.ok ? payoutSettingsPage(st) : el('p', { class: 'problem', text: fail(st) }));
@@ -863,6 +877,66 @@ function payoutCard(p, box) {
   if (p.conversionTx) card.append(el('p', { class: 'muted', text: `Conversion tx ${p.conversionTx}${p.simulated ? ' (simulated)' : ''}${p.deliveryTx ? ` · delivery tx ${p.deliveryTx}` : ''}` }));
   if (p.events && p.events.length) card.append(el('details', {}, el('summary', { text: 'Timeline' }), el('ul', {}, ...p.events.map((e) => el('li', { text: `${e.at.slice(11, 19)} ${e.stage}: ${e.note}` })))));
   return card;
+}
+
+// ---- seller overview: compact summary cards computed from the same statement the Earnings page uses
+const sumDisplay = (items, pick) => {
+  let total = 0;
+  for (const x of items) total += Number(pick(x) || 0);
+  return (Math.round(total * 1e6) / 1e6).toString();
+};
+function sellerOverviewPage(sm, payoutSettings, listings) {
+  const wrap = el('div', {});
+  const asset = (sm.buckets[0] && sm.buckets[0].asset) || (sm.ledgerBalances[0] && sm.ledgerBalances[0].asset) || 'TESTUSDT';
+  const earned = sumDisplay(sm.buckets, (b) => b.sellerEarnings.display);
+  const fees = sumDisplay(sm.buckets, (b) => b.platformFees.display);
+  const available = sm.ledgerBalances.length ? sm.ledgerBalances.map((l) => l.available.display).join(' + ') : '0';
+  const pending = sumDisplay(sm.payoutTotals, (t) => t.pending.display);
+  const completed = sumDisplay(sm.payoutTotals, (t) => t.completed.display);
+  const stat = (label, value, note) => el('div', { class: 'stat' }, el('small', { text: label }), el('b', { text: value }), el('span', { text: note || asset }));
+  wrap.append(
+    el('div', { class: 'stat-grid' },
+      stat('Total earned', earned), stat('Platform fees (3%)', fees), stat('Available to pay out', available),
+      stat('Payouts pending', pending), stat('Payouts completed', completed)),
+    el('p', { class: 'muted', text: config.realFunds ? 'Earnings are real only when paid by buyers in real-funds mode.' : 'These are TEST CREDITS. Test-credit earnings cannot be withdrawn as real money.' }));
+  const pref = payoutSettings && payoutSettings.preference;
+  wrap.append(el('p', {}, el('strong', { text: 'Payout asset: ' }), pref ? `${pref.symbol} (version ${pref.version})` : 'USDT', ' · ',
+    el('a', { href: '#/seller/payout-settings', text: 'Payout settings' }), ' · ', el('a', { href: '#/seller/payouts', text: 'Payout history' })));
+  wrap.append(el('h3', { text: `Your APIs (${listings.length})` }));
+  if (!listings.length) wrap.append(el('p', { class: 'muted', text: 'No APIs yet.' }), el('a', { class: 'btn', href: '#/seller/new', text: 'Create your first API' }));
+  else {
+    wrap.append(el('table', {}, el('tr', {}, ...['API', 'Status', 'Price', ''].map((h) => el('th', { text: h }))),
+      ...listings.slice(0, 8).map((l) => el('tr', {},
+        el('td', { text: l.name }), el('td', {}, chip(l.displayStatus, STATUS_CLASS[l.displayStatus] || '')),
+        el('td', { text: l.price ? `${l.price.usd} ${l.price.asset}` : '' }),
+        el('td', {}, el('a', { href: `#/seller/api/${l.id}`, text: 'Manage' }))))));
+  }
+  return wrap;
+}
+
+// ---- payout history: every payout with its real lifecycle state; nothing is "complete" until delivery was verified
+function payoutHistoryPage(sm, payoutSettings) {
+  const wrap = el('div', {});
+  if (!sm.payouts.length) {
+    wrap.append(el('p', { class: 'muted', text: config.realFunds ? 'No payouts yet.' : 'No payouts. In test-credit mode payouts are disabled: test credits cannot be paid out as real money. The simulated payout demo is under Earnings.' }));
+  } else {
+    wrap.append(el('table', {}, el('tr', {}, ...['Requested', 'Amount', 'State', 'Transaction'].map((h) => el('th', { text: h }))),
+      ...sm.payouts.map((p) => el('tr', {},
+        el('td', { text: p.requestedAt.slice(0, 19).replace('T', ' ') }),
+        el('td', { text: `${p.amount.display} ${p.asset}` }),
+        el('td', {}, chip(p.state === 'confirmed' ? 'completed' : p.state === 'failed' || p.state === 'cancelled' ? 'failed' : 'pending', p.state === 'confirmed' ? 'ok' : p.state === 'failed' || p.state === 'cancelled' ? 'bad' : 'warn')),
+        el('td', { text: p.txHash || (p.state === 'confirmed' ? 'delivered' : 'not sent yet') })))));
+  }
+  const conv = sm.payouts.filter((p) => p.mode && p.mode !== 'usdt');
+  if (conv.length) {
+    wrap.append(el('h3', { text: 'Conversion and simulated payouts' }));
+    for (const p of conv) {
+      const holder = el('div', {});
+      wrap.append(holder);
+      api(`/seller/payouts/${p.id}`, { bearer: session.seller }).then((d) => { if (d.ok) holder.append(payoutCard(d.payout, wrap)); });
+    }
+  }
+  return wrap;
 }
 
 function earningsPage(sm, payoutSettings) {
@@ -1135,13 +1209,31 @@ function editorPage(l) {
 
 // ------------------------------------------------------------------ Buyer / Seller tabs
 function currentView() { return /^#\/?seller(\/.*)?$/.test(location.hash) ? 'seller' : 'buyer'; }
+const BUYER_PANELS = ['overview', 'explore', 'usage', 'funding', 'transactions'];
+function currentPanel() {
+  if (currentView() === 'seller') {
+    const r = sellerRoute();
+    return r.page === 'apis' ? 'apis' : r.page;
+  }
+  const m = /^#\/buyer\/(\w+)/.exec(location.hash);
+  return m && BUYER_PANELS.includes(m[1]) ? m[1] : 'overview';
+}
+const PANEL_TITLES = { overview: 'Overview', explore: 'Explore APIs', usage: 'My API usage', funding: 'Wallet and funding', transactions: 'Transactions and receipts', apis: 'My APIs', new: 'Create API', earnings: 'Earnings', 'payout-settings': 'Payout settings', payouts: 'Payout history', edit: 'Manage API' };
 function applyView() {
   const v = currentView();
+  const panel = currentPanel();
   for (const sec of document.querySelectorAll('main [data-view]')) {
     // the run card is also hidden until a service is chosen; keep that rule
     const forceHidden = sec.id === 'run-card' && !selected;
-    sec.hidden = sec.dataset.view !== v || forceHidden;
+    const inPanel = !sec.dataset.panel || sec.dataset.panel.split(' ').includes(panel);
+    sec.hidden = sec.dataset.view !== v || forceHidden || !inPanel;
   }
+  $('nav-buyer').hidden = v !== 'buyer';
+  $('nav-seller').hidden = v !== 'seller';
+  for (const a of document.querySelectorAll('.side-nav a')) a.classList.toggle('active', a.dataset.nav === panel && !a.closest('[hidden]'));
+  $('page-title').textContent = `${v === 'buyer' ? 'Buyer' : 'Seller'} · ${PANEL_TITLES[panel] || ''}`;
+  document.body.classList.remove('nav-open');
+  $('menu-btn').setAttribute('aria-expanded', 'false');
   for (const name of ['buyer', 'seller']) {
     const t = $(`tab-${name}`);
     t.classList.toggle('active', name === v);
@@ -1150,11 +1242,15 @@ function applyView() {
   $('mode-line').textContent = v === 'buyer' ? 'You are in Buyer mode: browse services, run requests and manage test credits.' : 'You are in Seller mode: list APIs, verify ownership, set contracts and track earnings.';
   document.body.dataset.mode = v;
   window.scrollTo(0, 0);
-  document.title = `Payrail ${v === 'buyer' ? 'Buyer' : 'Seller'}`;
+  document.title = `Payrail ${v === 'buyer' ? 'Buyer' : 'Seller'}: ${PANEL_TITLES[panel] || ''}`;
   if (v === 'seller') renderSeller();
   else { loadCatalog(); renderBuyer(); renderHistory(); if (!fund.op) renderAddFunds(); }
 }
 window.addEventListener('hashchange', applyView);
+$('menu-btn').addEventListener('click', () => {
+  const open = document.body.classList.toggle('nav-open');
+  $('menu-btn').setAttribute('aria-expanded', open ? 'true' : 'false');
+});
 
 $('q').addEventListener('input', () => { clearTimeout(window.__t); window.__t = setTimeout(loadCatalog, 250); });
 (async () => {

@@ -15,7 +15,7 @@ await b.goto(BASE + '/market.html#/seller');
 await b.click('#seller button', 'sandbox seller');
 await b.sleep(1500);
 let t = await seller();
-check('My APIs is the default seller page', /My APIs \(\d+\)/.test(t), t.split('\n').filter((l) => /My APIs|Published|private/i.test(l)).slice(0, 4).join(' | '));
+check('My APIs is the default seller page', /My APIs/.test(t) && /\d+ APIs? · \d+ published/.test(t), t.split('\n').filter((l) => /My APIs|Published|private/i.test(l)).slice(0, 4).join(' | '));
 check('private vs public is explained', /private management view/.test(t));
 
 // ---- new listing form keeps its values across navigation and across actions on other listings
