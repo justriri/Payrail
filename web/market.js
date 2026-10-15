@@ -52,6 +52,11 @@ async function loadConfig() {
   if (d.escrow) parts.push('testnet escrow on (Celo Sepolia, mock token)');
   $('mode-banner').textContent = `${parts.join(' · ')}. The Buy payment flow is separate and unchanged.`;
   $('mode-banner').className = `banner ${d.realFunds ? 'live' : 'sim'}`;
+  const pill = $('mode-pill');
+  pill.textContent = d.realFunds ? 'LIVE · real USDT on Celo' : 'DEMO · test credits, no real money';
+  pill.className = `pill ${d.realFunds ? 'live' : 'sim'}`;
+  $('demo-toggle').hidden = !d.realFunds;
+  document.body.dataset.funds = d.realFunds ? 'live' : 'demo';
   const lg = $('legend');
   clear(lg);
   for (const [k, v] of Object.entries(d.legend || {})) lg.append(el('li', {}, el('span', { class: `badge ${ORIGIN_CLASS[k] || ''}`, text: ORIGIN_SHORT[k] || k }), ' ', v));
@@ -87,6 +92,18 @@ async function quickStart() {
 async function renderBuyer() {
   const box = $('buyer');
   clear(box);
+  if (!session.buyer && config.realFunds) {
+    box.append(
+      el('p', {}, el('span', { class: 'badge ok', text: 'REAL FUNDS' }), ' Sign in with your wallet to fund your account in USDT and pay for APIs. Signing sends no transaction and never shares a key.'),
+      el('button', { type: 'button', id: 'wallet-signin', text: 'Sign in with wallet', onclick: async () => {
+        try { await buyerLoginWallet(); } catch (e) { flash(box, e.message, true); }
+      } }),
+      el('details', {}, el('summary', { text: 'Demo only: use test credits (no real money)' }),
+        el('p', { class: 'muted', text: 'Test credits only work on APIs marked DEMO. They never touch real funds.' }),
+        el('button', { type: 'button', class: 'secondary', text: 'Start testing: get 5 test credits', onclick: quickStart })),
+    );
+    return;
+  }
   if (!session.buyer) {
     box.append(
       el('p', { text: 'You do not need a wallet to try the marketplace. One click creates a test buyer with 5 test credits (not real money).' }),
@@ -104,9 +121,10 @@ async function renderBuyer() {
     return renderBuyer();
   }
   box.append(
-    me.live && el('p', {}, el('strong', { text: `${me.live.available} ${me.live.asset}` }), ' available (real) · ', `${me.live.held} held `, el('span', { class: 'badge ok', text: 'REAL USDT' })),
-    me.live && el('p', {}, el('strong', { text: `${me.live.available} ${me.live.asset}` }), ' available · ', `${me.live.held} held `, el('span', { class: 'badge ok', text: 'REAL USDT' })),
-    el('p', {}, el('strong', { text: `${me.available} ${me.asset}` }), ' available · ', `${me.held} held `, el('span', { class: 'badge', text: 'TEST CREDITS' })),
+    me.live && el('p', {}, el('strong', { id: 'real-balance', text: `${me.live.available} ${me.live.asset}` }), ' available · ', `${me.live.held} held `, el('span', { class: 'badge ok', text: 'REAL USDT' })),
+    me.live && el('p', { class: 'muted', text: 'Real USDT is credited only after the transfer is verified on-chain. Fund it from Wallet and funding, or just pay on an API page.' }),
+    !me.live && el('p', {}, el('strong', { text: `${me.available} ${me.asset}` }), ' available · ', `${me.held} held `, el('span', { class: 'badge', text: 'TEST CREDITS' })),
+    me.live && el('p', { class: 'muted' }, 'Demo test credits (no real money, DEMO APIs only): ', `${me.available} ${me.asset}`),
     el('div', { class: 'row' },
       el('button', { type: 'button', class: 'secondary', text: 'Add 1 test credit', onclick: async () => {
         const d = await api('/credits', { body: { amount: '1' }, bearer: session.buyer });
@@ -126,10 +144,17 @@ async function loadCatalog() {
   const list = $('cat-list');
   clear(list);
   if (!d.ok) { $('cat-status').textContent = fail(d); return; }
+  const isDemoItem = (it) => ['payrail-demo', 'payrail-sandbox', 'buy-gateway-simulated'].includes(it.origin);
+  const hiddenDemos = config.realFunds && !(($('show-demo') || {}).checked) ? d.items.filter(isDemoItem).length : 0;
+  if (config.realFunds && !(($('show-demo') || {}).checked)) d.items = d.items.filter((it) => !isDemoItem(it));
   const counts = {};
   for (const it of d.items) counts[it.origin] = (counts[it.origin] || 0) + 1;
   $('cat-status').textContent = `${d.items.length} services · ` + Object.entries(counts).map(([k, n]) => `${n} ${ORIGIN_SHORT[k] || k}`).join(', ')
     + (d.buy.available ? '' : ` · Buy gateway: ${d.buy.message || 'unavailable'}`);
+  if (config.realFunds && d.items.length === 0) {
+    list.append(el('div', { class: 'notice' }, 'No real-USDT APIs are published yet. ', el('a', { href: '#/seller/new', text: 'Publish one in Seller, Create API' }),
+      hiddenDemos ? ` or tick "Show demo APIs" to see ${hiddenDemos} demo listing(s) that use test credits.` : '.'));
+  }
   for (const it of d.items) {
     const price = !it.pricing ? 'price on request'
       : it.pricing.kind === 'fixed' ? `${it.pricing.usd} ${it.pricing.asset}`
@@ -1196,6 +1221,8 @@ $('menu-btn').addEventListener('click', () => {
   $('menu-btn').setAttribute('aria-expanded', open ? 'true' : 'false');
 });
 
+$('show-demo').addEventListener('change', () => { store.set('payrail.showDemo', $('show-demo').checked ? '1' : null); loadCatalog(); });
+$('show-demo').checked = store.get('payrail.showDemo') === '1';
 $('q').addEventListener('input', () => { clearTimeout(window.__t); window.__t = setTimeout(loadCatalog, 250); });
 (async () => {
   await loadConfig();

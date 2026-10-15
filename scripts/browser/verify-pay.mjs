@@ -133,6 +133,21 @@ const pay = async (id, input = '{}') => {
 const buyerLive = async (tokenValue) => (await call('GET', '/me', { bearer: tokenValue })).live;
 const buyerToken = () => b.ev(`localStorage.getItem('payrail.buyer')`);
 
+// ================= 0. the pages say, and behave like, REAL-FUNDS mode
+await b.goto(`${BASE}/`, 1500);
+check('landing page states LIVE mode from the server config', /LIVE: this server is in real-funds mode/.test(await b.text('#mode-note')), await b.text('#mode-note'));
+await b.goto(`${BASE}/market.html#/buyer`, 2200);
+check('dashboard shows a LIVE pill, not DEMO', /LIVE · real USDT/.test(await b.text('#mode-pill')) && /REAL FUNDS MODE/.test(await b.text('#mode-banner')), `${await b.text('#mode-pill')} | ${await b.text('#mode-banner')}`);
+check('signed-out buyer is offered wallet sign-in first; test credits are a collapsed demo option', (await b.ev(`!!document.querySelector('#wallet-signin')`)) && /REAL FUNDS/.test(await b.text('#buyer')) && (await b.ev(`document.querySelector('#buyer details')?.open === false`)));
+await b.goto(`${BASE}/market.html#/buyer/explore`, 2000);
+let names = await b.ev(`JSON.stringify([...document.querySelectorAll('#cat-list .svc h4')].map(h => h.textContent))`).then(JSON.parse);
+check('explore lists the real-USDT APIs and hides demo APIs by default', names.includes('Cheap Quote API') && !names.some((n) => /Demo token price/.test(n)), JSON.stringify(names));
+await b.ev(`document.querySelector('#show-demo').click(); 0`);
+await b.sleep(1200);
+names = await b.ev(`JSON.stringify([...document.querySelectorAll('#cat-list .svc h4')].map(h => h.textContent))`).then(JSON.parse);
+check('"Show demo APIs" reveals them, clearly labelled DEMO', names.some((n) => /Demo token price/.test(n)) && /DEMO/.test(await b.text('#cat-list')), JSON.stringify(names).slice(0, 160));
+await b.ev(`document.querySelector('#show-demo').click(); 0`);
+
 // ================= 1. no wallet installed
 await pay(cheapId);
 await until(async () => (await steps()).some((s) => s.s === 'failed'));

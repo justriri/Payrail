@@ -13,6 +13,7 @@
 <div class="shell">
   <aside class="sidebar" id="sidebar" aria-label="Main navigation">
     <a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>Payrail</a>
+    <p id="mode-pill" class="pill sim" role="status">Checking mode…</p>
     <nav class="modeswitch tabs" role="tablist" aria-label="Marketplace mode">
       <a id="tab-buyer" class="tab active" role="tab" href="/market.html#/buyer" aria-selected="true"><span class="tab-title">Buyer</span><span class="tab-sub">Browse, run, pay</span></a>
       <a id="tab-seller" class="tab" role="tab" href="/market.html#/seller" aria-selected="false"><span class="tab-title">Seller</span><span class="tab-sub">List, verify, earn</span></a>
@@ -61,7 +62,8 @@
     <section class="card" id="services-card" data-view="buyer" data-panel="explore" data-span="12">
       <h2>Services</h2>
       <details><summary>Where does each service come from?</summary><ul id="legend" class="legend"></ul></details>
-      <div class="filters"><input id="q" type="search" placeholder="Search services" autocomplete="off"></div>
+      <div class="filters"><input id="q" type="search" placeholder="Search services" autocomplete="off">
+        <label id="demo-toggle" class="check" hidden><input id="show-demo" type="checkbox"> <span>Show demo APIs (test credits, no real money)</span></label></div>
       <p id="cat-status" class="muted" role="status">Loading…</p>
       <div id="cat-list" class="cards"></div>
     </section>
