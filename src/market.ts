@@ -991,7 +991,12 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
   }
 
   // ---- seller sign-in
-  if (method === 'POST' && path === '/seller/login/start') return ok(startLogin(db, str(body.wallet, 'wallet', 60), now));
+  if (method === 'POST' && path === '/seller/login/start') {
+    // network check when the wallet reports its chain (the UI always does); the signature itself proves wallet control only
+    const expected = rt.conversion?.chainId ?? CELO_CHAIN_ID;
+    if (body.chainId !== undefined && Number(body.chainId) !== expected) throw new ApiError(422, 'WRONG_NETWORK', `switch your wallet to chain ${expected}`);
+    return ok(startLogin(db, str(body.wallet, 'wallet', 60), now));
+  }
   if (method === 'POST' && path === '/seller/login/complete') {
     const r = await completeLogin(db, { wallet: str(body.wallet, 'wallet', 60), nonce: str(body.nonce, 'nonce', 80), signature: str(body.signature, 'signature', 400) }, now);
     return ok(r);

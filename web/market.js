@@ -320,11 +320,53 @@ function walletPanel(box, w) {
   box.append(panel);
 }
 
+// REAL funds: the buyer sends USDT from their own proven wallet to the deposit address, then submits the transaction hash.
+// Nothing is credited until the server has verified the transfer (token, sender, recipient, amount, confirmations).
+async function renderLiveDeposit(box) {
+  const f = await api('/funding', { bearer: session.buyer });
+  if (!f.ok || !f.enabled) { box.append(el('p', { class: 'muted', text: 'Real-funds deposits are not enabled on this server.' })); return; }
+  box.append(el('div', { class: 'banner live', text: `REAL FUNDS: ${f.asset} on chain ${f.chainId}. Transfers are final.` }));
+  const msg = el('p', { class: 'muted', role: 'status' });
+  const w = f.wallets[0];
+  box.append(el('p', {}, el('strong', { text: w ? `Sending wallet verified: ${w}` : 'No sending wallet verified yet' })));
+  if (!w) {
+    box.append(el('button', { type: 'button', text: 'Verify my wallet (signature only, no transaction)', onclick: async () => {
+      try {
+        if (!window.ethereum) throw new Error('No browser wallet found.');
+        const [account] = await window.ethereum.request({ method: 'eth_requestAccounts' });
+        const me = await api('/me', { bearer: session.buyer });
+        const message = f.walletMessageTemplate.replace('<your wallet address in lowercase>', account.toLowerCase()).replace(/Buyer: .*\n/, 'Buyer: ' + me.accountId + '\n');
+        const signature = await window.ethereum.request({ method: 'personal_sign', params: [message, account] });
+        const r = await api('/funding/wallet', { body: { wallet: account, signature }, bearer: session.buyer });
+        if (!r.ok) throw new Error(fail(r));
+        renderAddFunds();
+      } catch (e) { msg.textContent = e.message; msg.className = 'problem'; }
+    } }), msg);
+    return;
+  }
+  box.append(el('table', { class: 'quote' },
+    el('tr', {}, el('th', { text: 'Send' }), el('td', { class: 'v', text: `${f.asset} (token ${f.token})` })),
+    el('tr', {}, el('th', { text: 'To' }), el('td', { class: 'v', text: f.depositAddress })),
+    el('tr', {}, el('th', { text: 'From' }), el('td', { class: 'v', text: `${w} (only this wallet is credited)` })),
+    el('tr', {}, el('th', { text: 'Limit per deposit' }), el('td', { class: 'v', text: `${f.maxDeposit} ${f.asset}` })),
+    el('tr', {}, el('th', { text: 'Confirmations needed' }), el('td', { class: 'v', text: String(f.minConfirmations) }))));
+  const tx = el('input', { placeholder: '0x… transaction hash of your transfer', 'aria-label': 'Transaction hash' });
+  box.append(el('label', { text: 'After sending, paste the transaction hash' }), tx,
+    el('div', { class: 'row' }, el('button', { type: 'button', text: 'Verify and credit', onclick: async () => {
+      msg.className = 'muted'; msg.textContent = 'Checking the chain…';
+      const r = await api('/funding/confirm', { body: { txHash: tx.value.trim() }, bearer: session.buyer });
+      if (r.ok) { msg.className = 'notice'; msg.textContent = r.credited.map((c) => `SUCCESS: ${c.amount} ${f.asset} ${c.alreadyCredited ? 'was already credited' : 'credited'}`).join('; '); renderBuyer(); }
+      else if (r.code === 'NOT_ENOUGH_CONFIRMATIONS' || r.code === 'TX_NOT_FOUND') { msg.className = 'muted'; msg.textContent = `PENDING: ${r.message} Not credited yet; check again shortly.`; }
+      else { msg.className = 'problem'; msg.textContent = `NOT CREDITED: ${r.message} (${r.code}). Nothing was credited.`; }
+    } })), msg);
+}
+
 async function renderAddFunds() {
   const box = $('fund');
   stopFundTimers();
   clear(box);
   if (!session.buyer) { box.append(el('p', { class: 'muted', text: 'Start testing first (Buyer card above).' })); return; }
+  if (config.realFunds) { await renderLiveDeposit(box); return; }
   const cfgR = await api('/fund/config', { bearer: session.buyer });
   if (!cfgR.ok) { box.append(el('p', { class: 'muted', text: cfgR.code === 'FUNDING_DISABLED' ? 'Funding is not configured on this server.' : fail(cfgR) })); return; }
   fund.cfg = cfgR;
@@ -577,7 +619,8 @@ async function walletSign(message) {
 }
 async function sellerLoginWallet() {
   const probe = await walletSign('Payrail: choose account');
-  const s = await api('/seller/login/start', { body: { wallet: probe.account } });
+  const chainId = parseInt(await window.ethereum.request({ method: 'eth_chainId' }), 16);
+  const s = await api('/seller/login/start', { body: { wallet: probe.account, chainId } });
   if (!s.ok) throw new Error(fail(s));
   const { signature } = await walletSign(s.message);
   const c = await api('/seller/login/complete', { body: { wallet: probe.account, nonce: s.nonce, signature } });
