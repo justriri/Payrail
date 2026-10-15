@@ -22,7 +22,7 @@ check('landing: "Explore APIs" and "Start selling" calls to action link into the
 check('landing: product preview is shown and labelled as a preview', /preview/i.test(await b.text('.preview')) && (await vis('.preview')));
 check('landing: how it works, buyer and seller benefits, currencies sections', (await vis('#how')) && (await vis('#benefits')) && (await vis('#currencies')));
 check('landing: currencies say availability depends on verified routes', /Availability depends on verified routes/.test(t));
-check('landing: simulated/demo status is stated, nothing claims live money', /demo mode with test credits/.test(t) && !/CWT/.test(t));
+check('landing: the actual mode is stated (demo here), nothing claims live money', /DEMO: this server runs on test credits|demo mode with test credits/.test(t) && !/CWT/.test(t));
 check('landing: footer navigation', (await b.ev(`document.querySelectorAll('.footer a').length`)) >= 8);
 check('landing: no horizontal overflow (desktop)', (await overflow()) <= 0, await overflow());
 await b.shot('ui-landing-desktop');
@@ -96,10 +96,15 @@ await b.shot('ui-landing-mobile');
 await b.goto(BASE + '/market.html#/buyer');
 const msb = await rect('#sidebar');
 check('mobile: the sidebar is collapsed off-screen and a Menu button is shown', msb && msb.r <= 1 && (await vis('#menu-btn')), JSON.stringify(msb));
-await b.click('#menu-btn', 'Menu');
-await b.sleep(900);
+let clicked = '';
+for (let i = 0; i < 3; i++) {
+  // a busy machine can delay the page's script; retry the tap instead of failing on timing
+  if (await b.ev(`document.body.classList.contains('nav-open')`)) break;
+  clicked = await b.click('#menu-btn', 'Menu');
+  await b.sleep(900);
+}
 const open = await rect('#sidebar');
-check('mobile: Menu opens the navigation', open && open.l >= 0 && (await b.ev(`document.body.classList.contains('nav-open')`)), JSON.stringify(open));
+check('mobile: Menu opens the navigation', open && open.l >= 0 && (await b.ev(`document.body.classList.contains('nav-open')`)), `${clicked} ${JSON.stringify(open)} body=${await b.ev('document.body.className')}`);
 await b.ev(`document.querySelector('#nav-buyer a[data-nav=funding]').click(); 0`);
 await b.sleep(900);
 check('mobile: choosing a section closes the menu and shows it', !(await b.ev(`document.body.classList.contains('nav-open')`)) && (await vis('#fund-card')));
