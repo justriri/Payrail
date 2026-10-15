@@ -104,6 +104,8 @@ async function renderBuyer() {
     return renderBuyer();
   }
   box.append(
+    me.live && el('p', {}, el('strong', { text: `${me.live.available} ${me.live.asset}` }), ' available (real) · ', `${me.live.held} held `, el('span', { class: 'badge ok', text: 'REAL USDT' })),
+    me.live && el('p', {}, el('strong', { text: `${me.live.available} ${me.live.asset}` }), ' available · ', `${me.live.held} held `, el('span', { class: 'badge ok', text: 'REAL USDT' })),
     el('p', {}, el('strong', { text: `${me.available} ${me.asset}` }), ' available · ', `${me.held} held `, el('span', { class: 'badge', text: 'TEST CREDITS' })),
     el('div', { class: 'row' },
       el('button', { type: 'button', class: 'secondary', text: 'Add 1 test credit', onclick: async () => {
@@ -118,7 +120,6 @@ async function renderBuyer() {
 }
 
 // ------------------------------------------------------------------ catalog
-let selected = null;
 async function loadCatalog() {
   const q = $('q').value.trim();
   const d = await api(`/catalog${q ? `?q=${encodeURIComponent(q)}` : ''}`);
@@ -133,51 +134,21 @@ async function loadCatalog() {
     const price = !it.pricing ? 'price on request'
       : it.pricing.kind === 'fixed' ? `${it.pricing.usd} ${it.pricing.asset}`
         : (it.pricing.minUsd === it.pricing.maxUsd ? `${it.pricing.minUsd} (indicative)` : `${it.pricing.minUsd}–${it.pricing.maxUsd} (indicative)`);
-    const card = el('div', { class: 'svc' },
-      el('div', {}, el('span', { class: `badge ${ORIGIN_CLASS[it.origin] || ''}`, text: ORIGIN_SHORT[it.origin] || it.origin }), ' ', !it.available && el('span', { class: 'badge', text: 'Unavailable' })),
-      el('div', {}, el('strong', { text: it.title })),
-      el('div', { class: 'muted', text: it.description.slice(0, 160) }),
-      el('div', { class: 'price', text: price }),
-      el('div', { class: 'muted', text: it.originLabel }),
+    const isGateway = it.execution === 'payrail-gateway';
+    const card = el('article', { class: 'svc', 'data-id': it.id },
+      el('div', { class: 'svc-top' },
+        el('span', { class: `badge ${ORIGIN_CLASS[it.origin] || ''}`, text: ORIGIN_SHORT[it.origin] || it.origin }),
+        el('span', { class: `badge ${it.available ? 'ok' : 'warn'}`, text: it.available ? 'Published' : 'Unavailable' })),
+      el('h4', { text: it.title }),
+      el('p', { class: 'svc-desc', text: it.description.slice(0, 200) }),
+      el('p', { class: 'svc-seller', text: `Seller: ${it.seller || it.originLabel}` }),
+      el('div', { class: 'svc-foot' }, el('span', { class: 'price', text: price })),
     );
-    if (it.execution === 'payrail-gateway') card.append(el('button', { type: 'button', text: 'Try it', onclick: () => select(it) }));
-    else if (it.available) card.append(el('a', { href: '/', text: 'Pay with the Buy flow (real payment page)' }));
+    if (isGateway) card.querySelector('.svc-foot').append(el('a', { class: 'btn', href: `/api.html?id=${encodeURIComponent(it.id)}`, text: 'View API' }));
+    else if (it.available) card.querySelector('.svc-foot').append(el('a', { class: 'btn ghost', href: '/index.html', text: 'Open Buy flow' }));
     list.append(card);
   }
 }
-async function select(it) {
-  const d = await api(`/listing/${encodeURIComponent(it.id)}`);
-  if (!d.ok) return alert(fail(d));
-  selected = d.listing;
-  if (currentPanel() !== 'explore') location.hash = '#/buyer/explore';
-  $('run-card').hidden = false;
-  $('run-title').textContent = `Run: ${selected.name}`;
-  renderQuote(d.quote);
-  const hint = selected.method === 'POST' ? '{"text":"hello"}' : '{"id":"eth"}';
-  $('run-input').value = selected.demo || selected.sandbox ? hint : '{}';
-  $('run-hint').textContent = selected.demo || selected.sandbox
-    ? 'Failure injection: add "scenario" with one of stale, http500, html, empty, wrongtype, missing, hang to see a non-qualifying or unresolved result.'
-    : '';
-  $('run-settle').hidden = !config.escrow;
-  $('run-result').replaceChildren();
-  $('run-card').scrollIntoView({ behavior: 'smooth' });
-}
-function renderQuote(q) {
-  const box = $('run-quote');
-  clear(box);
-  if (!q) return;
-  box.append(
-    el('table', { class: 'quote' },
-      el('tr', {}, el('th', { text: 'You pay (only if the response qualifies)' }), el('td', { class: 'v', text: `${q.buyerPays.display} ${q.asset}` })),
-      el('tr', {}, el('th', { text: `Platform fee (${q.platformFee.percent}%, taken from the seller's share)` }), el('td', { class: 'v', text: `${q.platformFee.display} ${q.asset}` })),
-      el('tr', {}, el('th', { text: 'Seller earns' }), el('td', { class: 'v', text: `${q.sellerReceives.display} ${q.asset}` }))),
-    el('h3', { text: `A response qualifies only if (contract v${q.contract ? q.contract.version : '?'})` }),
-    el('ul', {}, ...q.chargedOnlyIf.map((c) => el('li', { text: c }))),
-    el('details', {}, el('summary', { text: 'What happens if it does not qualify, or the outcome is unknown?' }), el('ul', {}, ...q.notCharged.map((c) => el('li', { text: c })))),
-    el('p', { class: 'notice', text: q.validationNote }),
-  );
-}
-
 async function showReceipt(box, id) {
   const d = await api(`/receipt/${encodeURIComponent(id)}`, { bearer: session.buyer });
   if (!d.ok) { box.append(el('p', { class: 'problem', text: fail(d) })); return; }
@@ -193,37 +164,6 @@ async function showReceipt(box, id) {
   if (r.escrow) box.append(el('p', { class: 'muted', text: `Escrow hold ${r.escrow.holdId || '—'} · ` + Object.entries(r.escrow.txs).map(([k, v]) => `${k}: ${v}`).join(' · ') }));
   box.append(el('p', { class: 'muted', text: r.validation.note }));
 }
-
-$('run-btn').addEventListener('click', async () => {
-  if (!session.buyer) return ($('run-msg').textContent = 'Click "Start testing" in the Buyer card first.');
-  let input;
-  try { input = JSON.parse($('run-input').value || '{}'); } catch { return ($('run-msg').textContent = 'Input must be valid JSON.'); }
-  const useEscrow = config.escrow && $('run-escrow').checked;
-  $('run-msg').textContent = useEscrow ? 'Running through the TESTNET escrow (on-chain transactions, may take ~20s)…' : 'Running…';
-  $('run-btn').disabled = true;
-  const d = await api('/execute', { body: { listingId: selected.id, input, idempotencyKey: newKey(), ...(useEscrow ? { settlement: 'escrow' } : {}) }, bearer: session.buyer });
-  $('run-btn').disabled = false;
-  $('run-msg').textContent = '';
-  const out = $('run-result');
-  clear(out);
-  if (!d.ok) { out.append(el('div', { class: 'problem', text: fail(d) })); return; }
-  const r = d.result;
-  const price = (Number(r.priceAtomic) / 1e6).toString();
-  const headline = r.charged ? `Charged ${price} ${r.asset}: the response qualified.`
-    : r.held ? 'Outcome unknown: your credits are held, not charged. They are released automatically if this stays unresolved.'
-      : 'Not charged: the response did not meet the contract.';
-  out.append(el('p', { class: 'headline', text: headline }), r.reason && el('p', { class: 'muted', text: r.reason }),
-    d.settlement === 'escrow' && el('p', { class: 'notice', text: 'Settled through the Celo Sepolia TESTNET escrow contract (mock token).' }));
-  if (r.checks.length) out.append(el('ul', {}, ...r.checks.map((c) => el('li', { text: `${c.ok ? '✓' : '✗'} ${c.name} — ${c.detail}` }))));
-  if (r.body !== undefined) out.append(el('pre', { text: JSON.stringify(r.body, null, 2) }));
-  const rec = el('details', { open: '' }, el('summary', { text: 'Receipt' }));
-  out.append(rec);
-  out.append(el('p', { class: 'notice', text: 'Qualified means the response matched the agreed structure, types and freshness. It does not prove the data is true.' }));
-  await showReceipt(rec, r.executionId);
-  renderBuyer(); renderHistory(); renderEscrow();
-  if (!fund.op) renderAddFunds();
-  if (session.seller) renderSeller();
-});
 
 const STATE_TEXT = (e) => (e.state === 'QUALIFIED' ? `charged ${e.price} ${e.asset}` : e.state === 'UNRESOLVED' || e.state === 'HELD' ? `held ${e.price} ${e.asset} (outcome unknown, not charged)` : e.state === 'RELEASED_UNRESOLVED' ? 'released: outcome never established, not charged' : 'not charged');
 async function renderHistory() {
@@ -1041,12 +981,13 @@ function newListingPage() {
     el('label', { text: 'Description' }), bind(el('input', { placeholder: 'What does it return?' }), 'desc'),
     el('label', { text: 'Endpoint URL (https, fixed; buyers can only change input values)' }), bind(el('input', { placeholder: 'https://api.example.com/v1/price', type: 'url' }), 'url'),
     el('label', { text: 'HTTP method' }), method,
-    el('label', { text: 'Price per qualifying response (test credits)' }), bind(el('input', { placeholder: 'e.g. 0.02' }), 'price'),
+    el('label', { text: config.realFunds ? 'Price per qualifying response' : 'Price per qualifying response (test credits)' }), bind(el('input', { placeholder: 'e.g. 0.02' }), 'price'),
+    config.realFunds && el('label', { class: 'check' }, el('input', { type: 'checkbox', id: 'live-listing', ...(f.live ? { checked: '' } : {}), onchange: (ev) => { f.live = ev.target.checked; saveUi(); } }), el('span', { text: 'Charge buyers in REAL USDT (leave unchecked to list in test credits)' })),
     el('p', { class: 'muted', text: 'Your entries are kept if something fails, and after a page reload, until you submit successfully.' }),
     el('div', { class: 'row' },
       el('button', { type: 'button', text: 'Submit listing', onclick: async () => {
         say('Submitting…', 'info');
-        const d = await api('/seller/listings', { body: { name: f.name, description: f.desc, endpointUrl: f.url, method: f.method, price: f.price }, bearer: session.seller });
+        const d = await api('/seller/listings', { body: { name: f.name, description: f.desc, endpointUrl: f.url, method: f.method, price: f.price, ...(config.realFunds && f.live ? { live: true } : {}) }, bearer: session.seller });
         if (!d.ok) { say(`Could not submit: ${fail(d)}. Your entries are still here.`, 'bad'); return; }
         Object.assign(f, blankForm()); saveUi();
         say(`Saved "${d.listing.name}" as ${d.listing.displayStatus}. Continue with ownership verification below.`, 'ok');
@@ -1224,7 +1165,7 @@ function applyView() {
   const panel = currentPanel();
   for (const sec of document.querySelectorAll('main [data-view]')) {
     // the run card is also hidden until a service is chosen; keep that rule
-    const forceHidden = sec.id === 'run-card' && !selected;
+    const forceHidden = false;
     const inPanel = !sec.dataset.panel || sec.dataset.panel.split(' ').includes(panel);
     sec.hidden = sec.dataset.view !== v || forceHidden || !inPanel;
   }
@@ -1232,8 +1173,6 @@ function applyView() {
   $('nav-seller').hidden = v !== 'seller';
   for (const a of document.querySelectorAll('.side-nav a')) a.classList.toggle('active', a.dataset.nav === panel && !a.closest('[hidden]'));
   $('page-title').textContent = `${v === 'buyer' ? 'Buyer' : 'Seller'} · ${PANEL_TITLES[panel] || ''}`;
-  document.body.classList.remove('nav-open');
-  $('menu-btn').setAttribute('aria-expanded', 'false');
   for (const name of ['buyer', 'seller']) {
     const t = $(`tab-${name}`);
     t.classList.toggle('active', name === v);
@@ -1246,7 +1185,12 @@ function applyView() {
   if (v === 'seller') renderSeller();
   else { loadCatalog(); renderBuyer(); renderHistory(); if (!fund.op) renderAddFunds(); }
 }
-window.addEventListener('hashchange', applyView);
+window.addEventListener('hashchange', () => {
+  // navigating closes the mobile menu (but the initial render must not, or a quick tap on Menu would be undone)
+  document.body.classList.remove('nav-open');
+  $('menu-btn').setAttribute('aria-expanded', 'false');
+  applyView();
+});
 $('menu-btn').addEventListener('click', () => {
   const open = document.body.classList.toggle('nav-open');
   $('menu-btn').setAttribute('aria-expanded', open ? 'true' : 'false');

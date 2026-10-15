@@ -176,3 +176,35 @@ main.workspace pre { max-height: 260px; }
 
 /* the sidebar already carries the seller sections on desktop */
 @media (min-width: 861px) { .workspace .subtabs { display: none; } }
+
+/* ------------------------------------------------------------------ API cards (Explore) */
+main.workspace .cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 12px; }
+@media (max-width: 1180px) { main.workspace .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) { main.workspace .cards { grid-template-columns: minmax(0, 1fr); } }
+.cards .svc { display: flex; flex-direction: column; gap: 8px; padding: 16px; min-height: 212px; background: #fff; border: 1px solid var(--line); border-radius: var(--radius); }
+.cards .svc h4 { margin: 2px 0 0; font-size: 16px; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.cards .svc .svc-top { display: flex; gap: 6px; flex-wrap: wrap; }
+.cards .svc .svc-desc { color: var(--ink-2); font-size: 14px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; min-height: 3 * 1.45em; margin: 0; }
+.cards .svc .svc-seller { color: var(--muted); font-size: 13px; margin: 0; overflow-wrap: anywhere; }
+.cards .svc .svc-foot { margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.cards .svc .price { font-size: 15px; }
+
+/* ------------------------------------------------------------------ API details page */
+body.apipage { background: var(--bg); }
+.apibar { position: static; }
+.apiwrap { max-width: 1180px; margin: 0 auto; padding: 22px 24px 56px; }
+.apigrid { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 20px; align-items: start; }
+.apiwrap .card { margin: 0; padding: 20px 22px; border-radius: var(--radius); box-shadow: var(--shadow); }
+.apiwrap h1 { margin: 0 0 8px; font-size: 26px; letter-spacing: -.025em; color: var(--ink); }
+.apiwrap h2 { font-size: 17px; margin: 0 0 10px; }
+.apiwrap h3 { font-size: 14px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 22px 0 8px; }
+.apiwrap #api-buy { position: sticky; top: 16px; }
+.apiwrap textarea { width: 100%; font-family: ui-monospace, Consolas, monospace; font-size: 13px; border: 1px solid var(--line-2); border-radius: 8px; padding: 10px; }
+.apiwrap .confirm { margin-top: 12px; }
+.apiwrap button { background: var(--brand); }
+.apiwrap button.secondary { background: #fff; }
+@media (max-width: 900px) {
+  .apigrid { grid-template-columns: minmax(0, 1fr); }
+  .apiwrap #api-buy { position: static; }
+  .apiwrap { padding: 14px 14px 40px; }
+}

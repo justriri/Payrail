@@ -58,7 +58,7 @@
       <div id="fund"></div>
     </section>
 
-    <section class="card" id="services-card" data-view="buyer" data-panel="explore" data-span="7">
+    <section class="card" id="services-card" data-view="buyer" data-panel="explore" data-span="12">
       <h2>Services</h2>
       <details><summary>Where does each service come from?</summary><ul id="legend" class="legend"></ul></details>
       <div class="filters"><input id="q" type="search" placeholder="Search services" autocomplete="off"></div>
@@ -66,18 +66,7 @@
       <div id="cat-list" class="cards"></div>
     </section>
 
-    <section class="card" id="run-card" data-view="buyer" data-panel="explore" data-span="5" hidden>
-      <h2 id="run-title">Run</h2>
-      <div id="run-quote"></div>
-      <label for="run-input">Input (JSON object)</label>
-      <textarea id="run-input" rows="3" spellcheck="false">{}</textarea>
-      <p id="run-hint" class="muted"></p>
-      <label id="run-settle" class="check" hidden><input id="run-escrow" type="checkbox"> <span>Settle through the testnet escrow contract (Celo Sepolia, mock token) instead of the off-chain ledger</span></label>
-      <div class="row"><button id="run-btn" type="button">Run and pay only if it qualifies</button><span id="run-msg" class="muted"></span></div>
-      <div id="run-result"></div>
-    </section>
-
-    <section class="card" id="history-card" data-view="buyer" data-panel="overview usage transactions" data-span="12">
+        <section class="card" id="history-card" data-view="buyer" data-panel="overview usage transactions" data-span="12">
       <h2>Your requests and transaction history</h2>
       <div id="statement"></div>
       <div id="history" class="muted">Start testing first.</div>

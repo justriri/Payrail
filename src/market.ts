@@ -6,7 +6,7 @@ import { audit, query, queryOne } from './db.ts';
 import type { Db } from './db.ts';
 import { executeRequest, executionResult } from './execute.ts';
 import type { ExecuteOptions } from './execute.ts';
-import { GatewayError, callUpstream } from './gateway.ts';
+import { GatewayError, MAX_INPUT_BYTES, MAX_INPUT_KEYS, callUpstream } from './gateway.ts';
 import { LedgerError, balance, createAccount, deposit } from './ledger.ts';
 import {
   SellerError, authenticate, challengeFor, createSandboxSeller, checkDomainProof, completeLogin, getListing, listingsOf, publishListing, startLogin, submitListing, submitWalletProof, unpublishListing,
@@ -72,7 +72,12 @@ export interface MarketRuntime {
   /** Stage 1 multi-currency: route discovery, asset-agnostic funding, payout preferences and simulated payout conversion */
   conversion?: ConversionRuntime;
   /** real-funds mode. Absent = test credits only and every real-money route answers LIVE_DISABLED. */
-  live?: { funding: FundingConfig; payout: PayoutPolicy };
+  live?: {
+    funding: FundingConfig;
+    payout: PayoutPolicy;
+    /** seller payout REQUESTS over HTTP stay refused unless this is explicitly true (the secure payout architecture is not reviewed yet) */
+    payoutRequestsEnabled?: boolean;
+  };
   /** alternative settlement through the on-chain escrow contract (testnet-verified only) */
   escrow?: {
     client: EscrowClient;
@@ -96,6 +101,8 @@ export interface MarketItem {
   /** where the listing comes from, in plain terms */
   origin: 'buy-gateway' | 'buy-gateway-simulated' | 'payrail-seller' | 'payrail-sandbox' | 'payrail-demo';
   originLabel: string;
+  /** who publishes it (a display name or shortened wallet; never a full credential) */
+  seller?: string;
   /** buy services open in the existing pay flow */
   url?: string;
 }
@@ -191,8 +198,20 @@ export function parseAtomic(s: unknown): bigint {
 
 // ------------------------------------------------------------------ catalog
 
+/** a short, non-sensitive seller label: a display name, or a shortened wallet address */
+export function sellerLabel(db: Db, sellerId: string): string {
+  const a = queryOne(db, 'SELECT display_name, wallet_address FROM accounts WHERE id = ?', sellerId);
+  const name = String(a?.display_name ?? '').trim();
+  const w = String(a?.wallet_address ?? '');
+  const short = (x: string) => `${x.slice(0, 6)}…${x.slice(-4)}`;
+  if (name && !/^0x[0-9a-fA-F]{40}$/.test(name)) return name.slice(0, 40);
+  const addr = /^0x[0-9a-fA-F]{40}$/.test(name) ? name : w;
+  return addr ? short(addr) : 'Payrail seller';
+}
+
 export function payrailItems(db: Db): MarketItem[] {
   return query(db, "SELECT * FROM listings WHERE status = 'published' ORDER BY created_at, name").map((r) => ({
+    seller: Number(r.demo) === 1 ? 'Payrail demo' : sellerLabel(db, String(r.seller_id)),
     id: String(r.id),
     title: String(r.name),
     description: String(r.description),
@@ -284,6 +303,7 @@ function listingView(db: Db, l: Listing, forOwner: boolean, keyIds: readonly str
     host: l.host,
     method: l.method,
     price: { atomic: l.priceAtomic.toString(), usd: formatAtomic(l.priceAtomic), asset: l.asset },
+    seller: l.demo ? 'Payrail demo' : sellerLabel(db, l.sellerId),
     feePercent: l.feeBps / 100,
     demo: l.demo,
     sandbox: isSandboxHost(l.host),
@@ -425,7 +445,18 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
   if (method === 'GET' && (m = path.match(/^\/listing\/([\w-]{1,80})$/))) {
     const l = getListing(db, m[1]!);
     if (!l || l.status !== 'published') throw new ApiError(404, 'NOT_FOUND', 'no such listing');
-    return ok({ listing: listingView(db, l, false), quote: quoteFor(db, l.id, { escrowEnabled: Boolean(rt.escrow) }) });
+    return ok({
+      listing: listingView(db, l, false),
+      quote: quoteFor(db, l.id, { escrowEnabled: Boolean(rt.escrow) }),
+      inputRules: {
+        format: 'A flat JSON object. Values may be text (up to 500 characters), numbers or true/false. No nested objects or lists.',
+        method: l.method,
+        maxFields: MAX_INPUT_KEYS,
+        maxBytes: MAX_INPUT_BYTES,
+        nameRule: 'Field names start with a letter or underscore and may contain letters, digits, dot, dash and underscore (up to 41 characters).',
+        note: 'The seller does not publish a field list; the response contract above says what a qualifying response looks like. Malformed input is refused before anything is reserved.',
+      },
+    });
   }
   if (method === 'GET' && (m = path.match(/^\/quote\/([\w-]{1,80})$/))) {
     const q = quoteFor(db, m[1]!, { escrowEnabled: Boolean(rt.escrow) });
@@ -530,6 +561,7 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
   if (method === 'POST' && path === '/seller/payouts') {
     const id = seller();
     if (!rt.live) throw new ApiError(409, 'LIVE_DISABLED', 'payouts are not enabled; earnings here are test credits and cannot be paid out');
+    if (!rt.live.payoutRequestsEnabled) throw new ApiError(409, 'PAYOUTS_DISABLED', 'seller payouts are disabled for live use until the secure payout architecture is implemented and reviewed. Earnings stay in your balance.');
     const p = requestPayout(db, id, { asset: LIVE_ASSET, amountAtomic: parseAtomic(body.amount) }, rt.live.payout, now);
     return ok({ payout: { id: p.id, state: p.state, destination: p.destination, amount: formatAtomic(p.amountAtomic) }, note: 'Waiting for operator approval. Funds are reserved and cannot be spent twice.' }, 201);
   }

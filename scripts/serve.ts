@@ -363,13 +363,15 @@ const market: MarketRuntime = {
   sandbox: !liveMarket,
   buySimulated: args.includes('--simulate'),
   execute: {
-    call: { limiter: limiter(), fetchOptions: { resolver: sandbox.resolver, transport: sandbox.transport, timeoutMs: 8_000 } },
+    // real-funds mode talks to the REAL internet through the SSRF-safe egress gateway (public DNS, pinned address, TLS);
+    // test-credit mode keeps the in-process sandbox network
+    call: { limiter: limiter(), fetchOptions: liveMarket ? { timeoutMs: 8_000 } : { resolver: sandbox.resolver, transport: sandbox.transport, timeoutMs: 8_000 } },
     demoCall: { limiter: limiter(), fetchOptions: { resolver: demoNet.resolver, transport: demoNet.transport, timeoutMs: 3_000 } },
   },
   funding: fundingCfg,
   conversion: conversionRt,
-  testCall: { limiter: limiter(), fetchOptions: { resolver: sandbox.resolver, transport: sandbox.transport, timeoutMs: 8_000 } },
-  domain: { txt: sandbox.txt, fetchOptions: { resolver: sandbox.resolver, transport: sandbox.transport } },
+  testCall: { limiter: limiter(), fetchOptions: liveMarket ? { timeoutMs: 8_000 } : { resolver: sandbox.resolver, transport: sandbox.transport, timeoutMs: 8_000 } },
+  domain: liveMarket ? {} : { txt: sandbox.txt, fetchOptions: { resolver: sandbox.resolver, transport: sandbox.transport } },
   buyCatalog: () => runtime.catalog(),
   ...(liveMarket ? { live: liveMarket } : {}),
   ...(escrow ? { escrow } : {}),

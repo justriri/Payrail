@@ -25,8 +25,8 @@ export interface UpstreamCall extends UpstreamResult {
   connectedTo: string;
 }
 
-const MAX_INPUT_KEYS = 20;
-const MAX_INPUT_BYTES = 8_192;
+export const MAX_INPUT_KEYS = 20;
+export const MAX_INPUT_BYTES = 8_192;
 const limiter = new RateLimiter(10, 2);
 
 export interface CallOptions {

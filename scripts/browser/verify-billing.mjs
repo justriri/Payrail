@@ -9,35 +9,39 @@ const check = (n, ok, d = '') => res.push(`${ok ? 'PASS' : 'FAIL'}  ${n}${d ? ' 
 await b.goto(BASE + '/market.html#/buyer');
 await b.click('#buyer button', 'Start testing');
 await b.sleep(1500);
-await b.ev(`(() => { const c=[...document.querySelectorAll('#cat-list .svc')].find(x=>x.innerText.includes('Demo token price')); c.querySelector('button').click(); })()`);
-await b.sleep(1000);
-let q = await b.text('#run-quote');
-check('quote shows what the buyer pays', /You pay.*0\.02 TESTUSDT/s.test(q), q.split('\n').slice(0, 2).join(' | '));
-check('quote shows the 3% fee and seller earnings before purchase', /Platform fee \(3%.*0\.0006/s.test(q) && /Seller earns\s+0\.0194/s.test(q));
+await b.goto(BASE + '/market.html#/buyer/explore');
+await b.sleep(1200);
+await b.ev(`(() => { const c=[...document.querySelectorAll('#cat-list .svc')].find(x=>x.innerText.includes('Demo token price')); c.querySelector('a.btn').click(); })()`);
+await b.sleep(2000);
+// the dedicated API page: opening it must not have charged anything
+let q = await b.text('#api-details');
+const run = async () => { await b.click('#run-btn', 'Pay and Use API'); await b.sleep(400); await b.click('#run-confirm', 'Confirm'); };
+check('quote shows what the buyer pays', /Price per request\s+0\.02 TESTUSDT/.test(q), q.split('\n').slice(0, 4).join(' | '));
+check('quote shows the 3% fee and seller earnings before purchase', /Platform fee \(3%.*0\.0006/s.test(q) && /Seller receives\s+0\.0194/s.test(q));
 check('quote lists the qualifying conditions incl. freshness', /Freshness.*60 seconds/.test(q) && /non-empty JSON object/.test(q) && /HTTP status must be 200/.test(q));
 check('quote explains non-qualifying/unknown outcomes and that validation is not truth', /does not and cannot verify that the data is true/.test(q));
 
-await b.click('#run-btn', 'Run');
+await run();
 await b.sleep(2000);
 let r = await b.text('#run-result');
 check('qualifying result explains the charge and shows a receipt', /Charged 0\.02 TESTUSDT/.test(r) && /Receipt/.test(r) && /Ledger entries: .*hold.*capture/.test(r) && /Qualified means the response matched/.test(r), r.split('\n').slice(0, 3).join(' | '));
 check('receipt shows fee, seller earnings and settlement path', /Platform fee\s+0\.0006 TESTUSDT/.test(r) && /Seller earned\s+0\.0194/.test(r) && /Payrail ledger/.test(r));
 
 await b.set('#run-input', '{"id":"eth","scenario":"stale"}');
-await b.click('#run-btn', 'Run');
+await run();
 await b.sleep(2000);
 r = await b.text('#run-result');
 check('stale response is not charged and the reason is shown', /Not charged/.test(r) && /freshness/.test(r) && /Returned to you\s+0\.02/.test(r), r.split('\n').slice(0, 3).join(' | '));
 
 await b.set('#run-input', '{"id":"eth","scenario":"hang"}');
-await b.click('#run-btn', 'Run');
+await run();
 await b.sleep(4500);
 r = await b.text('#run-result');
 check('timeout is shown as unresolved: held, not charged', /Outcome unknown/.test(r) && /Held \(not charged\)\s+0\.02/.test(r) && /Charged\s+0 TESTUSDT/.test(r), r.split('\n').slice(0, 2).join(' | '));
 
 // history and the statement live in the Transactions panel of the redesigned dashboard
-await b.ev(`location.hash = '#/buyer/transactions'; 0`);
-await b.sleep(1500);
+await b.goto(BASE + '/market.html#/buyer/transactions');
+await b.sleep(2000);
 const hist = await b.text('#history');
 const stmt = await b.text('#statement');
 check('history lists all three requests with plain outcomes', /charged 0\.02/.test(hist) && /not charged/.test(hist) && /outcome unknown, not charged/.test(hist));

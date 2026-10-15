@@ -43,11 +43,13 @@ check('buyer overview: the catalogue is not dumped on the overview', !(await vis
 
 await go('#/buyer/explore', 1500);
 check('explore: services listed, funding hidden', (await vis('#services-card')) && !(await vis('#fund-card')) && (await b.ev(`document.querySelectorAll('#cat-list .svc').length`)) > 0);
-await b.click('#cat-list button', 'Try it');
-await b.sleep(900);
-const sv = await rect('#services-card');
-const rn = await rect('#run-card');
-check('explore: selecting a service opens the run panel beside the list', (await vis('#run-card')) && sv && rn && rn.l > sv.l + 100 && Math.abs(rn.t - sv.t) < 40, `${JSON.stringify(sv)} ${JSON.stringify(rn)}`);
+const cards = await b.ev(`JSON.stringify([...document.querySelectorAll('#cat-list .svc')].map(c => { const r = c.getBoundingClientRect(); return { l: Math.round(r.left), t: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }; }))`).then((x) => JSON.parse(x));
+const firstRow = cards.filter((c) => Math.abs(c.t - cards[0].t) < 4);
+check('explore: API cards are a grid with 2-3 per row on desktop', firstRow.length >= 2 && firstRow.length <= 3 && cards.length > firstRow.length, `${firstRow.length} per row of ${cards.length}`);
+check('explore: cards in a row share one height', firstRow.every((c) => Math.abs(c.h - firstRow[0].h) <= 2), JSON.stringify(firstRow.map((c) => c.h)));
+const cardText = await b.text('#cat-list .svc');
+check('explore: each card shows name, description, seller, price, status and View API', /Seller:/.test(cardText) && /TESTUSDT/.test(cardText) && /Published/.test(cardText) && /View API/.test(cardText), cardText.replace(/\s+/g, ' | '));
+check('explore: no inline run panel on the catalogue page', !(await b.ev(`!!document.querySelector('#run-btn')`)));
 check('explore: no horizontal overflow', (await overflow()) <= 0);
 
 await go('#/buyer/funding', 1500);

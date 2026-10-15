@@ -86,12 +86,19 @@ await b.click('#fund button', 'Done');
 await b.sleep(800);
 
 // expired quote cannot be approved is covered by tests; here: spend the funded balance
-await b.ev(`(() => { const c=[...document.querySelectorAll('#cat-list .svc')].find(x=>x.innerText.includes('Demo token price')); c.querySelector('button').click(); })()`);
-await b.sleep(900);
-await b.click('#run-btn', 'Run');
+await b.goto(BASE + '/market.html#/buyer/explore');
+await b.sleep(1500);
+await b.ev(`(() => { const c=[...document.querySelectorAll('#cat-list .svc')].find(x=>x.innerText.includes('Demo token price')); c.querySelector('a.btn').click(); })()`);
 await b.sleep(2000);
+await b.click('#run-btn', 'Pay and Use API');
+await b.sleep(400);
+await b.click('#run-confirm', 'Confirm');
+await b.sleep(2500);
+const ranText = await b.text('#run-result');
+await b.goto(BASE + '/market.html#/buyer');
+await b.sleep(2500);
 const spent = await avail();
-check('a funded balance buys an API response through the normal billing (one deduction of 0.02)', /Charged 0\.02/.test(await b.text('#run-result')) && Number(spent) === Number((Number(credited2) - 0.02).toFixed(6)), `${credited2} -> ${spent}`);
+check('a funded balance buys an API response through the normal billing (one deduction of 0.02)', /Charged 0\.02/.test(ranText) && Number(spent) === Number((Number(credited2) - 0.02).toFixed(6)), `${credited2} -> ${spent}`);
 await b.shot('funding-final');
 console.log(res.join('\n'));
 console.log(res.some((x) => x.startsWith('FAIL')) ? '\nSOME CHECKS FAILED' : '\nALL CHECKS PASSED');

@@ -344,10 +344,12 @@ test('real-funds mode over HTTP (fake chain): register wallet, confirm a deposit
   const DEP = '0x00000000000000000000000000000000000dEaD1';
   const receipts = new Map<string, ChainReceipt>();
   const reader: ChainReader = { blockNumber: async () => 5_000n, receipt: async (hash) => receipts.get(hash.toLowerCase()) ?? null };
-  const h = await start({
+  const liveCfg = {
     funding: { chainId: 42220, token: TOKEN, asset: 'USDT', depositAddress: DEP, minConfirmations: 5, maxDepositAtomic: 10_000_000n, reader },
     payout: { payableAssets: ['USDT'], minAtomic: 10_000n, maxAtomic: 10_000_000n },
-  });
+    payoutRequestsEnabled: false,
+  };
+  const h = await start(liveCfg);
   try {
     const bt = await buyer(h);
     const w = privateKeyToAccount(generatePrivateKey());
@@ -391,6 +393,12 @@ test('real-funds mode over HTTP (fake chain): register wallet, confirm a deposit
 
     const sme = await h.call('GET', '/me', { bearer: st });
     assert.equal(sme.body.live.earnings, '0.485');
+    // live payout requests are refused by default; the operator must opt in explicitly
+    const refused = await h.call('POST', '/seller/payouts', { bearer: st, body: { amount: '0.4' } });
+    assert.equal(refused.status, 409);
+    assert.equal(refused.body.code, 'PAYOUTS_DISABLED');
+    assert.equal((await h.call('GET', '/me', { bearer: st })).body.live.earnings, '0.485', 'nothing was reserved');
+    liveCfg.payoutRequestsEnabled = true;
     const pay = await h.call('POST', '/seller/payouts', { bearer: st, body: { amount: '0.4' } });
     assert.equal(pay.status, 201, pay.text);
     assert.equal(pay.body.payout.destination, sw.address.toLowerCase());

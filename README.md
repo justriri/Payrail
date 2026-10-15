@@ -236,7 +236,8 @@ node scripts/serve.ts --simulate --port 4402 --market-db data/marketplace.db   #
 
 `/` is the Payrail landing page, `/market.html` is the dashboard (Buyer: Overview, Explore APIs, My API usage, Wallet and funding,
 Transactions; Seller: Overview, My APIs, Create API, Earnings, Payout settings, Payout history), and `/index.html` is the
-original wallet payment page (Buy gateway). Browser regressions: `scripts/browser/verify-*.mjs` (including `verify-ui.mjs`).
+original wallet payment page (Buy gateway). API cards open a dedicated details/purchase page at `/api.html?id=...`. Browser regressions: `scripts/browser/verify-*.mjs`
+(including `verify-ui.mjs` and `verify-api.mjs`). Real-money testing: `docs/LIVE-TEST-RUNBOOK.md`.
 
 Demo: Buyer tab -> Start testing -> add funds (pick cNGN/wARS/USDT, approve the quote, see the verified credit) -> buy a
 demo API. Seller tab -> sandbox seller -> Payout settings -> verify address -> Earnings -> request, confirm and (simulated)
