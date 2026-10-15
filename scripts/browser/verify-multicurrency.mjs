@@ -151,7 +151,7 @@ await b.sleep(2500);
 st = await sellerText();
 check('swapped-but-undelivered is shown honestly and USDT is not returned', /NOT delivered yet/.test(st) && /Retry delivery/.test(st));
 await b.click('#seller button', 'Retry delivery');
-await b.sleep(2000);
+await until(async () => ((await sellerText()).match(/Delivered and verified/g) || []).length >= 2, 12000);
 st = await sellerText();
 check('retrying delivery completes without a second swap', (st.match(/Delivered and verified/g) || []).length >= 2, (st.match(/Delivered and verified/g) || []).length);
 await b.shot('multicurrency-final');

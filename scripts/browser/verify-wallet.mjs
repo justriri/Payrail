@@ -10,7 +10,7 @@ const until = async (fn, ms = 8000) => { const t0 = Date.now(); while (Date.now(
 
 await b.goto(BASE + '/market.html#/buyer');
 await b.click('#buyer button', 'Start testing');
-await b.sleep(2500);
+await until(async () => /No funding wallet connected yet/.test((await b.text('#fund')) || ''), 12000);
 let t = await b.text('#fund');
 check('no wallet is connected at first', /No funding wallet connected yet/.test(t));
 check('it says connecting never gives access to funds', /never gives Payrail access to your funds/.test(t));
