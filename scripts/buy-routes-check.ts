@@ -22,6 +22,6 @@ const bc = createBuyConvert({
 const list = await bc.currencies();
 console.log(`Textile live check at ${new Date().toISOString()} (per-conversion limit ${maxUsd} USDT)`);
 for (const c of list) {
-  console.log([c.symbol.padEnd(5), c.address, `dec ${c.decimals}`, c.available ? 'AVAILABLE' : 'unavailable', `min swap ${c.minSell ?? '-'} (${c.minUsdt ?? '-'} USDT)`, `max ${c.maxSell ?? '-'}`, `evidence ${c.evidence.level}`, c.reason ? `reason: ${c.reason}` : ''].join(' | '));
+  console.log([c.symbol.padEnd(5), c.address, `dec ${c.decimals}`, c.statusLabel.toUpperCase(), `min swap ${c.minSell ?? '-'} (${c.minUsdt ?? '-'} USDT)`, `max ${c.maxSell ?? '-'}`, `evidence ${c.evidence.level}`, c.reason ? `reason: ${c.reason}` : ''].join(' | '));
 }
 void formatUnits;

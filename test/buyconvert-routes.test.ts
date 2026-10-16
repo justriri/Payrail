@@ -10,6 +10,10 @@ import { formatUnits } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { assetBySymbol } from '../src/assets.ts';
 import { createBuyerSwapRuntime } from '../src/buyerswap.ts';
+import { createBuyConvert } from '../src/buyconvert.ts';
+import { RouteRegistry, seedConversionAssets } from '../src/conversion.ts';
+import { openDb } from '../src/db.ts';
+import { createTextileRouteProvider } from '../src/textileroutes.ts';
 import { TEXTILE_REACTOR } from '../src/config.ts';
 import { createSimProvider } from '../src/dev/simconversion.ts';
 import { createSimulatedRuntime } from '../src/dev/websim.ts';
@@ -168,6 +172,70 @@ test('unsupported or disabled currencies are refused with a reason: CWT, G$, CEL
     }
   } finally {
     await s.close();
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------------------- honest status per currency
+
+test('currency status is honest: Available only for a route executed on mainnet, Needs live test for live-quoted, Temporarily unavailable, Unsupported', async () => {
+  const USDT_ADDR = USDT as `0x${string}`;
+  const lv = (sell: bigint, buy: bigint) => [{ sellAmount: sell, buyAmount: buy }];
+  const pair = (sym: string, levels: Array<{ sellAmount: bigint; buyAmount: bigint }>) => ({
+    sellToken: ON_CHAIN[sym]!.address as `0x${string}`, buyToken: USDT_ADDR, minSellAmount: levels[0]?.sellAmount ?? 0n, maxSellAmount: levels[levels.length - 1]?.sellAmount ?? 0n, levels,
+  });
+  const ladder = async () => ({
+    asOf: '2026-10-16T00:00:00.000Z',
+    pairs: [
+      pair('cNGN', lv(1_358_000_000n, 1_000_000n)), pair('wARS', lv(10n ** 21n, 1_000_000n)), pair('wBRL', lv(5n * 10n ** 18n, 1_000_000n)),
+      pair('USDC', lv(1_000_000n, 1_000_000n)), pair('USAT', lv(1_000_000n, 1_000_000n)),
+      pair('wCOP', []), // listed, no makers
+      pair('WETH', lv(10n ** 15n, 1_000_000n)), // price request will fail
+      pair('IDRX', lv(1_800_000n, 50_000_000n)), // smallest swap worth 50 USDT: above the limit
+      pair('CELO', lv(10n ** 18n, 1_000_000n)), // live, but kept off by the operator
+      // wMXN and G$ are not on this ladder at all
+    ],
+  });
+  const preview = async (a: { sellToken: string; sellAmount: bigint }) => {
+    const sym = Object.keys(ON_CHAIN).find((k) => ON_CHAIN[k]!.address.toLowerCase() === a.sellToken.toLowerCase())!;
+    if (sym === 'WETH') throw new Error('upstream timeout');
+    const out = sym === 'IDRX' ? 50_000_000n : 1_000_000n;
+    return { kind: 'preview' as const, sellAmount: a.sellAmount, buyAmount: out, feeAmount: 1n, takerPays: a.sellAmount, rateRay: '1', availableSellAmount: undefined, requestId: 'r', rateRemaining: undefined };
+  };
+  const db = openDb(':memory:');
+  seedConversionAssets(db);
+  const textile = createTextileRouteProvider({ getLadder: ladder as any, preview: preview as any });
+  const bc = createBuyConvert({
+    db, registry: new RouteRegistry(db, [textile]), provider: textile, buyerSwap: { converterFor: () => { throw new Error('unused'); }, prepare: async () => { throw new Error('unused'); } },
+    reader: { blockNumber: async () => 0n, receipt: async () => null }, usdt: USDT, reactor: TEXTILE_REACTOR, chainId: 42220, minConfirmations: 1, maxUsdtAtomic: 2_000_000n,
+  });
+  const list = await bc.currencies();
+  const st = (sym: string) => list.find((c) => c.symbol === sym);
+  assert.equal(st('cNGN')!.status, 'available', 'only cNGN has an executed mainnet route');
+  for (const sym of ['wARS', 'wBRL', 'USDC', 'USAT']) {
+    assert.equal(st(sym)!.status, 'needs_live_test', sym);
+    assert.equal(st(sym)!.available, true, 'selectable, but labelled for what it is');
+    assert.equal(st(sym)!.evidence.executedByPayrailOnMainnet, false);
+    assert.match(st(sym)!.statusDetail, /not been executed on mainnet/);
+  }
+  assert.equal(st('wCOP')!.status, 'temporarily_unavailable');
+  assert.equal(st('wCOP')!.available, false);
+  assert.equal(st('WETH')!.status, 'temporarily_unavailable');
+  assert.match(st('WETH')!.reason!, /no price/);
+  assert.equal(st('IDRX')!.status, 'temporarily_unavailable');
+  assert.match(st('IDRX')!.reason!, /above this server's limit/);
+  assert.equal(st('CELO')!.status, 'unsupported');
+  assert.equal(st('wMXN')!.status, 'unsupported');
+  assert.equal(st('G$')!.status, 'unsupported');
+  assert.ok(!list.some((c) => c.symbol === 'CWT'));
+  assert.equal(st('cNGN')!.statusLabel, 'Available');
+  assert.equal(st('wARS')!.statusLabel, 'Needs live test');
+  // USDC and USAT say honestly that Buy also offers them directly but Payrail's flow is USDT-only
+  assert.match(st('USDC')!.directNote!, /only supports USDT/);
+  assert.match(st('USAT')!.directNote!, /only supports USDT/);
+  assert.equal(st('cNGN')!.directNote, null);
+  // unselectable currencies cannot start a conversion: the backend refuses, whatever the page does
+  for (const sym of ['wCOP', 'CELO', 'wMXN', 'G$']) {
+    await assert.rejects(bc.estimate({ buyerId: 'x', wallet: PAYER, symbol: sym, targetAtomic: 5000n }), (e: any) => e.code === 'UNSUPPORTED_CURRENCY' || e.code === 'NOT_FOUND' || e.code === 'NO_QUOTE', sym);
   }
 });
 

@@ -210,18 +210,26 @@ function renderBuy(d, cfg) {
       return;
     }
     const usable = cur.currencies.filter((c) => c.available);
-    const unavailable = cur.currencies.filter((c) => !c.available);
-    if (!usable.length) { panel.append(el('p', { class: 'muted', text: 'No currency can be converted into USDT right now. Add USDT to your wallet instead.' })); return; }
-    const sel = el('select', { id: 'pay-currency', 'aria-label': 'Pay with' }, el('option', { value: '', text: 'Choose a currency' }), ...usable.map((c) => el('option', { value: c.symbol, text: c.symbol })));
+    const order = { available: 0, needs_live_test: 1, temporarily_unavailable: 2, unsupported: 3 };
+    const sorted = [...cur.currencies].sort((x, y) => order[x.status] - order[y.status] || x.symbol.localeCompare(y.symbol));
+    const BADGE = { available: 'ok', needs_live_test: 'warn', temporarily_unavailable: 'warn', unsupported: 'bad' };
+    // every currency Payrail knows about, with its true status: nothing is hidden and nothing is labelled better than the evidence
+    const list = el('ul', { class: 'curlist', id: 'currency-status' }, ...sorted.map((c) => el('li', { class: 'cur', 'data-symbol': c.symbol, 'data-status': c.status },
+      el('div', { class: 'cur-top' }, el('strong', { text: c.symbol }), ' ', el('span', { class: `badge ${BADGE[c.status] || ''}`, text: c.statusLabel })),
+      el('p', { class: 'muted', text: c.statusDetail }),
+      c.available ? el('p', { class: 'muted', text: `Smallest swap ${c.minSell} ${c.symbol}${c.minUsdt ? ` (about ${c.minUsdt} USDT)` : ''}.` }) : null,
+      c.directNote ? el('p', { class: 'muted', text: c.directNote }) : null)));
+    panel.append(el('h3', { text: 'Pay with another currency' }), el('p', { class: 'muted', text: 'Textile converts it to USDT in your own wallet, then Buy is paid in USDT.' }), list);
+    if (!usable.length) { panel.append(el('p', { class: 'muted', id: 'no-usable', text: 'No currency can be converted into USDT right now. Add USDT to your wallet instead.' })); return; }
+    const sel = el('select', { id: 'pay-currency', 'aria-label': 'Pay with' }, el('option', { value: '', text: 'Choose a currency' }), ...usable.map((c) => el('option', { value: c.symbol, text: `${c.symbol} (${c.statusLabel})` })));
     const note = el('p', { class: 'muted', id: 'currency-evidence' });
     sel.addEventListener('change', () => {
       const c = usable.find((x) => x.symbol === sel.value);
-      note.textContent = c ? `${c.route}. ${c.evidence.executedByPayrailOnMainnet ? 'Payrail has executed this route on Celo mainnet before.' : 'A live price exists, but Payrail has not executed this route on mainnet yet, so it has not been proven end to end.'} Allowed size: ${c.minSell} to ${c.maxSell} ${c.symbol}.` : '';
+      note.textContent = c ? `${c.route}. ${c.statusDetail} Allowed size: ${c.minSell} to ${c.maxSell} ${c.symbol}.` : '';
     });
     const estBtn = el('button', { type: 'button', id: 'estimate-btn', text: 'Show what it will cost' });
     const box = el('div', { id: 'estimate-box' });
-    panel.append(el('label', { for: 'pay-currency', text: 'Pay with' }), sel, note, el('div', { class: 'row' }, estBtn),
-      unavailable.length ? el('p', { class: 'muted', id: 'unavailable-currencies', text: `Not available: ${unavailable.map((c) => `${c.symbol} (${c.reason})`).join('; ')}.` }) : null, box);
+    panel.append(el('label', { for: 'pay-currency', text: 'Pay with' }), sel, note, el('div', { class: 'row' }, estBtn), box);
     estBtn.addEventListener('click', async () => {
       clear(box);
       if (!sel.value) { box.append(el('p', { class: 'problem', text: 'Choose a currency first.' })); return; }
@@ -229,16 +237,17 @@ function renderBuy(d, cfg) {
       const r = await api('/buy/convert/estimate', { body: { orderId: o.id, symbol: sel.value }, bearer: buyerToken });
       estBtn.disabled = false;
       if (!r.ok) { box.append(el('p', { class: 'problem', id: 'estimate-error', text: fail(r) })); return; }
-      showEstimate(o, r.conversion, r.evidence, box);
+      showEstimate(o, r.conversion, r.evidence, box, r.limits);
     });
   }
 
-  function showEstimate(o, cv, evidence, box) {
+  function showEstimate(o, cv, evidence, box, limits) {
     clear(box);
     box.append(
       el('table', { class: 'quote', id: 'estimate-table' },
         el('tr', {}, el('th', { text: 'API price (Buy, in USDT)' }), el('td', { class: 'v', id: 'est-api', text: `${cv.apiPrice.amount} USDT` })),
         el('tr', {}, el('th', { text: `You sell (Textile, ${cv.sell.symbol} -> USDT)` }), el('td', { class: 'v', id: 'est-sell', text: `${cv.sell.amount} ${cv.sell.symbol}` })),
+        el('tr', {}, el('th', { text: 'Smallest swap Textile allows' }), el('td', { class: 'v', id: 'est-min-swap', text: limits ? `${limits.minSell} ${cv.sell.symbol}` : 'n/a' })),
         el('tr', {}, el('th', { text: 'Rate' }), el('td', { class: 'v', text: cv.rate })),
         el('tr', {}, el('th', { text: 'Conversion cost (Textile fee, included)' }), el('td', { class: 'v', id: 'est-fee', text: `${cv.conversionFee.amount} ${cv.conversionFee.symbol}` })),
         el('tr', {}, el('th', { text: 'You receive in USDT' }), el('td', { class: 'v', id: 'est-receive', text: `about ${cv.receive.expected}, never less than ${cv.receive.minimum}` })),

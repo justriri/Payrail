@@ -36,6 +36,14 @@ export class BuyConvertError extends Error {
   }
 }
 
+export type CurrencyStatus = 'available' | 'needs_live_test' | 'temporarily_unavailable' | 'unsupported';
+const STATUS_LABEL: Record<CurrencyStatus, string> = {
+  available: 'Available',
+  needs_live_test: 'Needs live test',
+  temporarily_unavailable: 'Temporarily unavailable',
+  unsupported: 'Unsupported',
+};
+
 export type ConversionState = 'QUOTED' | 'PREPARED' | 'SUBMITTED' | 'CONFIRMED' | 'FAILED' | 'REVIEW' | 'EXPIRED';
 
 export interface BuyConvertDeps {
@@ -132,31 +140,50 @@ export function createBuyConvert(d: BuyConvertDeps) {
   async function buildCurrencies() {
     const rs = (await d.registry.routes('funding')).filter((r) => !r.passthrough);
     return Promise.all(rs.map(async (r) => {
-      let available = r.usable;
+      let status: CurrencyStatus;
       let reason: string | null = r.usable ? null : r.reason;
       let minUsdt: string | null = null;
-      if (r.usable) {
+      if (!r.enabled) {
+        status = 'unsupported'; // not offered by this server (not registered, not on Textile's ladder, or switched off by the operator)
+      } else if (!r.available) {
+        // Textile lists the pair but has no makers / quote right now (or could not be reached)
+        status = r.unavailableReason === 'not_on_ladder' || r.unavailableReason === 'chain_unsupported' ? 'unsupported' : 'temporarily_unavailable';
+      } else {
+        status = r.evidence.level === 'live-executed' ? 'available' : 'needs_live_test';
         // what the smallest swap Textile allows is worth in USDT (an indicative price; reserves nothing)
         try {
           const q = await d.provider.quote({ direction: 'funding', from: r.from, to: USDT_CELO, inputAtomic: r.minInputAtomic });
           minUsdt = usdtText(q.expectedOutputAtomic);
           if (q.expectedOutputAtomic > d.maxUsdtAtomic) {
-            available = false;
+            status = 'temporarily_unavailable';
             reason = `Textile's smallest swap for ${r.from.symbol} is about ${minUsdt} USDT, above this server's limit of ${usdtText(d.maxUsdtAtomic)} USDT per conversion`;
           }
         } catch (e) {
-          available = false;
+          status = 'temporarily_unavailable';
           reason = `Textile gave no price for ${r.from.symbol} -> USDT just now (${(e as Error).message.slice(0, 80)})`;
         }
       }
+      const selectable = status === 'available' || status === 'needs_live_test';
       return {
         symbol: r.from.symbol, address: r.from.address, decimals: r.from.decimals,
-        available,
-        reason,
-        minSell: r.usable ? formatUnits(r.minInputAtomic, r.from.decimals) : null,
-        maxSell: r.usable ? formatUnits(r.maxInputAtomic, r.from.decimals) : null,
+        status,
+        statusLabel: STATUS_LABEL[status],
+        statusDetail: status === 'available'
+          ? 'Textile has completed this route on Celo mainnet for Payrail before. This buyer-wallet flow is still being proven with real wallets.'
+          : status === 'needs_live_test'
+            ? 'Implemented, and Textile shows a live price, but this route has not been executed on mainnet by Payrail yet. The first real conversion is the test.'
+            : status === 'temporarily_unavailable' ? (reason ?? 'The route cannot be verified right now.') : (reason ?? 'No compatible Textile route exists for this currency.'),
+        /** true when a buyer may start a conversion with it */
+        available: selectable,
+        reason: selectable ? null : reason,
+        minSell: selectable ? formatUnits(r.minInputAtomic, r.from.decimals) : null,
+        maxSell: selectable ? formatUnits(r.maxInputAtomic, r.from.decimals) : null,
         minUsdt,
         route: `${r.from.symbol} -> USDT on Textile (Celo)`,
+        /** Buy's 402 challenge offers USDC and USAT as well; Payrail's flow is pinned to USDT, so these are converted instead (documented, not a verified direct payment) */
+        directNote: r.from.symbol === 'USDC' || r.from.symbol === 'USAT'
+          ? `Buy's gateway also offers ${r.from.symbol} for its APIs, so converting is not strictly needed; Payrail's payment flow only supports USDT today, so ${r.from.symbol} is converted to USDT first.`
+          : null,
         evidence: { level: r.evidence.level, basis: r.evidence.basis, executedByPayrailOnMainnet: r.evidence.level === 'live-executed' },
       };
     }));
@@ -194,7 +221,7 @@ export function createBuyConvert(d: BuyConvertDeps) {
       q.feeAtomic.toString(), q.rate, q.id, iso(now() + QUOTE_LIFETIME_MS), iso(now()), iso(now()));
     event(id, 'QUOTED', 'indicative price shown; nothing signed or sent yet');
     audit(d.db, a.buyerId, 'buyconv.quoted', id, { sell: route.from.symbol, sellAtomic: sell.toString() }, new Date(now()));
-    return { conversion: view(get(id)!), evidence: route.evidence, notes: q.notes };
+    return { conversion: view(get(id)!), evidence: route.evidence, notes: q.notes, limits: { minSell: formatUnits(route.minInputAtomic, route.from.decimals), maxSell: formatUnits(route.maxInputAtomic, route.from.decimals) } };
   }
 
   /** The buyer's wallet signed Textile's TakerControl proof: ask Textile for a FIRM quote, validate every field, return only validated steps. */

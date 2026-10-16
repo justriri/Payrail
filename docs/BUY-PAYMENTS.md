@@ -90,3 +90,18 @@ Notes:
 - Not yet observed for any non-cNGN route: a firm quote (needs a wallet-signed TakerControl proof and reserves maker inventory), the exact `executeBatch` gas, and the swap on mainnet. Tests with fakes cover quote validation, wallet steps, verification and failure handling for every enabled currency, but are not mainnet evidence.
 - Gas: the wallet needs CELO (or a fee-currency stablecoin) for the approve and the swap; the earlier cNGN run measured roughly 55k gas for an approve at ~200 gwei.
 - USDC and USAT are also accepted by Buy directly (EIP-3009). Converting them to USDT first works but is an extra step; paying Buy in USDC/USAT directly would be simpler and is not implemented because the Buy flow is pinned to USDT.
+
+## What the buyer sees: route status (never better than the evidence)
+Every known currency is listed on the Buy API page when the wallet holds less USDT than the price, with one of four statuses (`GET /api/market/buy/currencies`, `status`):
+- **Available**: Textile's live ladder shows makers and Payrail itself has executed this route on Celo mainnet (today: cNGN only, tx 0x102eafff…). The buyer-wallet flow is still being proven with real wallets.
+- **Needs live test**: implemented and selectable, a live indicative price exists, but the route has never been executed on mainnet by Payrail (wARS, wBRL, USDC, USAT, IDRX, wCOP, WETH, wMXN). The first real conversion is the test.
+- **Temporarily unavailable**: Textile lists the pair but has no makers or no price right now, or its smallest swap exceeds `PAYRAIL_BUY_CONVERT_MAX_USD`. The reason is shown.
+- **Unsupported**: no compatible route (not on Textile's ladder, G$) or switched off here (CELO, the gas token).
+Selectable means Available or Needs live test. The backend refuses estimates for anything else, so the page cannot enable what the server will not do. Each card shows the smallest swap and about what it is worth in USDT; the estimate shows source amount, expected and guaranteed-minimum USDT, Textile's fee, the smallest swap and the platform-fee note before the buyer approves anything. A simulated provider is never labelled Available.
+
+## Can Buy take USDC and USAT directly?
+Buy's HTTP 402 challenge offers USDC, USDT and USAT at the same price on Celo (all 21 routes probed unpaid on 2026-10-16), and both USDC and USAT support EIP-3009 authorizations, so a direct payment in USDC or USAT looks possible. Payrail has not done it: its Buy flow is pinned to the USDT contract and the USDT EIP-712 domain, and no USDC/USAT authorization has ever been signed or settled through it. Converting USDC/USAT to USDT with Textile is therefore a workaround, not the simplest path; direct payment would need a different (token-agnostic) quote/sign step and its own live test. The page says so on the USDC and USAT cards.
+
+## Configuration and safe restart
+`.env` must contain `PAYRAIL_MARKET_LIVE=1`, `PAYRAIL_BUY_PAYMENTS=1`, `PAYRAIL_BUY_CONVERSION=1` (the server refuses to start with conversion but without Buy payments). Caps: `PAYRAIL_BUY_MAX_USD` (Buy payment, default 0.05) and `PAYRAIL_BUY_CONVERT_MAX_USD` (one conversion; keep it at 2 or more, because Textile's smallest swap is worth about 1 USDT and a cap of 1 can make routes flicker to unavailable).
+Restart: stop the running server (Ctrl+C in its terminal), then `npm run serve -- --port 4402` and check the log for `BUY PAYMENTS ENABLED` and `BUY CONVERSION ENABLED`; reload the page with Ctrl+F5. The database file is reused (migrations 12 and 13 are applied automatically on start; back it up first with the existing backup command if you want a restore point). Nothing is sent on start.

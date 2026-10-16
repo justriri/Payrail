@@ -225,3 +225,9 @@ body[data-funds="dev"] .sidebar { box-shadow: inset 4px 0 0 #b54708; }
 /* catalogue: show more */
 main.workspace .cards .more { grid-column: 1 / -1; text-align: center; padding: 6px 0; }
 .workspace .filters select { min-width: 160px; }
+
+/* pay-with-another-currency: one card per currency with its true status; stacks on a phone */
+.curlist { list-style: none; margin: 8px 0 12px; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; }
+.curlist .cur { border: 1px solid var(--border, #d0d7de); border-radius: 8px; padding: 8px 10px; min-width: 0; overflow-wrap: anywhere; }
+.curlist .cur p { margin: 4px 0 0; font-size: .85em; }
+@media (max-width: 560px) { .curlist { grid-template-columns: 1fr; } }
