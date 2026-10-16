@@ -32,10 +32,11 @@ await signIn();
 await b.goto(`${h.BASE}/market.html#/buyer/explore`, 2200);
 const cards = await b.ev(`JSON.stringify([...document.querySelectorAll('#cat-list .svc')].map(c => { const r = c.getBoundingClientRect(); return { id: c.dataset.id, t: Math.round(r.top), l: Math.round(r.left), w: Math.round(r.width), h: Math.round(r.height), text: c.innerText }; }))`).then(JSON.parse);
 const row = cards.filter((c) => Math.abs(c.t - cards[0].t) < 4);
-check('catalogue shows exactly the 4 real listings (no demo rows)', cards.length === 4 && !cards.some((c) => /Demo/i.test(c.text)), cards.map((c) => c.text.split('\n')[2]).join(' | '));
+const mine = cards.filter((c) => Object.values(ids).includes(c.id));
+check('catalogue shows the 4 seller listings plus the 3 services Buy lists (no demo rows)', cards.length === 7 && mine.length === 4 && cards.filter((c) => /Buy AI/.test(c.text)).length === 3 && !cards.some((c) => /Demo/i.test(c.text)), cards.map((c) => c.text.replace(/\s+/g, ' ').slice(0, 40)).join(' | '));
 check('cards form a grid with 2-3 per row on desktop, not one long line', row.length >= 2 && row.length <= 3 && cards.length > row.length, `${row.length} per row`);
 check('cards in a row share one height', row.every((c) => Math.abs(c.h - row[0].h) <= 2), JSON.stringify(row.map((c) => c.h)));
-check('each card shows name, description, seller, price, status and View API', cards.every((c) => /Seller:/.test(c.text) && /USDT/.test(c.text) && /Published/.test(c.text) && /View API/.test(c.text)) && /Returns a fresh token price/.test(cards[0].text), cards[0].text.replace(/\s+/g, ' '));
+check('each card shows name, description, provider, price, status and View API', mine.every((c) => /Provider:/.test(c.text) && /USDT/.test(c.text) && /Available/.test(c.text) && /View API/.test(c.text)) && /Returns a fresh token price/.test(mine.find((c) => c.id === ids.price).text), mine[0].text.replace(/\s+/g, ' '));
 check('no inline purchase panel on the catalogue page', !(await b.ev(`!!document.querySelector('#run-btn')`)));
 check('the explore page carries no demo language', !DEMO_WORDS.test(await b.text('body')), (((await b.text('body')).match(DEMO_WORDS)) || [])[0]);
 await b.shot('explore-desktop');
@@ -101,7 +102,7 @@ check('statement: deposited 0.5, charged 0.02, returned 0.02, available 0.48', /
 await b.goto(`${h.BASE}/api.html?id=${ids.price}`, 1800);
 await b.click('#back-link', 'Back to the marketplace');
 await b.sleep(2200);
-check('returning to the marketplace opens Explore APIs with the catalogue', /\/market\.html/.test(await b.ev('location.pathname')) && /explore/.test(await b.ev('location.hash')) && (await b.ev(`document.querySelectorAll('#cat-list .svc').length`)) === 4);
+check('returning to the marketplace opens Explore APIs with the catalogue', /\/market\.html/.test(await b.ev('location.pathname')) && /explore/.test(await b.ev('location.hash')) && (await b.ev(`document.querySelectorAll('#cat-list .svc').length`)) === 7);
 
 // ================= unknown listing / missing id
 await b.goto(`${h.BASE}/api.html?id=does-not-exist`);
@@ -118,7 +119,7 @@ check('mobile: purchase and details stack in one column', Math.abs(ms.al - ms.bl
 await b.shot('api-details-mobile');
 await b.goto(`${h.BASE}/market.html#/buyer/explore`, 2200);
 const mc = await b.ev(`JSON.stringify([...document.querySelectorAll('#cat-list .svc')].map(c => { const r = c.getBoundingClientRect(); return { l: Math.round(r.left), r: Math.round(r.right) }; }))`).then(JSON.parse);
-check('mobile cards: one column, inside the screen, no horizontal overflow', mc.length === 4 && mc.every((c) => c.l >= 0 && c.r <= 390 && Math.abs(c.l - mc[0].l) < 3) && (await overflow()) <= 0, JSON.stringify(mc.slice(0, 2)));
+check('mobile cards: one column, inside the screen, no horizontal overflow', mc.length === 7 && mc.every((c) => c.l >= 0 && c.r <= 390 && Math.abs(c.l - mc[0].l) < 3) && (await overflow()) <= 0, JSON.stringify(mc.slice(0, 2)));
 await b.shot('explore-mobile');
 
 const failedAny = finish();

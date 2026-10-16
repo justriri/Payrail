@@ -17,6 +17,11 @@ import type { SimProvider } from './dev/simconversion.ts';
 import { firmQuote } from './textile.ts';
 import { createTextileRouteProvider } from './textileroutes.ts';
 import { masterKeyFrom } from './vault.ts';
+import { EXPECTED_PAY_TO } from './buy.ts';
+import { createBuyPay } from './buypay.ts';
+import type { SpendingPolicy } from './policy.ts';
+import type { VerifyDeps } from './verify.ts';
+import { isAddress } from 'viem';
 
 export class SetupError extends Error {}
 
@@ -32,6 +37,13 @@ export interface SetupDeps {
   makeReader(): ChainReader;
   readAllowance(token: `0x${string}`, owner: `0x${string}`, spender: `0x${string}`): Promise<bigint>;
   buyCatalog: MarketRuntime['buyCatalog'];
+  /** needed only for PAYRAIL_BUY_PAYMENTS=1: independent on-chain settlement checks and the spending policy (allowed hosts) */
+  buyVerify?: VerifyDeps;
+  buyPolicy?: SpendingPolicy;
+  /** tests only: the fetch used for the gateway (production leaves it undefined = the global fetch) */
+  buyFetch?: typeof fetch;
+  /** tests only: do not wait between settlement checks */
+  buySettleDelayMs?: number;
   log(line: string): void;
 }
 
@@ -115,6 +127,23 @@ export async function setupMarket(d: SetupDeps): Promise<MarketRuntime | undefin
     d.log('BUYER-SIGNED CONVERSION ENABLED (never run on mainnet yet): buyers convert with their own wallets; Textile firm quotes are validated server-side.');
   }
 
+  // Buy AI purchases paid directly by the buyer's own wallet (x402 / EIP-3009): its own explicit opt-in, off by default
+  let buy: ReturnType<typeof createBuyPay> | undefined;
+  if (env.PAYRAIL_BUY_PAYMENTS === '1') {
+    if (!d.buyVerify || !d.buyPolicy || !d.buyCatalog) throw new SetupError('PAYRAIL_BUY_PAYMENTS=1 needs the Buy catalogue, a spending policy and on-chain verification.');
+    const buyCapUsd = Number(env.PAYRAIL_BUY_MAX_USD ?? '0.05');
+    if (!Number.isFinite(buyCapUsd) || buyCapUsd <= 0) throw new SetupError('PAYRAIL_BUY_MAX_USD must be a positive number.');
+    const buyPayTo = env.PAYRAIL_BUY_PAYTO ?? EXPECTED_PAY_TO;
+    if (!isAddress(buyPayTo)) throw new SetupError('PAYRAIL_BUY_PAYTO must be an address.');
+    const getCatalog = d.buyCatalog;
+    buy = createBuyPay({
+      db, catalog: { get: async () => getCatalog() }, policy: d.buyPolicy, verify: d.buyVerify, chainId: 42220, usdt: usdt.address, payTo: buyPayTo as `0x${string}`,
+      maxPerPaymentAtomic: BigInt(Math.round(buyCapUsd * 1_000_000)), feeBps: 300, ...(d.buyFetch ? { fetchImpl: d.buyFetch } : {}), ...(d.buySettleDelayMs !== undefined ? { settleDelayMs: d.buySettleDelayMs } : {}),
+    });
+    const interrupted = buy.recoverInterrupted();
+    d.log(`BUY PAYMENTS ENABLED: buyers pay Buy AI directly from their own wallet in USDT on Celo (limit ${buyCapUsd} USDT per payment, payee ${buyPayTo}). Platform fee: recorded as due, NOT collected.${interrupted ? ` ${interrupted} interrupted order(s) marked UNRESOLVED.` : ''}`);
+  }
+
   const market: MarketRuntime = {
     db,
     keys: [vaultKey],
@@ -125,6 +154,7 @@ export async function setupMarket(d: SetupDeps): Promise<MarketRuntime | undefin
     domain: {},
     ...(d.buyCatalog ? { buyCatalog: d.buyCatalog } : {}),
     live,
+    ...(buy ? { buy } : {}),
     ...(conversion ? { conversion } : {}),
   };
   d.log(`REAL-FUNDS MARKETPLACE: USDT on Celo mainnet. Deposits to ${depositAddress} are credited after ${confirmations} confirmations (cap ${cap / 1_000_000n} USDT each). Seller payouts: DISABLED. Conversion: ${conversion ? 'buyer-signed (unverified on mainnet)' : 'DISABLED'}. Database: ${dbPath}.`);

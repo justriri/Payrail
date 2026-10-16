@@ -69,3 +69,9 @@ a balance differs from the on-chain amount, or any step asks for a private key o
 
 ## After the test
 Stop the server (Ctrl+C). The database `data/marketplace-live.db` holds the ledger; it is git-ignored.
+
+## Buy AI purchase test (a few cents)
+1. Start the production server with `PAYRAIL_BUY_PAYMENTS=1` and `PAYRAIL_BUY_MAX_USD=0.05` (needs your approval to restart).
+2. Open a cheap Buy API (about 0.005 USDT), click Get the exact price, sign in with your wallet, then sign the payment.
+3. Expect state CONFIRMED, a Celoscan link showing a USDT transfer from your wallet to `0x20fa...333B`, and the API response.
+4. Stop if the receipt says REVIEW or UNRESOLVED; use Re-check, never pay again.

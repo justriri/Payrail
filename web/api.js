@@ -17,6 +17,9 @@ const el = (tag, attrs, ...kids) => {
   return e;
 };
 const clear = (n) => { while (n.firstChild) n.removeChild(n.firstChild); };
+// conditional children (cond ? el(...) : null) must never render as the text "null"
+const _append = Element.prototype.append;
+Element.prototype.append = function (...kids) { return _append.apply(this, kids.filter((k) => k !== false && k !== null && k !== undefined)); };
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
   set(k, v) { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch { /* optional */ } },
@@ -79,7 +82,16 @@ function loadScript(src) {
 }
 
 async function main() {
-  const id = new URLSearchParams(location.search).get('id') || '';
+  const params = new URLSearchParams(location.search);
+  const id = params.get('id') || '';
+  if (params.get('src') === 'buy') {
+    // an API from the Buy AI catalogue: details come from Buy's catalogue, payment is made by the buyer's own wallet (see buy.js)
+    if (!/^[\w.-]{1,160}$/.test(id)) return notFound('No API was specified.');
+    const [bd, bcfg] = await Promise.all([api(`/buy/service/${encodeURIComponent(id)}`), api('/config')]);
+    if (!bd.ok) return notFound(bd.code === 'NOT_FOUND' ? 'This API is not in the current Buy catalogue.' : fail(bd));
+    if (!bcfg.ok) return notFound('The API marketplace is not enabled on this server.');
+    return window.renderBuy(bd, bcfg);
+  }
   if (!/^[\w-]{1,80}$/.test(id)) return notFound('No API was specified.');
   const [d, cfg] = await Promise.all([api(`/listing/${encodeURIComponent(id)}`), api('/config')]);
   if (!d.ok) return notFound(d.code === 'NOT_FOUND' ? 'This API does not exist or is not published.' : fail(d));

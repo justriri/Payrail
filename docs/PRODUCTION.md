@@ -63,3 +63,6 @@ reader, a fake seller API and a fake wallet whose signatures come from a local t
 `node scripts/audit-legacy-data.ts <db>` reports (read-only) any legacy demo or test-credit rows in a marketplace file. They are hidden and
 refused by production and are never deleted automatically. Starting the updated server applies two ADDITIVE migrations (9: per-role wallet
 accounts, 10: extra deposit-record columns) to the database it opens: copy the file first.
+
+## Buy AI purchases
+Buy APIs are paid by the buyer's own wallet (USDT, Celo) through `PAYRAIL_BUY_PAYMENTS=1`; see [BUY-PAYMENTS.md](BUY-PAYMENTS.md). The catalogue is fetched from Buy, never stored locally. The 3% fee is recorded as due and not collected.

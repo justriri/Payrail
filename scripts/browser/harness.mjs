@@ -12,6 +12,9 @@ import { RateLimiter } from '../../src/egress.ts';
 import { TRANSFER_TOPIC, fundingMessage } from '../../src/funding.ts';
 import { generateMasterKey } from '../../src/vault.ts';
 import { createWebServer } from '../../src/webapi.ts';
+import { createBuyPay } from '../../src/buypay.ts';
+import { DEFAULT_POLICY } from '../../src/policy.ts';
+import { PAY_TO, createFakeBuy, signAuthorization } from '../../test/fakebuy.ts';
 import { createSimulatedRuntime } from '../../src/dev/websim.ts';
 
 export const USDT = '0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e';
@@ -19,7 +22,7 @@ export const DEP = '0x707AFF45f3c09C03973F6E0074Ab01C43cC7e0eA';
 export const SELLER_SECRET = 'sk_browser_regression_secret_0123456789';
 const pad = (a) => `0x${a.toLowerCase().replace('0x', '').padStart(64, '0')}`;
 
-export async function startHarness({ seedLegacyDemoRows = true, capAtomic = 1_000_000n, minConfirmations = 3 } = {}) {
+export async function startHarness({ seedLegacyDemoRows = true, capAtomic = 1_000_000n, minConfirmations = 3, withBuy = true } = {}) {
   const mk = generateMasterKey('k1');
   const db = openDb(':memory:');
   // the legacy demo rows exist in the database (as in an old marketplace file): production must still never show or sell them
@@ -36,8 +39,15 @@ export async function startHarness({ seedLegacyDemoRows = true, capAtomic = 1_00
     if (ok && scenario === 'http500') return { status: 500, headers: { 'content-type': 'application/json' }, body: Buffer.from('{"error":"boom"}') };
     return { status: ok ? 200 : 401, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify(ok ? { quote: 7, asOf } : { error: 'bad key' })) };
   };
+  // a FAKE Buy AI gateway and chain: the production Buy payment code runs against them
+  const fakeBuy = createFakeBuy({ now: Date.now });
+  const buy = withBuy
+    ? createBuyPay({ db, catalog: { get: async () => fakeBuy.catalog }, policy: DEFAULT_POLICY, verify: fakeBuy.verify, chainId: 42220, usdt: USDT, payTo: PAY_TO, maxPerPaymentAtomic: 50_000n, feeBps: 300, fetchImpl: fakeBuy.fetchImpl, sleep: async () => undefined, settleDelayMs: 0 })
+    : undefined;
   const market = {
     db, keys: [mk], activeKey: mk,
+    buyCatalog: async () => fakeBuy.catalog,
+    ...(buy ? { buy } : {}),
     execute: {
       call: { limiter: new RateLimiter(100, 100), fetchOptions: { resolver, transport } },
       demoCall: { limiter: new RateLimiter(100, 100), fetchOptions: { resolver: demo.resolver, transport: demo.transport, timeoutMs: 500 } },
@@ -87,7 +97,7 @@ export async function startHarness({ seedLegacyDemoRows = true, capAtomic = 1_00
   let hashN = 0x1000;
   async function wire(b, key, { poll = 150 } = {}) {
     const acct = privateKeyToAccount(key);
-    const wallet = { address: acct.address, sends: [], signs: [], sendMode: 'ok', denySign: false };
+    const wallet = { address: acct.address, sends: [], signs: [], typedSigns: [], sendMode: 'ok', denySign: false, denyTyped: false };
     await b.send('Runtime.enable');
     await b.send('Runtime.addBinding', { name: '__wallet' });
     b.on('Runtime.bindingCalled', async (p) => {
@@ -95,7 +105,10 @@ export async function startHarness({ seedLegacyDemoRows = true, capAtomic = 1_00
       const { id, kind, payload } = JSON.parse(p.payload);
       let out;
       try {
-        if (kind === 'sign') {
+        if (kind === 'signTyped') {
+          wallet.typedSigns.push(payload);
+          out = wallet.denyTyped ? { ok: false, error: 'User rejected the request.' } : { ok: true, value: await signAuthorization(acct, payload) };
+        } else if (kind === 'sign') {
           wallet.signs.push(payload.message);
           out = wallet.denySign ? { ok: false, error: 'User rejected the request.' } : { ok: true, value: await acct.signMessage({ message: payload.message }) };
         } else if (kind === 'send') {
@@ -125,6 +138,7 @@ export async function startHarness({ seedLegacyDemoRows = true, capAtomic = 1_00
         if (method === 'eth_chainId') return '0xa4ec';
         if (method === 'wallet_switchEthereumChain') return null;
         if (method === 'personal_sign') return ask('sign', { message: params[0] });
+        if (method === 'eth_signTypedData_v4') return ask('signTyped', JSON.parse(params[1]));
         if (method === 'eth_sendTransaction') return ask('send', params[0]);
         throw new Error('unsupported method ' + method);
       } };
@@ -150,7 +164,7 @@ export async function startHarness({ seedLegacyDemoRows = true, capAtomic = 1_00
   }
 
   return {
-    BASE, token, db, call, receipts, txt, publish, demoIds, wire, fundedBuyer, sellerKey, sellerToken: sc.token,
+    BASE, token, db, call, receipts, txt, publish, demoIds, wire, fundedBuyer, sellerKey, sellerToken: sc.token, buyGateway: fakeBuy.gateway, buyChain: fakeBuy,
     newKey: () => generatePrivateKey(),
     close: () => new Promise((r) => server.close(() => r())),
   };

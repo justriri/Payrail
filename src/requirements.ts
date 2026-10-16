@@ -31,6 +31,8 @@ export interface PaymentOffer {
   resource: string;
   /** The challenge's resource equals the service URL we asked. */
   resourceMatches: boolean;
+  /** EIP-712 domain name/version the token needs for an EIP-3009 authorization (from the challenge's `extra`). */
+  domain?: { name: string; version: string } | undefined;
 }
 
 export type DiscoveryResult =
@@ -126,6 +128,7 @@ function toOffer(raw: unknown, serviceUrl: string): { offer?: PaymentOffer; reas
       maxTimeoutSeconds: typeof maxTimeoutSeconds === 'number' ? maxTimeoutSeconds : 0,
       resource: typeof resource === 'string' ? resource : '',
       resourceMatches: resource === serviceUrl,
+      domain: isRecord(raw.extra) && typeof raw.extra.name === 'string' && typeof raw.extra.version === 'string' ? { name: sanitizeText(raw.extra.name, 60), version: sanitizeText(raw.extra.version, 20) } : undefined,
     },
   };
 }

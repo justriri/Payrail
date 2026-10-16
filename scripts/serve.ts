@@ -56,6 +56,7 @@ for (const gone of ['--simulate', '--no-demo', '--escrow-testnet', '--scenario']
 
 let runtime: WebRuntime;
 let live!: ReturnType<typeof createLive>;
+let spendingPolicy!: ReturnType<typeof policyFromEnv>;
 let cfgChainId = 42220;
 let attributionTag = '';
 
@@ -78,6 +79,7 @@ let attributionTag = '';
   let account = cfg.privateKey ? privateKeyToAccount(cfg.privateKey) : undefined;
   const keystorePath = process.env.PAYRAIL_KEYSTORE ?? join(homedir(), '.payrail', 'keystore.json');
   const policy = policyFromEnv(process.env);
+  spendingPolicy = policy;
   live = createLive(cfg, policy);
   cfgChainId = cfg.chainId;
   attributionTag = cfg.attributionTag;
@@ -194,6 +196,8 @@ try {
     makeReader: () => createViemReader(rpcUrlList(process.env.PAYRAIL_RPC_URL || undefined, undefined)),
     readAllowance: (token, owner, spender) => live.client.readContract({ address: token, abi: erc20Abi, functionName: 'allowance', args: [owner, spender] }),
     buyCatalog: () => runtime.catalog(),
+    buyVerify: live.verify,
+    buyPolicy: spendingPolicy,
     log: line,
   });
 } catch (e) {

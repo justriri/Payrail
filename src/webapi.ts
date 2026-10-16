@@ -740,7 +740,7 @@ const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.j
 
 /** A local-only HTTP server. Bound to 127.0.0.1; state-changing calls need a per-run token and a same-origin Origin. */
 /** pages every server serves */
-const PAGES: Record<string, 1> = { 'index.html': 1, 'app.js': 1, 'style.css': 1, 'market.html': 1, 'market.js': 1, 'home.html': 1, 'site.css': 1, 'api.html': 1, 'api.js': 1, 'topup.js': 1, 'home.js': 1 };
+const PAGES: Record<string, 1> = { 'index.html': 1, 'app.js': 1, 'style.css': 1, 'market.html': 1, 'market.js': 1, 'home.html': 1, 'site.css': 1, 'api.html': 1, 'api.js': 1, 'topup.js': 1, 'home.js': 1, 'buy.js': 1 };
 /** DEVELOPMENT-ONLY scripts (test credits, sandbox sellers). A production server cannot serve them: they are not in its allow-list. */
 const DEV_PAGES: Record<string, 1> = { 'dev.js': 1, 'dev-api.js': 1 };
 

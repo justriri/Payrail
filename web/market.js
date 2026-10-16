@@ -142,36 +142,55 @@ async function renderBuyer() {
 }
 
 // ------------------------------------------------------------------ catalog
+const CAT = { items: [], shown: 24 };
 async function loadCatalog() {
   const q = $('q').value.trim();
   const d = await api(`/catalog${q ? `?q=${encodeURIComponent(q)}` : ''}`);
+  if (!d.ok) { clear($('cat-list')); $('cat-status').textContent = marketOn() ? fail(d) : 'The API marketplace is not enabled on this production server.'; return; }
+  CAT.items = d.items;
+  CAT.buy = d.buy;
+  CAT.shown = 24;
+  // platform filter built from what Buy actually lists
+  const sel = $('platform');
+  const keep = sel.value;
+  const platforms = [...new Set(d.items.map((i) => i.platform).filter(Boolean))].sort();
+  clear(sel);
+  sel.append(el('option', { value: '', text: 'All platforms' }), ...platforms.map((p) => el('option', { value: p, text: p })));
+  sel.value = platforms.includes(keep) ? keep : '';
+  drawCatalog();
+}
+function drawCatalog() {
   const list = $('cat-list');
   clear(list);
-  if (!d.ok) { $('cat-status').textContent = marketOn() ? fail(d) : 'The API marketplace is not enabled on this production server.'; return; }
+  const wanted = $('platform').value;
+  const items = CAT.items.filter((i) => !wanted || i.platform === wanted);
   const counts = {};
-  for (const it of d.items) counts[it.origin] = (counts[it.origin] || 0) + 1;
-  $('cat-status').textContent = `${d.items.length} services · ` + Object.entries(counts).map(([k, n]) => `${n} ${ORIGIN_SHORT[k] || k}`).join(', ')
-    + (d.buy.available ? '' : ` · Buy gateway: ${d.buy.message || 'unavailable'}`);
-  if (d.items.length === 0) {
-    list.append(el('div', { class: 'notice' }, 'No APIs are published yet. ', el('a', { href: '#/seller/new', text: 'Publish one in Seller, Create API' }), '.'));
+  for (const it of items) counts[it.origin] = (counts[it.origin] || 0) + 1;
+  const buyInfo = CAT.buy && CAT.buy.available
+    ? ` · from Buy AI, fetched ${String(CAT.buy.fetchedAt || '').replace('T', ' ').slice(0, 19)} UTC${CAT.buy.stale ? ' (STALE copy)' : ''}`
+    : ` · Buy catalogue: ${(CAT.buy && CAT.buy.message) || 'unavailable'}`;
+  $('cat-status').textContent = `${items.length} APIs` + (wanted ? ` on ${wanted}` : '') + ' · ' + Object.entries(counts).map(([k, n]) => `${n} ${ORIGIN_SHORT[k] || k}`).join(', ') + buyInfo;
+  if (items.length === 0) {
+    list.append(el('div', { class: 'notice' }, CAT.buy && CAT.buy.available ? 'No API matches.' : 'The Buy catalogue could not be loaded, so there is nothing to show right now. Nothing is substituted. ', el('a', { href: '#/seller/new', text: 'Publish your own API in Seller, Create API' }), '.'));
   }
-  for (const it of d.items) {
+  for (const it of items.slice(0, CAT.shown)) {
     const price = !it.pricing ? 'price on request'
       : it.pricing.kind === 'fixed' ? `${it.pricing.usd} ${it.pricing.asset}`
-        : (it.pricing.minUsd === it.pricing.maxUsd ? `${it.pricing.minUsd} (indicative)` : `${it.pricing.minUsd}–${it.pricing.maxUsd} (indicative)`);
-    const isGateway = it.execution === 'payrail-gateway';
-    const card = el('article', { class: 'svc', 'data-id': it.id },
+        : (it.pricing.minUsd === it.pricing.maxUsd ? `~${it.pricing.minUsd} USDT` : `~${it.pricing.minUsd}–${it.pricing.maxUsd} USDT`);
+    const isBuy = it.source === 'buy';
+    const href = isBuy ? `/api.html?src=buy&id=${encodeURIComponent(it.id)}` : `/api.html?id=${encodeURIComponent(it.id)}`;
+    list.append(el('article', { class: 'svc', 'data-id': it.id },
       el('div', { class: 'svc-top' },
         el('span', { class: `badge ${ORIGIN_CLASS[it.origin] || ''}`, text: ORIGIN_SHORT[it.origin] || it.origin }),
-        el('span', { class: `badge ${it.available ? 'ok' : 'warn'}`, text: it.available ? 'Published' : 'Unavailable' })),
+        it.platform ? el('span', { class: 'badge', text: it.platform }) : null,
+        el('span', { class: `badge ${it.available ? 'ok' : 'warn'}`, text: it.available ? 'Available' : 'Unavailable' })),
       el('h4', { text: it.title }),
       el('p', { class: 'svc-desc', text: it.description.slice(0, 200) }),
-      el('p', { class: 'svc-seller', text: `Seller: ${it.seller || it.originLabel}` }),
-      el('div', { class: 'svc-foot' }, el('span', { class: 'price', text: price })),
-    );
-    if (isGateway) card.querySelector('.svc-foot').append(el('a', { class: 'btn', href: `/api.html?id=${encodeURIComponent(it.id)}`, text: 'View API' }));
-    else if (it.available) card.querySelector('.svc-foot').append(el('a', { class: 'btn ghost', href: '/index.html', text: 'Open Buy flow' }));
-    list.append(card);
+      el('p', { class: 'svc-seller', text: `Provider: ${it.seller || it.originLabel}` }),
+      el('div', { class: 'svc-foot' }, el('span', { class: 'price', text: price }), el('a', { class: 'btn', href, text: 'View API' }))));
+  }
+  if (items.length > CAT.shown) {
+    list.append(el('div', { class: 'more' }, el('button', { type: 'button', class: 'secondary', id: 'show-more', text: `Show more (${items.length - CAT.shown} more)`, onclick: () => { CAT.shown += 24; drawCatalog(); } })));
   }
 }
 async function showReceipt(box, id) {
@@ -197,6 +216,16 @@ async function renderHistory() {
   if (!marketOn()) { box.textContent = 'The marketplace is not enabled on this server.'; return; }
   if (!session.buyer) { box.textContent = 'Sign in with your wallet first.'; return; }
   const [d, sm] = await Promise.all([api('/executions', { bearer: session.buyer }), api('/me/statement', { bearer: session.buyer })]);
+  // purchases of Buy AI APIs (paid directly from the buyer's wallet), with their on-chain status
+  if (config.features && config.features.buyPayments) {
+    const bo = await api('/buy/orders', { bearer: session.buyer });
+    if (bo.ok && bo.orders.length) {
+      box.append(el('h3', { text: 'Buy AI purchases' }), el('ul', { id: 'buy-orders' }, ...bo.orders.map((o) => el('li', {},
+        `${o.createdAt.slice(0, 19).replace('T', ' ')} · ${o.serviceId} · ${o.amount} USDT · `,
+        el('span', { class: `badge ${o.confirmed ? 'ok' : o.state === 'FAILED' || o.state === 'EXPIRED' ? 'bad' : 'warn'}`, text: o.confirmed ? 'CONFIRMED on-chain' : `${o.state} (not confirmed)` }),
+        o.txUrl ? el('span', {}, ' · ', el('a', { href: o.txUrl, target: '_blank', rel: 'noopener noreferrer', text: `tx ${o.txHash.slice(0, 10)}…` })) : null))));
+    }
+  }
   if (sm.ok) {
     for (const b of sm.statement.balances) {
       st.append(el('table', { class: 'quote' },
@@ -209,7 +238,7 @@ async function renderHistory() {
     }
   }
   if (!d.ok) { box.textContent = fail(d); return; }
-  if (!d.executions.length) { box.textContent = 'No requests yet.'; return; }
+  if (!d.executions.length) { if (!box.firstChild) box.textContent = 'No purchases yet.'; return; }
   box.append(el('div', {}, ...d.executions.map((e) => {
     const det = el('details', {}, el('summary', { text: `${e.at.slice(0, 19).replace('T', ' ')}  ${e.listing}: ${STATE_TEXT(e)}${e.reason && e.state !== 'QUALIFIED' ? ` — ${e.reason}` : ''}` }));
     let loaded = false;
@@ -776,6 +805,7 @@ $('menu-btn').addEventListener('click', () => {
   $('menu-btn').setAttribute('aria-expanded', open ? 'true' : 'false');
 });
 
+$('platform').addEventListener('change', () => { CAT.shown = 24; drawCatalog(); });
 $('q').addEventListener('input', () => { clearTimeout(window.__t); window.__t = setTimeout(loadCatalog, 250); });
 (async () => {
   await loadConfig();

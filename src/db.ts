@@ -482,6 +482,57 @@ CREATE TABLE app_meta (
 ) STRICT;
 `;
 
+/**
+ * Version 12: purchases of Buy AI APIs paid DIRECTLY by the buyer's own wallet (x402 / EIP-3009), with no deposit wallet and no ledger.
+ * One row per purchase with everything needed to audit it: who paid whom, which token and network, the exact authorization that was
+ * signed, what the gateway answered, the independent settlement evidence, and the platform fee (due, and whether it was collected).
+ */
+const V12 = `
+CREATE TABLE buy_orders (
+  id TEXT PRIMARY KEY,
+  buyer_id TEXT NOT NULL REFERENCES accounts(id),
+  wallet TEXT NOT NULL,
+  service_id TEXT NOT NULL,
+  service_url TEXT NOT NULL,
+  input_json TEXT NOT NULL,
+  input_sha256 TEXT NOT NULL,
+  network TEXT NOT NULL,
+  chain_id INTEGER NOT NULL,
+  scheme TEXT NOT NULL,
+  asset_symbol TEXT NOT NULL,
+  asset_address TEXT NOT NULL,
+  pay_to TEXT NOT NULL,
+  amount_atomic TEXT NOT NULL,
+  nonce TEXT NOT NULL UNIQUE,
+  valid_before INTEGER NOT NULL,
+  typed_data_json TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('QUOTED','SUBMITTED','CONFIRMED','FAILED','REVIEW','UNRESOLVED','EXPIRED')),
+  failure TEXT,
+  tx_hash TEXT,
+  settlement_json TEXT,
+  http_status INTEGER,
+  response_body TEXT,
+  response_sha256 TEXT,
+  response_content_type TEXT,
+  fee_bps INTEGER NOT NULL,
+  fee_atomic TEXT NOT NULL,
+  fee_state TEXT NOT NULL CHECK (fee_state IN ('not_collected','collected')),
+  fee_tx_hash TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+) STRICT;
+CREATE INDEX buy_orders_buyer ON buy_orders (buyer_id, created_at);
+CREATE TABLE buy_order_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  order_id TEXT NOT NULL REFERENCES buy_orders(id),
+  at TEXT NOT NULL,
+  state TEXT NOT NULL,
+  note TEXT NOT NULL
+) STRICT;
+CREATE TRIGGER buy_order_events_no_update BEFORE UPDATE ON buy_order_events BEGIN SELECT RAISE(ABORT, 'buy order events are append-only'); END;
+CREATE TRIGGER buy_order_events_no_delete BEFORE DELETE ON buy_order_events BEGIN SELECT RAISE(ABORT, 'buy order events are append-only'); END;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'accounts, listings, contracts, ledger, executions, audit', sql: V1 },
   { version: 2, name: 'encrypted seller credentials', sql: V2 },
@@ -494,6 +545,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 9, name: 'per-role wallet accounts (buyer wallet sign-in)', sql: V9 },
   { version: 10, name: 'deposit records carry network, token, recipient, confirmations and verification', sql: V10 },
   { version: 11, name: 'database environment marker (production / development)', sql: V11 },
+  { version: 12, name: 'direct Buy AI purchases paid by the buyer wallet (orders and events)', sql: V12 },
 ];
 
 /** Open (creating the file and folder if needed) and bring the schema up to date. ':memory:' for tests. */

@@ -221,3 +221,7 @@ body.apipage { background: var(--bg); }
 /* development environment: an unmistakable stripe so it is never mistaken for production */
 body[data-funds="dev"] .topbar { box-shadow: inset 0 4px 0 #b54708; }
 body[data-funds="dev"] .sidebar { box-shadow: inset 4px 0 0 #b54708; }
+
+/* catalogue: show more */
+main.workspace .cards .more { grid-column: 1 / -1; text-align: center; padding: 6px 0; }
+.workspace .filters select { min-width: 160px; }

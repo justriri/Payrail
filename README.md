@@ -255,3 +255,6 @@ first (read-only). `/` is the landing page, `/market.html` the dashboard, `/api.
 What is real, what has been verified on mainnet and what is blocked: [docs/PRODUCTION.md](docs/PRODUCTION.md). Controlled live test:
 [docs/LIVE-TEST-RUNBOOK.md](docs/LIVE-TEST-RUNBOOK.md). Automated tests, including browser regressions that run the production code
 against a FAKE chain with a fake wallet, are development-only (`npm test`, `scripts/browser/verify-*.mjs`).
+
+## Buy AI marketplace
+The marketplace catalogue is fetched live from Buy AI, and buyers pay Buy directly from their own wallet with USDT on Celo (EIP-3009, signed in the wallet, no deposit). Payrail verifies the on-chain settlement and records the order. The 3% platform fee is recorded as due but is not collected yet. See [docs/BUY-PAYMENTS.md](docs/BUY-PAYMENTS.md). Enable with `PAYRAIL_BUY_PAYMENTS=1`.

@@ -24,6 +24,8 @@ import { FundingError, confirmDeposit, fundingMessage, fundingMessageOnChain, fu
 import { takerControlTypedData, verifyTakerProof } from './takerproof.ts';
 import { CELO_CHAIN_ID } from './conversion.ts';
 import { WalletAuthError, completeBuyerLogin, startBuyerLogin } from './walletauth.ts';
+import { BuyPayError, formatUsdt } from './buypay.ts';
+import type { BuyPay } from './buypay.ts';
 import type { FundingConfig } from './funding.ts';
 import { PayoutError, cancelPayout, payoutsOf, requestPayout } from './payouts.ts';
 import { publishReadiness, updateListingDetails } from './seller.ts';
@@ -61,6 +63,8 @@ export interface MarketRuntime {
   domain?: DomainDeps;
   /** the Buy gateway catalog, when available */
   buyCatalog?: () => Promise<Catalog>;
+  /** Buy AI purchases paid by the buyer's own wallet (x402 / EIP-3009). Only present when the operator enabled it (PAYRAIL_BUY_PAYMENTS=1). */
+  buy?: BuyPay;
   /** true when the Buy catalog comes from the simulator rather than the real gateway */
   buySimulated?: boolean;
   /** enable sandbox sellers (server-derived test wallets, in-process sandbox hosts). Test-credit mode only. */
@@ -101,6 +105,9 @@ export interface MarketItem {
   payOnlyForQualifying: boolean;
   demo: boolean;
   available: boolean;
+  /** Buy items: the Buy platform (x, instagram, flights, ...) and the upstream provider */
+  platform?: string;
+  provider?: string;
   /** where the listing comes from, in plain terms */
   origin: 'buy-gateway' | 'buy-gateway-simulated' | 'payrail-seller' | 'payrail-sandbox' | 'payrail-demo';
   originLabel: string;
@@ -241,13 +248,13 @@ export function payrailItems(db: Db, opts: { realOnly?: boolean } = {}): MarketI
   }));
 }
 
-export async function mergedCatalog(rt: MarketRuntime, q?: string): Promise<{ items: MarketItem[]; buy: { available: boolean; stale?: boolean; message?: string } }> {
+export async function mergedCatalog(rt: MarketRuntime, q?: string): Promise<{ items: MarketItem[]; buy: { available: boolean; stale?: boolean; message?: string; fetchedAt?: string; count?: number } }> {
   let items = payrailItems(rt.db, { realOnly: Boolean(rt.live) });
-  let buy: { available: boolean; stale?: boolean; message?: string } = { available: false, message: 'Buy catalog not connected' };
+  let buy: { available: boolean; stale?: boolean; message?: string; fetchedAt?: string; count?: number } = { available: false, message: 'Buy catalog not connected' };
   if (rt.buyCatalog) {
     try {
       const cat = await rt.buyCatalog();
-      buy = { available: true, stale: cat.stale };
+      buy = { available: true, stale: cat.stale, fetchedAt: new Date(cat.fetchedAt).toISOString(), count: cat.services.length };
       items = items.concat(
         cat.services.map((s): MarketItem => ({
           id: s.id,
@@ -255,6 +262,9 @@ export async function mergedCatalog(rt: MarketRuntime, q?: string): Promise<{ it
           description: s.description,
           source: 'buy',
           execution: 'x402-direct',
+          platform: s.platform,
+          ...(s.provider ? { provider: s.provider } : {}),
+          seller: s.provider ? `${s.provider} via Buy AI` : 'Buy AI',
           pricing: s.price ? { kind: 'indicative', minUsd: formatAtomic(s.price.minAtomic), maxUsd: formatAtomic(s.price.maxAtomic) } : null,
           payOnlyForQualifying: false,
           demo: false,
@@ -407,11 +417,11 @@ function mapError(e: unknown): MarketResponse {
   if (e instanceof ApiError) return { status: e.status, body: { ok: false, code: e.code, message: e.message, retryable: e.status >= 500 || e.status === 429 } };
   const code = (e as { code?: string }).code ?? 'ERROR';
   const message = (e as Error).message;
-  const known = e instanceof LedgerError || e instanceof SellerError || e instanceof VaultError || e instanceof ContractError || e instanceof GatewayError || e instanceof TesterError || e instanceof FundingError || e instanceof PayoutError || e instanceof AgentError || e instanceof EscrowError || e instanceof FundingOpError || e instanceof PayoutConvError || e instanceof WalletAuthError;
+  const known = e instanceof LedgerError || e instanceof SellerError || e instanceof VaultError || e instanceof ContractError || e instanceof GatewayError || e instanceof TesterError || e instanceof FundingError || e instanceof PayoutError || e instanceof AgentError || e instanceof EscrowError || e instanceof FundingOpError || e instanceof PayoutConvError || e instanceof WalletAuthError || e instanceof BuyPayError;
   if (!known) return { status: 500, body: { ok: false, code: 'INTERNAL_ERROR', message: 'Something went wrong on our side.' } };
   const status: Record<string, number> = {
     SESSION_INVALID: 401, NOT_OWNER: 403, NOT_FOUND: 404, INSUFFICIENT_CREDITS: 402, IDEMPOTENCY_CONFLICT: 409, WRONG_STATE: 409, HOST_CLAIMED: 409,
-    LISTING_NOT_PUBLISHED: 409, CONTRACT_NOT_APPROVED: 409, RATE_LIMITED: 429, DOMAIN_PROOF_FAILED: 422, BAD_SIGNATURE: 422, WRONG_NETWORK: 422, NONCE_INVALID: 401,
+    LISTING_NOT_PUBLISHED: 409, CONTRACT_NOT_APPROVED: 409, RATE_LIMITED: 429, DOMAIN_PROOF_FAILED: 422, BAD_SIGNATURE: 422, WRONG_NETWORK: 422, NONCE_INVALID: 401, SERVICE_UNAVAILABLE: 409, INVALID_INPUT: 422, NO_USDT_OFFER: 409, PRICE_ABOVE_LIMIT: 422, CHALLENGE_REJECTED: 409, GATEWAY_UNREACHABLE: 502,
     WALLET_TAKEN: 409, NO_FUNDING_WALLET: 409, TX_NOT_FOUND: 404, TX_REVERTED: 422, NOT_ENOUGH_CONFIRMATIONS: 409, NO_MATCHING_TRANSFER: 422, OVER_LIMIT: 422, READ_FAILED: 502,
     KEY_INVALID: 401, LISTING_NOT_ALLOWED: 403, ROUTE_UNAVAILABLE: 409, ADDRESS_REQUIRED: 409, ADDRESS_TAKEN: 409, BELOW_FLOOR: 422, ABOVE_DEPTH: 422, NOT_ENABLED: 409, PER_REQUEST_CAP: 403, DAILY_CAP: 403, INSUFFICIENT_EARNINGS: 409, NO_WALLET: 409, TEST_ASSET: 422, NO_SELLER_WALLET: 409, HOLD_FAILED: 502,
     BAD_AMOUNT: 400, BELOW_MINIMUM: 422, ABOVE_MAXIMUM: 422, DAILY_LIMIT: 429, TOO_MANY_OPEN: 409, QUOTE_UNAVAILABLE: 502, QUOTE_EXPIRED: 409, DIGEST_MISMATCH: 409, SIGNING_UNAVAILABLE: 409, NOT_ALLOWED: 403,
@@ -523,6 +533,64 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
     }
     return ok(out);
   }
+  // ---- Buy AI: the catalogue is fetched from Buy, and the buyer's OWN wallet pays Buy directly (x402 / EIP-3009)
+  if (path.startsWith('/buy/')) {
+    const buyConfig = rt.buy?.config();
+    const feeNote = 'The platform fee is recorded as DUE (3%) but is NOT collected in this version: the Buy payment goes entirely to Buy, and Payrail is not a party to it.';
+    if (method === 'GET' && (m = path.match(/^\/buy\/service\/([\w.-]{1,160})$/))) {
+      if (!rt.buyCatalog) throw new ApiError(404, 'NOT_FOUND', 'the Buy catalogue is not connected on this server');
+      const cat = await rt.buyCatalog();
+      const svc = cat.services.find((x) => x.id === m![1]);
+      if (!svc) throw new ApiError(404, 'NOT_FOUND', 'no such Buy API in the current catalogue');
+      let host = '';
+      try { host = new URL(svc.url).host; } catch { /* leave empty */ }
+      return ok({
+        service: {
+          id: svc.id, title: svc.title, description: svc.description, platform: svc.platform, provider: svc.provider ?? null, method: svc.method, host, available: svc.available,
+          price: svc.price ? { indicative: true, usd: svc.price.usd, minUsd: formatUsdt(svc.price.minAtomic), maxUsd: formatUsdt(svc.price.maxAtomic), options: svc.price.options.map((o) => ({ label: o.label, usd: o.usd })), tokens: svc.price.tokens } : null,
+          inputSchema: svc.inputSchema ?? null,
+        },
+        payment: {
+          enabled: Boolean(rt.buy) && Boolean(rt.live),
+          how: 'Your wallet signs a one-time EIP-3009 authorization for the exact price in USDT on Celo. Buy settles it on-chain and runs the API. Payrail never holds your funds and never has your key.',
+          network: { name: 'celo', chainId: cat.payment.chainId },
+          token: { symbol: 'USDT', address: buyConfig?.usdt ?? cat.payment.tokens.find((t) => t.symbol === 'USDT')?.address ?? null },
+          payTo: buyConfig?.payTo ?? cat.payment.payTo ?? null,
+          scheme: 'exact',
+          maxPerPayment: buyConfig ? formatUsdt(buyConfig.maxPerPaymentAtomic) : null,
+        },
+        fee: { percent: 3, state: 'not_collected', note: feeNote },
+        source: { url: 'https://gateway.usebuy.ai/v1/catalog', fetchedAt: new Date(cat.fetchedAt).toISOString(), stale: cat.stale },
+      });
+    }
+    if (!rt.live) throw new ApiError(403, 'NOT_AVAILABLE', 'Buy payments exist only in the production environment');
+    if (!rt.buy) throw new ApiError(409, 'BUY_PAYMENTS_DISABLED', 'Buy payments are not enabled on this server (the operator must set PAYRAIL_BUY_PAYMENTS=1). Nothing can be paid.');
+    const buyBuyer = () => {
+      const bid = buyer();
+      const w = queryOne(db, "SELECT wallet FROM account_wallets WHERE account_id = ? AND kind = 'buyer'", bid);
+      if (!w) throw new ApiError(409, 'NO_WALLET', 'sign in with your wallet first');
+      return { id: bid, wallet: String(w.wallet) };
+    };
+    if (method === 'POST' && path === '/buy/quote') {
+      const b = buyBuyer();
+      return ok(await rt.buy.quote({ buyerId: b.id, wallet: b.wallet, serviceId: str(body.serviceId, 'serviceId', 160), input: body.input ?? {} }), 201);
+    }
+    if (method === 'POST' && path === '/buy/pay') {
+      const b = buyBuyer();
+      const r = await rt.buy.pay({ buyerId: b.id, orderId: str(body.orderId, 'orderId', 80), signature: str(body.signature, 'signature', 400) });
+      return ok(r);
+    }
+    if (method === 'GET' && path === '/buy/orders') return ok({ orders: rt.buy.list(buyer()) });
+    if (method === 'GET' && (m = path.match(/^\/buy\/order\/([\w-]{1,80})$/))) {
+      const id = buyer();
+      return ok({ order: rt.buy.order(id, m[1]!), events: rt.buy.events(id, m[1]!) });
+    }
+    if (method === 'POST' && (m = path.match(/^\/buy\/order\/([\w-]{1,80})\/recheck$/))) {
+      const id = buyer();
+      return ok({ order: await rt.buy.recheck({ buyerId: id, orderId: m[1]! }) });
+    }
+  }
+
   if (method === 'POST' && path === '/credits') {
     if (rt.live) throw new ApiError(403, 'NOT_AVAILABLE', 'test credits do not exist in real-funds mode');
     const id = buyer();
@@ -945,6 +1013,7 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
         },
         features: {
           conversion: Boolean(rt.conversion && !rt.conversion.simulated),
+          buyPayments: Boolean(rt.buy),
           payouts: Boolean(rt.live.payoutRequestsEnabled),
         },
       } : {}),

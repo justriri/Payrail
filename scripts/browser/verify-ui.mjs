@@ -49,7 +49,7 @@ check('buyer overview: compact and without the catalogue', (await b.ev('document
 await b.shot('ui-buyer-desktop');
 
 await go('#/buyer/explore', 1600);
-check('explore: catalogue only, as a card grid', (await vis('#services-card')) && !(await vis('#fund-card')) && (await b.ev(`document.querySelectorAll('#cat-list .svc').length`)) === 4);
+check('explore: catalogue only, as a card grid', (await vis('#services-card')) && !(await vis('#fund-card')) && (await b.ev(`document.querySelectorAll('#cat-list .svc').length`)) === 7);
 const cards = await b.ev(`JSON.stringify([...document.querySelectorAll('#cat-list .svc')].map(c => { const r = c.getBoundingClientRect(); return { t: Math.round(r.top), h: Math.round(r.height) }; }))`).then(JSON.parse);
 const row = cards.filter((c) => Math.abs(c.t - cards[0].t) < 4);
 check('explore: 2-3 cards per row, equal heights', row.length >= 2 && row.length <= 3 && row.every((c) => Math.abs(c.h - row[0].h) <= 2), `${row.length} per row`);

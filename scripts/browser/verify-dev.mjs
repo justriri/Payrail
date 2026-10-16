@@ -54,7 +54,7 @@ check('test credits are capped per buyer (a development rule): the balance stays
 await go('#/buyer/explore', 1800);
 const cards = await b.ev(`JSON.stringify([...document.querySelectorAll('#cat-list .svc')].map(c => ({ id: c.dataset.id, text: c.innerText })))`).then(JSON.parse);
 const demoCards = cards.filter((c) => /DEMO/.test(c.text));
-check('explore lists the demo APIs, labelled DEMO, with View API; the simulated Buy services are labelled SIMULATED', demoCards.length >= 2 && demoCards.every((c) => /View API/.test(c.text) && /Seller:/.test(c.text)) && cards.filter((c) => !/DEMO/.test(c.text)).every((c) => /SIMULATED/i.test(c.text)), cards.map((c) => c.text.replace(/\s+/g, ' ').slice(0, 60)).join(' | '));
+check('explore lists the demo APIs, labelled DEMO, with View API; the simulated Buy services are labelled SIMULATED', demoCards.length >= 2 && demoCards.every((c) => /View API/.test(c.text) && /Provider:/.test(c.text)) && cards.filter((c) => !/DEMO/.test(c.text)).every((c) => /SIMULATED/i.test(c.text)), cards.map((c) => c.text.replace(/\s+/g, ' ').slice(0, 60)).join(' | '));
 const price = cards.find((c) => /Demo token price/.test(c.text));
 await b.ev(`document.querySelector('#cat-list .svc[data-id=${JSON.stringify(price.id)}] a.btn').click(); 0`);
 await b.sleep(2600);
