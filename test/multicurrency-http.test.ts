@@ -64,8 +64,8 @@ test('funding over HTTP: the asset picker lists live routes; unsupported or unav
     const by = (s: string) => routes.body.routes.find((r: any) => r.symbol === s);
     assert.equal(by('USDT').passthrough, true);
     assert.equal(by('cNGN').usable, true);
-    assert.equal(by('wCOP').usable, false);
-    assert.match(by('wCOP').reason, /not enabled/);
+    assert.equal(by('CELO').usable, false);
+    assert.match(by('CELO').reason, /not enabled/);
     assert.match(by('G$').reason, /no liquidity/);
     assert.equal(by('CWT'), undefined);
 

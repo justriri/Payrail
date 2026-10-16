@@ -88,11 +88,11 @@ export const DEFAULT_ASSET_POLICY: ReadonlyArray<AllowedAsset> = [
   { chainId: 42220, address: '0xD76f5Faf6888e24D9F04Bf92a0c8B921FE4390e0', symbol: 'wBRL', decimals: 18, fundingEnabled: true, payoutEnabled: true, note: 'deep both ways' },
   { chainId: 42220, address: '0xcebA9300f2b948710d2653dD7B07f33A8B32118C', symbol: 'USDC', decimals: 6, fundingEnabled: true, payoutEnabled: false, note: 'thin (about $1k)' },
   { chainId: 42220, address: '0xD2ab3C9A02DBBAB236BfEC45D1d755DF4267F771', symbol: 'USAT', decimals: 6, fundingEnabled: true, payoutEnabled: false, note: 'payout depth about $4.8k' },
-  { chainId: 42220, address: '0x8a1D45e102e886510e891d2Ec656a708991e2D76', symbol: 'wCOP', decimals: 18, fundingEnabled: false, payoutEnabled: false, note: 'not enabled yet' },
-  { chainId: 42220, address: '0x471EcE3750Da237f93B8E339c536989b8978a438', symbol: 'CELO', decimals: 18, fundingEnabled: false, payoutEnabled: false, note: 'payout depth about $33' },
-  { chainId: 42220, address: '0xD221812de1BD094f35587EE8E174B07B6167D9Af', symbol: 'WETH', decimals: 18, fundingEnabled: false, payoutEnabled: false, note: 'payout depth about $55' },
-  { chainId: 42220, address: '0x18Bc5bcC660cf2B9cE3cd51a404aFe1a0cBD3C22', symbol: 'IDRX', decimals: 2, fundingEnabled: false, payoutEnabled: false, note: 'payout depth about $2' },
-  { chainId: 42220, address: '0x337E7456B420bD3481e7FA61fA9850343d610d34', symbol: 'wMXN', decimals: 18, fundingEnabled: false, payoutEnabled: false, note: 'USDT -> wMXN has no makers' },
+  { chainId: 42220, address: '0x8a1D45e102e886510e891d2Ec656a708991e2D76', symbol: 'wCOP', decimals: 18, fundingEnabled: true, payoutEnabled: false, note: 'funding live-quoted 2026-10-16; payout not enabled' },
+  { chainId: 42220, address: '0x471EcE3750Da237f93B8E339c536989b8978a438', symbol: 'CELO', decimals: 18, fundingEnabled: false, payoutEnabled: false, note: 'the network gas token: kept off so a buyer cannot spend the CELO needed to pay gas' },
+  { chainId: 42220, address: '0xD221812de1BD094f35587EE8E174B07B6167D9Af', symbol: 'WETH', decimals: 18, fundingEnabled: true, payoutEnabled: false, note: 'funding live-quoted 2026-10-16; payout depth only about $41' },
+  { chainId: 42220, address: '0x18Bc5bcC660cf2B9cE3cd51a404aFe1a0cBD3C22', symbol: 'IDRX', decimals: 2, fundingEnabled: true, payoutEnabled: false, note: 'funding live-quoted 2026-10-16 (minimum swap about $10); payout depth about $2' },
+  { chainId: 42220, address: '0x337E7456B420bD3481e7FA61fA9850343d610d34', symbol: 'wMXN', decimals: 18, fundingEnabled: true, payoutEnabled: false, note: 'funding live-quoted 2026-10-16 (about $200 deep); USDT -> wMXN has no makers' },
   { chainId: 42220, address: '0x62B8B11039FcfE5aB0C56E502b1C372A3d2a9c7A', symbol: 'G$', decimals: 18, fundingEnabled: false, payoutEnabled: false, note: 'no liquidity either way' },
 ];
 

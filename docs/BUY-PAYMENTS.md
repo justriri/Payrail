@@ -66,3 +66,27 @@ Facts and limits:
 - Textile pays the swap output to the wallet that signs it; the API has no recipient field, so conversion on behalf of another wallet is impossible by design.
 
 Needs a real-wallet test (not done): cNGN -> USDT -> Buy purchase end to end; wARS, wBRL, USDC, USAT each separately (a route listed in one direction proves nothing about others); firm quote acceptance with a real browser wallet (TakerControl signature format has only been confirmed by an unfunded-wallet probe); gas (CELO or a fee currency) in the buyer wallet.
+
+## Every Textile route into USDT on Celo (checked 2026-10-16, read-only)
+Source: Textile's public ladder (`GET /v2/rfq/levels?chainId=42220`) and indicative previews, run through the production listing code with `node scripts/buy-routes-check.ts`; token symbol/decimals read from each contract on-chain. All routes are X -> USDT `0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e`, Celo 42220, settled by the Textile reactor `LimitOrderReactor`; the buyer's wallet is the taker, approves exactly the sell amount to the reactor, then sends `executeBatch` with one order. Minimum swap is Textile's ~1 USD corridor floor for every route.
+
+| Currency | Contract | Dec | Live quote 2026-10-16 | Smallest swap (worth) | In the app | Executed on mainnet by Payrail |
+|---|---|---|---|---|---|---|
+| cNGN | 0xF682…1a4f | 6 | yes | 1358.3 (0.998 USDT) | enabled | **yes**, 0x102eafff… (2026-10-14) |
+| wARS | 0x0DC4…D90D | 18 | yes | 1616.4 (1.000) | enabled | no |
+| wBRL | 0xD76f…90e0 | 18 | yes | 5.083 (1.000) | enabled | no |
+| USDC | 0xcebA…118C | 6 | yes | 0.999 (1.000) | enabled | no |
+| USAT | 0xD2ab…F771 | 6 | yes | 1.00005 (0.999) | enabled | no |
+| IDRX | 0x18Bc…3C22 | 2 | yes | 17,940 (1.000) | enabled | no |
+| wCOP | 0x8a1D…2D76 | 18 | yes | 3169 (1.000) | enabled | no |
+| WETH | 0xD221…D9Af | 18 | yes | 0.00041 (0.999) | enabled | no |
+| wMXN | 0x337E…0d34 | 18 | yes (about $200 deep) | 18.45 (1.000) | enabled | no |
+| CELO | 0x471E…a438 | 18 | yes | - | **off on purpose** (network gas token; a buyer could spend the CELO needed for gas). Operator can enable it | no |
+| G$ | 0x62B8…9c7A | 18 | no: listed with no levels | - | not offered | no |
+| CWT | - | - | not on any ladder, address book or spec | - | not offered | no |
+
+Notes:
+- "Enabled" means the page offers the currency when the live ladder lists it, the smallest swap fits `PAYRAIL_BUY_CONVERT_MAX_USD` (default 2), and Textile returns a price; otherwise it is shown as unavailable with the reason. Allow-list defaults only apply when conversion is switched on (`PAYRAIL_BUY_CONVERSION=1`).
+- Not yet observed for any non-cNGN route: a firm quote (needs a wallet-signed TakerControl proof and reserves maker inventory), the exact `executeBatch` gas, and the swap on mainnet. Tests with fakes cover quote validation, wallet steps, verification and failure handling for every enabled currency, but are not mainnet evidence.
+- Gas: the wallet needs CELO (or a fee-currency stablecoin) for the approve and the swap; the earlier cNGN run measured roughly 55k gas for an approve at ~200 gwei.
+- USDC and USAT are also accepted by Buy directly (EIP-3009). Converting them to USDT first works but is an extra step; paying Buy in USDC/USAT directly would be simpler and is not implemented because the Buy flow is pinned to USDT.

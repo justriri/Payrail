@@ -91,7 +91,7 @@ test('enabling an asset does not create liquidity: a disabled-but-live route and
   const after = (await reg.find('payout', 'wMXN'))!;
   assert.equal(after.enabled, true);
   assert.equal(after.usable, false);
-  const wcop = (await reg.find('funding', 'wCOP'))!;
-  assert.equal(wcop.available, true);
-  assert.equal(wcop.usable, false);
+  const celo = (await reg.find('funding', 'CELO'))!;
+  assert.equal(celo.available, true);
+  assert.equal(celo.usable, false);
 });

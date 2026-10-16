@@ -90,8 +90,8 @@ test('currencies: only routes Textile actually lists are offered; an unknown cur
     assert.equal(cn.available, true);
     assert.equal(cn.route, 'cNGN -> USDT on Textile (Celo)');
     assert.ok(cn.evidence.level && cn.evidence.basis, 'every currency states how its route is known');
-    const wmxn = c.currencies.find((x: any) => x.symbol === 'wMXN');
-    assert.ok(!wmxn || wmxn.available === false, 'a currency the operator did not enable is not offered as available');
+    const celo = c.currencies.find((x: any) => x.symbol === 'CELO');
+    assert.ok(!celo || celo.available === false, 'a currency the operator did not enable is not offered as available');
     const b = await walletBuyer(s);
     const order = (await s.call('POST', '/buy/quote', { bearer: b.token, body: { serviceId: 'x.posts.search', input: { query: 'a' } } })).body.order;
     const cwt = await s.call('POST', '/buy/convert/estimate', { bearer: b.token, body: { orderId: order.id, symbol: 'CWT' } });

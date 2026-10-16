@@ -57,9 +57,9 @@ test('funding routes: only live AND enabled assets are usable; USDT needs no con
   assert.equal(by('USDT').usable, true);
   for (const s of ['cNGN', 'wARS', 'wBRL', 'USDC', 'USAT']) assert.equal(by(s).usable, true, s);
   // live but not enabled by the operator
-  assert.equal(by('wCOP').available, true);
-  assert.equal(by('wCOP').usable, false);
-  assert.match(by('wCOP').reason!, /not enabled/);
+  assert.equal(by('CELO').available, true);
+  assert.equal(by('CELO').usable, false);
+  assert.match(by('CELO').reason!, /not enabled/);
   // listed with no liquidity
   assert.equal(by('G$').available, false);
   assert.match(by('G$').reason!, /no liquidity/);

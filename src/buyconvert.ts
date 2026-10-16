@@ -124,20 +124,48 @@ export function createBuyConvert(d: BuyConvertDeps) {
     };
   }
 
-  /** Currencies the buyer may pay with: only routes that are live on Textile's ladder AND enabled by the operator. Each states how it is known. */
-  async function currencies() {
-    const rs = await d.registry.routes('funding');
-    return rs
-      .filter((r) => !r.passthrough)
-      .map((r) => ({
+  /**
+   * Currencies the buyer may pay with: only routes that are live on Textile's ladder AND enabled by the operator AND whose smallest allowed
+   * swap (Textile's corridor minimum) fits the per-conversion limit. Each states how it is known. A short cache keeps the page quick.
+   */
+  let cache: { at: number; value: Awaited<ReturnType<typeof buildCurrencies>> } | undefined;
+  async function buildCurrencies() {
+    const rs = (await d.registry.routes('funding')).filter((r) => !r.passthrough);
+    return Promise.all(rs.map(async (r) => {
+      let available = r.usable;
+      let reason: string | null = r.usable ? null : r.reason;
+      let minUsdt: string | null = null;
+      if (r.usable) {
+        // what the smallest swap Textile allows is worth in USDT (an indicative price; reserves nothing)
+        try {
+          const q = await d.provider.quote({ direction: 'funding', from: r.from, to: USDT_CELO, inputAtomic: r.minInputAtomic });
+          minUsdt = usdtText(q.expectedOutputAtomic);
+          if (q.expectedOutputAtomic > d.maxUsdtAtomic) {
+            available = false;
+            reason = `Textile's smallest swap for ${r.from.symbol} is about ${minUsdt} USDT, above this server's limit of ${usdtText(d.maxUsdtAtomic)} USDT per conversion`;
+          }
+        } catch (e) {
+          available = false;
+          reason = `Textile gave no price for ${r.from.symbol} -> USDT just now (${(e as Error).message.slice(0, 80)})`;
+        }
+      }
+      return {
         symbol: r.from.symbol, address: r.from.address, decimals: r.from.decimals,
-        available: r.usable,
-        reason: r.usable ? null : r.reason,
+        available,
+        reason,
         minSell: r.usable ? formatUnits(r.minInputAtomic, r.from.decimals) : null,
         maxSell: r.usable ? formatUnits(r.maxInputAtomic, r.from.decimals) : null,
+        minUsdt,
         route: `${r.from.symbol} -> USDT on Textile (Celo)`,
         evidence: { level: r.evidence.level, basis: r.evidence.basis, executedByPayrailOnMainnet: r.evidence.level === 'live-executed' },
-      }));
+      };
+    }));
+  }
+  async function currencies() {
+    if (cache && now() - cache.at < 30_000) return cache.value;
+    const value = await buildCurrencies();
+    cache = { at: now(), value };
+    return value;
   }
 
   async function estimate(a: { buyerId: string; wallet: string; symbol: string; targetAtomic: bigint }) {

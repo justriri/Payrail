@@ -45,6 +45,11 @@ for (const [symbol, address, decimals] of [
   ['wARS', '0x0dc4f92879b7670e5f4e4e6e3c801d229129d90d', 18],
   ['wBRL', '0xd76f5faf6888e24d9f04bf92a0c8b921fe4390e0', 18],
   ['IDRX', '0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c22', 2],
+  // Listed on Textile's live Celo ladder (read 2026-10-16); symbol and decimals read from the token contracts on-chain the same day.
+  ['wCOP', '0x8a1d45e102e886510e891d2ec656a708991e2d76', 18],
+  ['WETH', '0xd221812de1bd094f35587ee8e174b07b6167d9af', 18],
+  ['wMXN', '0x337e7456b420bd3481e7fa61fa9850343d610d34', 18],
+  ['CELO', '0x471ece3750da237f93b8e339c536989b8978a438', 18],
 ] as const) {
   assets.push({
     symbol,
