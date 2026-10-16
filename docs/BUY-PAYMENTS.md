@@ -46,3 +46,23 @@ The server that was running was the development server (`npm run dev:market`, po
 - That Buy accepts an authorization signed by the buyer's wallet and relayed through Payrail's server (the same mechanism the operator flow already used successfully, but the buyer-wallet-via-server path is untested live).
 - A real USDT payment of a few cents and checking the receipt on Celoscan.
 - Fee collection (blocked on the design decision above).
+
+## Paying with cNGN and other currencies (Textile + Buy)
+Roles: **Buy AI** sells the API and is paid in USDT on Celo. **Textile Protocol** is the conversion layer. Textile does not settle API purchases and Buy does not accept cNGN, so the hand-off is USDT in the buyer's own wallet.
+
+Flow (all signed and sent by the buyer's wallet; Payrail holds no key and no funds):
+1. Get the exact Buy price. If the wallet holds less USDT than that, the page shows the shortfall and the currencies Textile can convert.
+2. Pick a currency and see the estimate: API price, cNGN to sell, rate, Textile fee (already inside the rate; Payrail adds none), USDT received (expected and guaranteed minimum), USDT left in the wallet.
+3. Approve: the wallet signs Textile's TakerControl proof, Payrail asks Textile for a firm quote and validates it (taker, reactor, exact approval, single order, minimum, expiry), and the wallet sends the validated approve + swap.
+4. Payrail marks the conversion CONFIRMED only from the receipt (success, confirmations, Fill from the Textile reactor for this wallet, USDT of the exact contract delivered to this wallet, at least the minimum shown). Reporting a hash proves nothing.
+5. A fresh Buy quote is made with the conversion attached; the wallet signs the EIP-3009 authorization and the normal Buy flow runs. The receipt shows the conversion and the payment.
+
+Facts and limits:
+- Textile's corridor minimum is about 1 USD, so the swap is larger than a cent-sized API price; the rest stays in the wallet as USDT. The page says so before approval.
+- A currency is offered only if Textile's live ladder lists X -> USDT and the operator allow-list enables it. Others (CWT, G$, wMXN...) are shown as unavailable with the reason; nothing is simulated.
+- Route evidence (docs/ROUTE-MATRIX.md): cNGN -> USDT executed by Payrail on mainnet; wARS, wBRL, USDC, USAT live-quoted only, not executed. The page states this per currency.
+- Platform fee: unchanged, 3% recorded as due and not collected; no fee is added to the conversion, so the buyer is never charged twice.
+- Off by default: `PAYRAIL_BUY_CONVERSION=1` (requires `PAYRAIL_BUY_PAYMENTS=1`); `PAYRAIL_BUY_CONVERT_MAX_USD` (default 2) caps one conversion. It has never run on mainnet through this path.
+- Textile pays the swap output to the wallet that signs it; the API has no recipient field, so conversion on behalf of another wallet is impossible by design.
+
+Needs a real-wallet test (not done): cNGN -> USDT -> Buy purchase end to end; wARS, wBRL, USDC, USAT each separately (a route listed in one direction proves nothing about others); firm quote acceptance with a real browser wallet (TakerControl signature format has only been confirmed by an unfunded-wallet probe); gas (CELO or a fee currency) in the buyer wallet.

@@ -3,8 +3,10 @@
 // can be exercised by tests with a fake chain, without a network and without starting a server.
 import { ASSETS } from './assets.ts';
 import { createBuyerSwapRuntime } from './buyerswap.ts';
+import type { BuyerSwapRuntime } from './buyerswap.ts';
 import { TEXTILE_REACTOR } from './config.ts';
 import { RouteRegistry, seedConversionAssets } from './conversion.ts';
+import type { ConversionProvider } from './conversion.ts';
 import { openDb } from './db.ts';
 import { assertProductionDatabase, stampEnvironment, EnvironmentError } from './envguard.ts';
 import { RateLimiter } from './egress.ts';
@@ -19,6 +21,7 @@ import { createTextileRouteProvider } from './textileroutes.ts';
 import { masterKeyFrom } from './vault.ts';
 import { EXPECTED_PAY_TO } from './buy.ts';
 import { createBuyPay } from './buypay.ts';
+import { createBuyConvert } from './buyconvert.ts';
 import type { SpendingPolicy } from './policy.ts';
 import type { VerifyDeps } from './verify.ts';
 import { isAddress } from 'viem';
@@ -39,9 +42,13 @@ export interface SetupDeps {
   buyCatalog: MarketRuntime['buyCatalog'];
   /** needed only for PAYRAIL_BUY_PAYMENTS=1: independent on-chain settlement checks and the spending policy (allowed hosts) */
   buyVerify?: VerifyDeps;
+  /** USDT balance of a wallet (read-only). Needed for PAYRAIL_BUY_CONVERSION=1 and used to refuse a payment the wallet cannot cover. */
+  readUsdtBalance?(wallet: `0x${string}`): Promise<bigint>;
   buyPolicy?: SpendingPolicy;
   /** tests only: the fetch used for the gateway (production leaves it undefined = the global fetch) */
   buyFetch?: typeof fetch;
+  /** tests only: replace the live Textile provider and the buyer-signed swap runtime used for PAYRAIL_BUY_CONVERSION */
+  buyConvertOverride?: { provider: ConversionProvider; buyerSwap: BuyerSwapRuntime };
   /** tests only: do not wait between settlement checks */
   buySettleDelayMs?: number;
   log(line: string): void;
@@ -138,10 +145,28 @@ export async function setupMarket(d: SetupDeps): Promise<MarketRuntime | undefin
     const getCatalog = d.buyCatalog;
     buy = createBuyPay({
       db, catalog: { get: async () => getCatalog() }, policy: d.buyPolicy, verify: d.buyVerify, chainId: 42220, usdt: usdt.address, payTo: buyPayTo as `0x${string}`,
-      maxPerPaymentAtomic: BigInt(Math.round(buyCapUsd * 1_000_000)), feeBps: 300, ...(d.buyFetch ? { fetchImpl: d.buyFetch } : {}), ...(d.buySettleDelayMs !== undefined ? { settleDelayMs: d.buySettleDelayMs } : {}),
+      maxPerPaymentAtomic: BigInt(Math.round(buyCapUsd * 1_000_000)), feeBps: 300, ...(d.readUsdtBalance ? { usdtBalance: d.readUsdtBalance } : {}), ...(d.buyFetch ? { fetchImpl: d.buyFetch } : {}), ...(d.buySettleDelayMs !== undefined ? { settleDelayMs: d.buySettleDelayMs } : {}),
     });
     const interrupted = buy.recoverInterrupted();
     d.log(`BUY PAYMENTS ENABLED: buyers pay Buy AI directly from their own wallet in USDT on Celo (limit ${buyCapUsd} USDT per payment, payee ${buyPayTo}). Platform fee: recorded as due, NOT collected.${interrupted ? ` ${interrupted} interrupted order(s) marked UNRESOLVED.` : ''}`);
+  }
+
+  // Paying a Buy API with cNGN etc.: Textile converts in the BUYER's wallet, then Buy is paid in USDT. Its own opt-in, off by default,
+  // and never started without Buy payments (the conversion has no purpose without them). It has not been run on mainnet through this path.
+  let buyConvert: ReturnType<typeof createBuyConvert> | undefined;
+  if (env.PAYRAIL_BUY_CONVERSION === '1') {
+    if (!buy) throw new SetupError('PAYRAIL_BUY_CONVERSION=1 needs PAYRAIL_BUY_PAYMENTS=1: a conversion only exists to fund a Buy purchase.');
+    if (!d.readUsdtBalance) throw new SetupError('PAYRAIL_BUY_CONVERSION=1 needs a way to read wallet USDT balances.');
+    const maxUsd = Number(env.PAYRAIL_BUY_CONVERT_MAX_USD ?? '2');
+    if (!Number.isFinite(maxUsd) || maxUsd <= 0) throw new SetupError('PAYRAIL_BUY_CONVERT_MAX_USD must be a positive number.');
+    seedConversionAssets(db);
+    const textile: ConversionProvider = d.buyConvertOverride?.provider ?? createTextileRouteProvider();
+    buyConvert = createBuyConvert({
+      db, registry: new RouteRegistry(db, [textile]), provider: textile,
+      buyerSwap: d.buyConvertOverride?.buyerSwap ?? createBuyerSwapRuntime({ firmQuote, getAllowance: d.readAllowance, provider: textile, chainId: 42220, tag: d.attributionTag }),
+      reader, usdt: usdt.address, reactor: TEXTILE_REACTOR, chainId: 42220, minConfirmations: confirmations, maxUsdtAtomic: BigInt(Math.round(maxUsd * 1_000_000)),
+    });
+    d.log(`BUY CONVERSION ENABLED (not yet run on mainnet): buyers convert cNGN etc. to USDT with Textile in their own wallet (up to ${maxUsd} USDT per conversion), then pay Buy. Platform fee: none added here.`);
   }
 
   const market: MarketRuntime = {
@@ -155,6 +180,7 @@ export async function setupMarket(d: SetupDeps): Promise<MarketRuntime | undefin
     ...(d.buyCatalog ? { buyCatalog: d.buyCatalog } : {}),
     live,
     ...(buy ? { buy } : {}),
+    ...(buyConvert ? { buyConvert } : {}),
     ...(conversion ? { conversion } : {}),
   };
   d.log(`REAL-FUNDS MARKETPLACE: USDT on Celo mainnet. Deposits to ${depositAddress} are credited after ${confirmations} confirmations (cap ${cap / 1_000_000n} USDT each). Seller payouts: DISABLED. Conversion: ${conversion ? 'buyer-signed (unverified on mainnet)' : 'DISABLED'}. Database: ${dbPath}.`);

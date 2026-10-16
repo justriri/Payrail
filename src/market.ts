@@ -26,6 +26,8 @@ import { CELO_CHAIN_ID } from './conversion.ts';
 import { WalletAuthError, completeBuyerLogin, startBuyerLogin } from './walletauth.ts';
 import { BuyPayError, formatUsdt } from './buypay.ts';
 import type { BuyPay } from './buypay.ts';
+import { BuyConvertError } from './buyconvert.ts';
+import type { BuyConvert } from './buyconvert.ts';
 import type { FundingConfig } from './funding.ts';
 import { PayoutError, cancelPayout, payoutsOf, requestPayout } from './payouts.ts';
 import { publishReadiness, updateListingDetails } from './seller.ts';
@@ -65,6 +67,8 @@ export interface MarketRuntime {
   buyCatalog?: () => Promise<Catalog>;
   /** Buy AI purchases paid by the buyer's own wallet (x402 / EIP-3009). Only present when the operator enabled it (PAYRAIL_BUY_PAYMENTS=1). */
   buy?: BuyPay;
+  /** Paying a Buy API with cNGN etc.: Textile converts in the BUYER's wallet, then Buy is paid in USDT. Its own opt-in (PAYRAIL_BUY_CONVERSION=1). */
+  buyConvert?: BuyConvert;
   /** true when the Buy catalog comes from the simulator rather than the real gateway */
   buySimulated?: boolean;
   /** enable sandbox sellers (server-derived test wallets, in-process sandbox hosts). Test-credit mode only. */
@@ -417,11 +421,11 @@ function mapError(e: unknown): MarketResponse {
   if (e instanceof ApiError) return { status: e.status, body: { ok: false, code: e.code, message: e.message, retryable: e.status >= 500 || e.status === 429 } };
   const code = (e as { code?: string }).code ?? 'ERROR';
   const message = (e as Error).message;
-  const known = e instanceof LedgerError || e instanceof SellerError || e instanceof VaultError || e instanceof ContractError || e instanceof GatewayError || e instanceof TesterError || e instanceof FundingError || e instanceof PayoutError || e instanceof AgentError || e instanceof EscrowError || e instanceof FundingOpError || e instanceof PayoutConvError || e instanceof WalletAuthError || e instanceof BuyPayError;
+  const known = e instanceof LedgerError || e instanceof SellerError || e instanceof VaultError || e instanceof ContractError || e instanceof GatewayError || e instanceof TesterError || e instanceof FundingError || e instanceof PayoutError || e instanceof AgentError || e instanceof EscrowError || e instanceof FundingOpError || e instanceof PayoutConvError || e instanceof WalletAuthError || e instanceof BuyPayError || e instanceof BuyConvertError;
   if (!known) return { status: 500, body: { ok: false, code: 'INTERNAL_ERROR', message: 'Something went wrong on our side.' } };
   const status: Record<string, number> = {
     SESSION_INVALID: 401, NOT_OWNER: 403, NOT_FOUND: 404, INSUFFICIENT_CREDITS: 402, IDEMPOTENCY_CONFLICT: 409, WRONG_STATE: 409, HOST_CLAIMED: 409,
-    LISTING_NOT_PUBLISHED: 409, CONTRACT_NOT_APPROVED: 409, RATE_LIMITED: 429, DOMAIN_PROOF_FAILED: 422, BAD_SIGNATURE: 422, WRONG_NETWORK: 422, NONCE_INVALID: 401, SERVICE_UNAVAILABLE: 409, INVALID_INPUT: 422, NO_USDT_OFFER: 409, PRICE_ABOVE_LIMIT: 422, CHALLENGE_REJECTED: 409, GATEWAY_UNREACHABLE: 502,
+    LISTING_NOT_PUBLISHED: 409, CONTRACT_NOT_APPROVED: 409, RATE_LIMITED: 429, DOMAIN_PROOF_FAILED: 422, BAD_SIGNATURE: 422, WRONG_NETWORK: 422, NONCE_INVALID: 401, SERVICE_UNAVAILABLE: 409, INVALID_INPUT: 422, NO_USDT_OFFER: 409, PRICE_ABOVE_LIMIT: 422, CHALLENGE_REJECTED: 409, GATEWAY_UNREACHABLE: 502, INSUFFICIENT_USDT: 409, UNSUPPORTED_CURRENCY: 422, ABOVE_LIMIT: 422, NO_QUOTE: 409, TX_ALREADY_USED: 409, QUOTE_STALE: 409,
     WALLET_TAKEN: 409, NO_FUNDING_WALLET: 409, TX_NOT_FOUND: 404, TX_REVERTED: 422, NOT_ENOUGH_CONFIRMATIONS: 409, NO_MATCHING_TRANSFER: 422, OVER_LIMIT: 422, READ_FAILED: 502,
     KEY_INVALID: 401, LISTING_NOT_ALLOWED: 403, ROUTE_UNAVAILABLE: 409, ADDRESS_REQUIRED: 409, ADDRESS_TAKEN: 409, BELOW_FLOOR: 422, ABOVE_DEPTH: 422, NOT_ENABLED: 409, PER_REQUEST_CAP: 403, DAILY_CAP: 403, INSUFFICIENT_EARNINGS: 409, NO_WALLET: 409, TEST_ASSET: 422, NO_SELLER_WALLET: 409, HOLD_FAILED: 502,
     BAD_AMOUNT: 400, BELOW_MINIMUM: 422, ABOVE_MAXIMUM: 422, DAILY_LIMIT: 429, TOO_MANY_OPEN: 409, QUOTE_UNAVAILABLE: 502, QUOTE_EXPIRED: 409, DIGEST_MISMATCH: 409, SIGNING_UNAVAILABLE: 409, NOT_ALLOWED: 403,
@@ -563,6 +567,18 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
         source: { url: 'https://gateway.usebuy.ai/v1/catalog', fetchedAt: new Date(cat.fetchedAt).toISOString(), stale: cat.stale },
       });
     }
+    if (method === 'GET' && path === '/buy/currencies') {
+      if (!rt.live || !rt.buyConvert) {
+        return ok({ enabled: false, currencies: [], note: 'Paying with another currency is not enabled on this server. Only USDT on Celo can be used.' });
+      }
+      const list = await rt.buyConvert.currencies();
+      return ok({
+        enabled: true,
+        settlement: { symbol: 'USDT', note: 'Buy AI is paid in USDT on Celo. Textile Protocol converts your currency into USDT in your own wallet first; it does not pay Buy.' },
+        conversionLimit: rt.buyConvert.config().maxUsdt,
+        currencies: list,
+      });
+    }
     if (!rt.live) throw new ApiError(403, 'NOT_AVAILABLE', 'Buy payments exist only in the production environment');
     if (!rt.buy) throw new ApiError(409, 'BUY_PAYMENTS_DISABLED', 'Buy payments are not enabled on this server (the operator must set PAYRAIL_BUY_PAYMENTS=1). Nothing can be paid.');
     const buyBuyer = () => {
@@ -573,17 +589,71 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
     };
     if (method === 'POST' && path === '/buy/quote') {
       const b = buyBuyer();
-      return ok(await rt.buy.quote({ buyerId: b.id, wallet: b.wallet, serviceId: str(body.serviceId, 'serviceId', 160), input: body.input ?? {} }), 201);
+      let conversionId: string | undefined;
+      if (typeof body.conversionId === 'string' && body.conversionId) {
+        // only a conversion that was PROVEN on-chain for this buyer may be attached to an order
+        if (!rt.buyConvert?.confirmedFor(b.id, body.conversionId)) throw new ApiError(409, 'CONVERSION_NOT_CONFIRMED', 'that conversion is not confirmed on-chain, so it cannot be attached to a purchase');
+        conversionId = body.conversionId;
+      }
+      return ok(await rt.buy.quote({ buyerId: b.id, wallet: b.wallet, serviceId: str(body.serviceId, 'serviceId', 160), input: body.input ?? {}, ...(conversionId ? { conversionId } : {}) }), 201);
     }
     if (method === 'POST' && path === '/buy/pay') {
       const b = buyBuyer();
       const r = await rt.buy.pay({ buyerId: b.id, orderId: str(body.orderId, 'orderId', 80), signature: str(body.signature, 'signature', 400) });
-      return ok(r);
+      return ok({ ...r, conversion: r.order.conversionId && rt.buyConvert ? rt.buyConvert.confirmedFor(b.id, r.order.conversionId) ?? null : null });
+    }
+    // ---- pay with another currency: Textile converts in the buyer's own wallet, THEN the Buy payment above is made in USDT
+    if (path.startsWith('/buy/convert/')) {
+      const bc = rt.buyConvert;
+      if (!bc) throw new ApiError(409, 'CONVERSION_DISABLED', 'paying with another currency is not enabled on this server (the operator must set PAYRAIL_BUY_CONVERSION=1). Only USDT can be used.');
+      if (method === 'POST' && path === '/buy/convert/estimate') {
+        const b = buyBuyer();
+        const need = await rt.buy.shortfall({ buyerId: b.id, orderId: str(body.orderId, 'orderId', 80) });
+        if (need.shortfallAtomic <= 0n) throw new ApiError(409, 'NO_CONVERSION_NEEDED', 'your wallet already holds enough USDT for this API; pay directly');
+        const r = await bc.estimate({ buyerId: b.id, wallet: b.wallet, symbol: str(body.symbol, 'symbol', 20), targetAtomic: need.shortfallAtomic });
+        return ok({ ...r, funding: { usdtBalance: need.balance, apiPrice: need.amount, shortfall: need.shortfall } }, 201);
+      }
+      if (method === 'POST' && path === '/buy/convert/proof') {
+        const b = buyBuyer();
+        const nonce = `0x${randomBytes(32).toString('hex')}` as `0x${string}`;
+        const issuedAt = now();
+        const t = takerControlTypedData(b.wallet as `0x${string}`, bc.config().chainId, nonce, issuedAt);
+        return ok({
+          typedData: { domain: t.domain, types: { EIP712Domain: [{ name: 'name', type: 'string' }, { name: 'version', type: 'string' }, { name: 'chainId', type: 'uint256' }], ...t.types }, primaryType: t.primaryType, message: { taker: t.message.taker, chainId: String(t.message.chainId), nonce, issuedAt: String(issuedAt) } },
+          nonce, issuedAt,
+          note: 'This signature lets Textile bind a price to YOUR wallet. It moves nothing.',
+        });
+      }
+      if (method === 'POST' && path === '/buy/convert/prepare') {
+        const b = buyBuyer();
+        const issued = Number(body.issuedAt);
+        const nonce = str(body.nonce, 'nonce', 70) as `0x${string}`;
+        const signature = str(body.signature, 'signature', 400) as `0x${string}`;
+        if (!Number.isFinite(issued) || Math.abs(now() - issued) > 5 * 60_000) throw new ApiError(422, 'PROOF_EXPIRED', 'the authorization is stale; sign again');
+        if (!(await verifyTakerProof({ taker: b.wallet as `0x${string}`, chainId: bc.config().chainId, nonce, issuedAtMs: issued, signature }))) throw new ApiError(422, 'BAD_SIGNATURE', 'the signature was not made by your signed-in wallet');
+        const r = await bc.prepare({ buyerId: b.id, wallet: b.wallet, conversionId: str(body.conversionId, 'conversionId', 80), proof: { nonce, issuedAt: issued, signature } });
+        return ok({ ...r, chainId: bc.config().chainId, note: 'These are the only transactions your wallet should send for this conversion. Check the destination in your wallet before confirming.' });
+      }
+      if (method === 'POST' && path === '/buy/convert/tx') {
+        const b = buyBuyer();
+        const kind = body.kind === 'approve' || body.kind === 'swap' ? body.kind : undefined;
+        if (!kind) throw bad('kind must be approve or swap');
+        return ok({ conversion: await bc.recordTx({ buyerId: b.id, conversionId: str(body.conversionId, 'conversionId', 80), kind, txHash: str(body.txHash, 'txHash', 80) }) });
+      }
+      if (method === 'GET' && (m = path.match(/^\/buy\/convert\/([\w-]{1,80})$/))) {
+        const id = buyer();
+        return ok({ conversion: bc.get(id, m[1]!), events: bc.events(id, m[1]!) });
+      }
+      if (method === 'POST' && (m = path.match(/^\/buy\/convert\/([\w-]{1,80})\/recheck$/))) {
+        const id = buyer();
+        return ok({ conversion: await bc.verify({ buyerId: id, conversionId: m[1]! }) });
+      }
     }
     if (method === 'GET' && path === '/buy/orders') return ok({ orders: rt.buy.list(buyer()) });
     if (method === 'GET' && (m = path.match(/^\/buy\/order\/([\w-]{1,80})$/))) {
       const id = buyer();
-      return ok({ order: rt.buy.order(id, m[1]!), events: rt.buy.events(id, m[1]!) });
+      const o = rt.buy.order(id, m[1]!);
+      return ok({ order: o, events: rt.buy.events(id, m[1]!), conversion: o.conversionId && rt.buyConvert ? rt.buyConvert.confirmedFor(id, o.conversionId) ?? null : null });
     }
     if (method === 'POST' && (m = path.match(/^\/buy\/order\/([\w-]{1,80})\/recheck$/))) {
       const id = buyer();
@@ -1014,6 +1084,7 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
         features: {
           conversion: Boolean(rt.conversion && !rt.conversion.simulated),
           buyPayments: Boolean(rt.buy),
+          buyConversion: Boolean(rt.buy && rt.buyConvert),
           payouts: Boolean(rt.live.payoutRequestsEnabled),
         },
       } : {}),

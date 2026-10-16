@@ -152,6 +152,9 @@ function renderBuy(d, cfg) {
       ['Platform fee', `${o.fee.amount} USDT (${o.fee.percent}%): ${o.fee.state === 'collected' ? 'collected' : 'DUE, not collected'}`],
       ['Created', o.createdAt.replace('T', ' ').slice(0, 19)],
     ];
+    if (convDone && o.conversionId === convDone.id) {
+      rowsR.splice(3, 0, ['Currency conversion (Textile)', `sold ${convDone.sell.amount} ${convDone.sell.symbol}, received ${convDone.receive.received} USDT; tx ${convDone.swapTx}`], ['Conversion fee (Textile)', `${convDone.conversionFee.amount} ${convDone.conversionFee.symbol} (included in the rate)`]);
+    }
     clear(container);
     container.append(el('p', { class: `headline ${c.cls === 'ok' ? 'ok' : c.cls === 'bad' ? 'bad' : 'warn'}`, id: 'run-headline', text: c.title }), c.text ? el('p', { class: 'muted', text: c.text }) : null,
       o.failure ? el('p', { class: 'problem', text: o.failure }) : null,
@@ -169,7 +172,9 @@ function renderBuy(d, cfg) {
 
   let current;
   let timer;
-  function showQuote(o) {
+  let convDone = null; // a conversion proven on-chain for this page's purchase
+  function showQuote(o, funding) {
+    const short = Boolean(funding) && funding.shortfallAtomic !== '0';
     clear(quoteBox);
     quoteBox.hidden = false;
     quoteBox.append(
@@ -180,14 +185,138 @@ function renderBuy(d, cfg) {
         el('tr', {}, el('th', { text: 'Paid from' }), el('td', { class: 'v', text: o.payer })),
         el('tr', {}, el('th', { text: 'Platform fee (3%)' }), el('td', { class: 'v', text: `${o.fee.amount} USDT, recorded as DUE, not collected` }))),
       el('p', { class: 'muted', id: 'quote-expiry' }),
-      el('p', { class: 'notice', text: 'Signing authorizes exactly this payment, once. If you do not sign, nothing happens.' }),
-      el('div', { class: 'row' }, el('button', { type: 'button', id: 'sign-btn', text: `Sign and pay ${o.amount} USDT with my wallet` })));
+      funding ? el('p', { class: 'muted', id: 'wallet-usdt', text: `Your wallet holds ${funding.usdtBalance} USDT.` }) : null,
+      short ? null : el('p', { class: 'notice', text: 'Signing authorizes exactly this payment, once. If you do not sign, nothing happens.' }),
+      short ? el('div', { id: 'convert-panel' }) : el('div', { class: 'row' }, el('button', { type: 'button', id: 'sign-btn', text: `Sign and pay ${o.amount} USDT with my wallet` })));
+    if (short) renderConvertPanel(o, funding);
     const exp = quoteBox.querySelector('#quote-expiry');
     clearInterval(timer);
     const tick = () => { const left = Math.max(0, o.validBefore - Math.floor(Date.now() / 1000)); exp.textContent = left > 0 ? `This quote is valid for ${left}s.` : 'This quote has expired. Get a new price.'; const b = quoteBox.querySelector('#sign-btn'); if (b && left === 0) b.disabled = true; };
     tick();
     timer = setInterval(tick, 1000);
-    quoteBox.querySelector('#sign-btn').addEventListener('click', () => payNow());
+    const sb = quoteBox.querySelector('#sign-btn');
+    if (sb) sb.addEventListener('click', () => payNow());
+  }
+
+  // ---- not enough USDT: convert another currency into USDT with Textile, in the buyer's own wallet, THEN pay Buy
+  async function renderConvertPanel(o, funding) {
+    const panel = quoteBox.querySelector('#convert-panel');
+    if (!panel) return;
+    clear(panel);
+    panel.append(el('p', { class: 'notice', id: 'shortfall', text: `This API costs ${o.amount} USDT and your wallet holds ${funding.usdtBalance} USDT. Buy only accepts USDT, so you are ${funding.shortfall} USDT short. Nothing has been charged.` }));
+    const cur = await api('/buy/currencies');
+    if (!cur.ok || !cur.enabled) {
+      panel.append(el('p', { class: 'muted', id: 'no-convert', text: 'Paying with another currency is not enabled on this server. Add USDT on Celo to your wallet, then get the price again.' }));
+      return;
+    }
+    const usable = cur.currencies.filter((c) => c.available);
+    const unavailable = cur.currencies.filter((c) => !c.available);
+    if (!usable.length) { panel.append(el('p', { class: 'muted', text: 'No currency can be converted into USDT right now. Add USDT to your wallet instead.' })); return; }
+    const sel = el('select', { id: 'pay-currency', 'aria-label': 'Pay with' }, el('option', { value: '', text: 'Choose a currency' }), ...usable.map((c) => el('option', { value: c.symbol, text: c.symbol })));
+    const note = el('p', { class: 'muted', id: 'currency-evidence' });
+    sel.addEventListener('change', () => {
+      const c = usable.find((x) => x.symbol === sel.value);
+      note.textContent = c ? `${c.route}. ${c.evidence.executedByPayrailOnMainnet ? 'Payrail has executed this route on Celo mainnet before.' : 'A live price exists, but Payrail has not executed this route on mainnet yet, so it has not been proven end to end.'} Allowed size: ${c.minSell} to ${c.maxSell} ${c.symbol}.` : '';
+    });
+    const estBtn = el('button', { type: 'button', id: 'estimate-btn', text: 'Show what it will cost' });
+    const box = el('div', { id: 'estimate-box' });
+    panel.append(el('label', { for: 'pay-currency', text: 'Pay with' }), sel, note, el('div', { class: 'row' }, estBtn),
+      unavailable.length ? el('p', { class: 'muted', id: 'unavailable-currencies', text: `Not available: ${unavailable.map((c) => `${c.symbol} (${c.reason})`).join('; ')}.` }) : null, box);
+    estBtn.addEventListener('click', async () => {
+      clear(box);
+      if (!sel.value) { box.append(el('p', { class: 'problem', text: 'Choose a currency first.' })); return; }
+      estBtn.disabled = true;
+      const r = await api('/buy/convert/estimate', { body: { orderId: o.id, symbol: sel.value }, bearer: buyerToken });
+      estBtn.disabled = false;
+      if (!r.ok) { box.append(el('p', { class: 'problem', id: 'estimate-error', text: fail(r) })); return; }
+      showEstimate(o, r.conversion, r.evidence, box);
+    });
+  }
+
+  function showEstimate(o, cv, evidence, box) {
+    clear(box);
+    box.append(
+      el('table', { class: 'quote', id: 'estimate-table' },
+        el('tr', {}, el('th', { text: 'API price (Buy, in USDT)' }), el('td', { class: 'v', id: 'est-api', text: `${cv.apiPrice.amount} USDT` })),
+        el('tr', {}, el('th', { text: `You sell (Textile, ${cv.sell.symbol} -> USDT)` }), el('td', { class: 'v', id: 'est-sell', text: `${cv.sell.amount} ${cv.sell.symbol}` })),
+        el('tr', {}, el('th', { text: 'Rate' }), el('td', { class: 'v', text: cv.rate })),
+        el('tr', {}, el('th', { text: 'Conversion cost (Textile fee, included)' }), el('td', { class: 'v', id: 'est-fee', text: `${cv.conversionFee.amount} ${cv.conversionFee.symbol}` })),
+        el('tr', {}, el('th', { text: 'You receive in USDT' }), el('td', { class: 'v', id: 'est-receive', text: `about ${cv.receive.expected}, never less than ${cv.receive.minimum}` })),
+        el('tr', {}, el('th', { text: 'Then paid to Buy' }), el('td', { class: 'v', text: `${cv.apiPrice.amount} USDT` })),
+        el('tr', {}, el('th', { text: 'Stays in your wallet as USDT' }), el('td', { class: 'v', id: 'est-left', text: `at least ${cv.leftoverAtLeast} USDT` })),
+        el('tr', {}, el('th', { text: 'Payrail fee' }), el('td', { class: 'v', text: `3% platform fee on the API price (${o.fee.amount} USDT), recorded as DUE, not collected. Payrail adds nothing to the conversion.` }))),
+      el('p', { class: 'muted', id: 'est-why', text: 'Textile converts at least about 1 USD at a time, so the conversion is larger than this API costs. The USDT you do not spend stays in your wallet. This is an estimate: the final price is fixed by Textile when you approve, and the conversion is rejected if it would give you less than the minimum shown.' }),
+      el('p', { class: 'muted', text: evidence && evidence.basis ? `Route evidence: ${evidence.basis}` : '' }),
+      el('div', { class: 'row' }, el('button', { type: 'button', id: 'convert-btn', text: `Approve: convert ${cv.sell.amount} ${cv.sell.symbol} to USDT with my wallet` })));
+    box.querySelector('#convert-btn').addEventListener('click', () => runConversion(o, cv, box));
+  }
+
+  async function runConversion(o, cv, box) {
+    const btn = box.querySelector('#convert-btn');
+    btn.disabled = true;
+    clear(stepsBox); msg.textContent = '';
+    const acct = await connect();
+    if (!acct) { btn.disabled = false; return; }
+    if (!(await signedIn(acct))) { btn.disabled = false; return; }
+    if (lower(acct) !== lower(o.payer)) { addStep('wallet-match', '').fail(`This conversion was prepared for ${o.payer}. Switch to that wallet.`); btn.disabled = false; return; }
+    const sp = addStep('proof', 'Sign Textile authorization in your wallet (a signature only: it moves nothing)');
+    const pr = await api('/buy/convert/proof', { body: {}, bearer: buyerToken });
+    if (!pr.ok) { sp.fail(fail(pr)); btn.disabled = false; return; }
+    let signature;
+    try { signature = await eth().request({ method: 'eth_signTypedData_v4', params: [acct, JSON.stringify(pr.typedData)] }); } catch (e) { sp.fail(`Signature declined: ${e.message || e}. Nothing was sent or converted.`); btn.disabled = false; return; }
+    sp.done('Authorization signed');
+    const sq = addStep('firm', 'Getting Textile\'s firm price and checking it against what you were shown…');
+    const prep = await api('/buy/convert/prepare', { body: { conversionId: cv.id, nonce: pr.nonce, issuedAt: pr.issuedAt, signature }, bearer: buyerToken });
+    if (!prep.ok) { sq.fail(`${fail(prep)}. Nothing was converted.`); btn.disabled = false; return; }
+    const pd = prep.prepared;
+    if (pd.kind === 'no_quote') { sq.fail(`Textile has no firm price for this right now: ${pd.reason}. Nothing was converted.`); btn.disabled = false; return; }
+    if (pd.kind === 'rejected') { sq.fail(`The firm price was rejected by Payrail\'s checks (${pd.problems.slice(0, 2).join('; ')}). Nothing was converted.`); btn.disabled = false; return; }
+    sq.done(`Firm price accepted: you pay ${pd.takerPays} (smallest units) and receive at least ${cv.receive.minimum} USDT`);
+    let swapHash = null;
+    for (const st of pd.steps) {
+      const label = st.kind === 'swap' ? `Confirm the conversion transaction in your wallet (${cv.sell.symbol} -> USDT)` : `Confirm the ${cv.sell.symbol} spending approval in your wallet`;
+      const sx = addStep(st.kind, label);
+      let hash;
+      try { hash = await eth().request({ method: 'eth_sendTransaction', params: [{ from: acct, to: st.to, data: st.data, value: '0x0' }] }); } catch (e) { sx.fail(`Transaction declined: ${e.message || e}. ${st.kind === 'swap' ? 'Nothing was converted.' : ''}`); btn.disabled = false; return; }
+      sx.done(`${st.kind === 'swap' ? 'Conversion' : 'Approval'} sent: ${String(hash).slice(0, 12)}…`);
+      const rep = await api('/buy/convert/tx', { body: { conversionId: cv.id, kind: st.kind === 'swap' ? 'swap' : 'approve', txHash: hash }, bearer: buyerToken });
+      if (!rep.ok) { addStep('report', '').fail(fail(rep)); }
+      if (st.kind === 'swap') swapHash = hash;
+    }
+    if (!swapHash) { addStep('swap', '').fail('No conversion transaction was produced.'); btn.disabled = false; return; }
+    const vs = addStep('verify', 'Verifying the conversion on-chain (nothing counts until the receipt proves it)…');
+    let last = null;
+    for (let i = 0; i < 60; i++) {
+      const r = await api(`/buy/convert/${cv.id}/recheck`, { body: {}, bearer: buyerToken });
+      if (r.ok) { last = r.conversion; if (['CONFIRMED', 'FAILED', 'REVIEW'].includes(last.state)) break; }
+      await new Promise((res) => setTimeout(res, 3000));
+    }
+    if (!last || last.state !== 'CONFIRMED') {
+      vs.fail(last ? (last.state === 'FAILED' ? 'The conversion transaction failed on-chain. No currency was converted.' : last.state === 'REVIEW' ? `The conversion could not be confirmed (${last.failure || 'unexpected result'}). It is NOT treated as done.` : 'Still waiting for confirmation. It is NOT confirmed yet; use Re-check conversion.') : 'Could not read the result yet. It is NOT confirmed.');
+      box.append(el('button', { type: 'button', class: 'secondary', id: 'recheck-conversion', text: 'Re-check conversion', onclick: async (e) => {
+        e.target.disabled = true;
+        const r = await api(`/buy/convert/${cv.id}/recheck`, { body: {}, bearer: buyerToken });
+        e.target.disabled = false;
+        if (r.ok && r.conversion.state === 'CONFIRMED') { convDone = r.conversion; afterConversion(r.conversion); } else msg.textContent = r.ok ? `Conversion state: ${r.conversion.state}` : fail(r);
+      } }));
+      btn.disabled = false;
+      return;
+    }
+    vs.done(`Conversion verified: ${last.receive.received} USDT arrived in your wallet`);
+    convDone = last;
+    afterConversion(last);
+  }
+
+  // the purchase is quoted again (the first quote has a short validity) with the proven conversion attached
+  async function afterConversion(cv) {
+    const c = checkBody(input.value);
+    msg.textContent = 'Asking Buy for a fresh exact price…';
+    const r = await api('/buy/quote', { body: { serviceId: s.id, input: c.value, conversionId: cv.id }, bearer: buyerToken });
+    msg.textContent = '';
+    if (!r.ok) { problem.textContent = fail(r); problem.hidden = false; return; }
+    current = r.order;
+    showQuote(current, r.funding);
+    quoteBox.prepend(el('p', { class: 'headline ok', id: 'conversion-done', text: `Converted: ${cv.sell.amount} ${cv.sell.symbol} became ${cv.receive.received} USDT (verified on-chain). Now pay ${current.amount} USDT to Buy.` }));
   }
 
   async function payNow() {
@@ -240,7 +369,8 @@ function renderBuy(d, cfg) {
     quoteBtn.disabled = false;
     if (!r.ok) { clear(quoteBox); quoteBox.hidden = true; problem.textContent = `${fail(r)}`; problem.hidden = false; return; }
     current = r.order;
-    showQuote(current);
+    convDone = null;
+    showQuote(current, r.funding);
   });
 }
 window.renderBuy = renderBuy;

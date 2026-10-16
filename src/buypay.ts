@@ -31,7 +31,7 @@ import type { SettlementEvidence, VerifyDeps } from './verify.ts';
 export class BuyPayError extends Error {
   readonly code:
     | 'NOT_FOUND' | 'NOT_OWNER' | 'SERVICE_UNAVAILABLE' | 'INVALID_INPUT' | 'NO_USDT_OFFER' | 'PRICE_ABOVE_LIMIT' | 'CHALLENGE_REJECTED'
-    | 'QUOTE_EXPIRED' | 'BAD_SIGNATURE' | 'WRONG_STATE' | 'RATE_LIMITED' | 'GATEWAY_UNREACHABLE';
+    | 'QUOTE_EXPIRED' | 'BAD_SIGNATURE' | 'WRONG_STATE' | 'RATE_LIMITED' | 'GATEWAY_UNREACHABLE' | 'INSUFFICIENT_USDT';
   constructor(code: BuyPayError['code'], message: string) {
     super(message);
     this.name = 'BuyPayError';
@@ -63,6 +63,8 @@ export interface BuyPayDeps {
   settleChecks?: number;
   settleDelayMs?: number;
   sleep?: (ms: number) => Promise<void>;
+  /** the wallet's USDT balance (a read-only chain call). When present, a payment the wallet cannot cover is refused BEFORE anything is sent. */
+  usdtBalance?: (wallet: Address) => Promise<bigint>;
 }
 
 const EIP3009_TYPES = {
@@ -90,7 +92,7 @@ interface Row {
   chain_id: number; scheme: string; asset_symbol: string; asset_address: string; pay_to: string; amount_atomic: string; nonce: string; valid_before: number;
   typed_data_json: string; state: BuyOrderState; failure: string | null; tx_hash: string | null; settlement_json: string | null; http_status: number | null;
   response_body: string | null; response_sha256: string | null; response_content_type: string | null; fee_bps: number; fee_atomic: string; fee_state: string;
-  fee_tx_hash: string | null; created_at: string; updated_at: string;
+  fee_tx_hash: string | null; created_at: string; updated_at: string; conversion_id: string | null;
 }
 
 export function createBuyPay(d: BuyPayDeps) {
@@ -145,6 +147,7 @@ export function createBuyPay(d: BuyPayDeps) {
           ? 'The platform fee was received on-chain.'
           : 'The 3% platform fee is recorded as DUE but has NOT been collected: the Buy payment goes entirely to Buy, and fee collection is not enabled.',
       },
+      conversionId: r.conversion_id ?? null,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
       // exactly what the wallet must sign (only while it can still be signed)
@@ -184,7 +187,7 @@ export function createBuyPay(d: BuyPayDeps) {
     return usdt;
   }
 
-  async function quote(a: { buyerId: string; wallet: string; serviceId: string; input: unknown }) {
+  async function quote(a: { buyerId: string; wallet: string; serviceId: string; input: unknown; conversionId?: string }) {
     if (!isAddress(a.wallet)) throw new BuyPayError('NOT_FOUND', 'a wallet address is required');
     const wallet = getAddress(a.wallet);
     if (a.input === null || typeof a.input !== 'object' || Array.isArray(a.input)) throw new BuyPayError('INVALID_INPUT', 'the input must be a JSON object');
@@ -217,13 +220,22 @@ export function createBuyPay(d: BuyPayDeps) {
     const fee = (offer.amountAtomic * BigInt(d.feeBps) + 9_999n) / 10_000n;
     d.db.prepare(
       `INSERT INTO buy_orders (id, buyer_id, wallet, service_id, service_url, input_json, input_sha256, network, chain_id, scheme, asset_symbol, asset_address, pay_to, amount_atomic,
-        nonce, valid_before, typed_data_json, state, fee_bps, fee_atomic, fee_state, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'USDT', ?, ?, ?, ?, ?, ?, 'QUOTED', ?, ?, 'not_collected', ?, ?)`,
+        nonce, valid_before, typed_data_json, state, fee_bps, fee_atomic, fee_state, created_at, updated_at, conversion_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'USDT', ?, ?, ?, ?, ?, ?, 'QUOTED', ?, ?, 'not_collected', ?, ?, ?)`,
     ).run(id, a.buyerId, wallet, service.id, service.url, body, sha256(body), offer.network, d.chainId, offer.scheme, offer.asset, offer.payTo, offer.amountAtomic.toString(), typed.message.nonce, validBefore,
-      JSON.stringify(typed), d.feeBps, fee.toString(), iso(now()), iso(now()));
+      JSON.stringify(typed), d.feeBps, fee.toString(), iso(now()), iso(now()), a.conversionId ?? null);
     event(id, 'QUOTED', `real price ${formatUsdt(offer.amountAtomic)} USDT confirmed by the gateway's 402 challenge; nothing signed or sent yet`);
     audit(d.db, a.buyerId, 'buy.quoted', id, { service: service.id, amountAtomic: offer.amountAtomic.toString() }, new Date(now()));
-    return { order: view(get(id)!), service: { id: service.id, title: service.title } };
+    // what the wallet holds right now (read-only), so the page can offer a conversion when USDT is short
+    let funding: { usdtBalanceAtomic: string; usdtBalance: string; shortfallAtomic: string; shortfall: string } | null = null;
+    if (d.usdtBalance) {
+      try {
+        const bal = await d.usdtBalance(wallet);
+        const short = offer.amountAtomic > bal ? offer.amountAtomic - bal : 0n;
+        funding = { usdtBalanceAtomic: bal.toString(), usdtBalance: formatUsdt(bal), shortfallAtomic: short.toString(), shortfall: formatUsdt(short) };
+      } catch { /* balance unknown: reported as null, and pay() will not guess */ }
+    }
+    return { order: view(get(id)!), service: { id: service.id, title: service.title }, funding };
   }
 
   async function settle(r: Row): Promise<{ ev: SettlementEvidence; settled: boolean }> {
@@ -251,6 +263,13 @@ export function createBuyPay(d: BuyPayDeps) {
       throw new BuyPayError('QUOTE_EXPIRED', 'the quote expired before it was signed; request a new one. Nothing was charged.');
     }
     const typed = JSON.parse(r.typed_data_json) as StoredTypedData;
+    if (d.usdtBalance) {
+      let bal: bigint | undefined;
+      try { bal = await d.usdtBalance(getAddress(r.wallet)); } catch { bal = undefined; }
+      if (bal !== undefined && bal < BigInt(r.amount_atomic)) {
+        throw new BuyPayError('INSUFFICIENT_USDT', `your wallet holds ${formatUsdt(bal)} USDT but this API costs ${formatUsdt(BigInt(r.amount_atomic))} USDT. Nothing was sent or charged; convert some of your currency to USDT first.`);
+      }
+    }
     // the signature must recover to the buyer's wallet over EXACTLY the authorization that was stored
     let valid = false;
     try {
@@ -359,7 +378,20 @@ export function createBuyPay(d: BuyPayDeps) {
     return stale.length;
   }
 
+  /** how much USDT this order needs that the wallet does not hold (read-only) */
+  async function shortfall(a: { buyerId: string; orderId: string }) {
+    const r = get(a.orderId);
+    if (!r || r.buyer_id !== a.buyerId) throw new BuyPayError('NOT_FOUND', 'no such order');
+    if (r.state !== 'QUOTED') throw new BuyPayError('WRONG_STATE', 'only an unpaid quote can be funded');
+    if (!d.usdtBalance) throw new BuyPayError('WRONG_STATE', 'this server cannot read wallet balances, so it cannot work out how much to convert');
+    const bal = await d.usdtBalance(getAddress(r.wallet));
+    const amount = BigInt(r.amount_atomic);
+    const short = amount > bal ? amount - bal : 0n;
+    return { amountAtomic: amount, amount: formatUsdt(amount), balanceAtomic: bal, balance: formatUsdt(bal), shortfallAtomic: short, shortfall: formatUsdt(short) };
+  }
+
   return {
+    shortfall,
     config: () => ({ payTo: d.payTo, usdt: d.usdt, chainId: d.chainId, maxPerPaymentAtomic: d.maxPerPaymentAtomic, feeBps: d.feeBps }),
     quote, pay, recheck, recoverInterrupted,
     order(buyerId: string, id: string) {

@@ -13,6 +13,10 @@ import { TRANSFER_TOPIC, fundingMessage } from '../../src/funding.ts';
 import { generateMasterKey } from '../../src/vault.ts';
 import { createWebServer } from '../../src/webapi.ts';
 import { createBuyPay } from '../../src/buypay.ts';
+import { createBuyConvert } from '../../src/buyconvert.ts';
+import { RouteRegistry, seedConversionAssets } from '../../src/conversion.ts';
+import { TEXTILE_REACTOR } from '../../src/config.ts';
+import { createSimProvider } from '../../src/dev/simconversion.ts';
 import { DEFAULT_POLICY } from '../../src/policy.ts';
 import { PAY_TO, createFakeBuy, signAuthorization } from '../../test/fakebuy.ts';
 import { createSimulatedRuntime } from '../../src/dev/websim.ts';
@@ -22,7 +26,18 @@ export const DEP = '0x707AFF45f3c09C03973F6E0074Ab01C43cC7e0eA';
 export const SELLER_SECRET = 'sk_browser_regression_secret_0123456789';
 const pad = (a) => `0x${a.toLowerCase().replace('0x', '').padStart(64, '0')}`;
 
-export async function startHarness({ seedLegacyDemoRows = true, capAtomic = 1_000_000n, minConfirmations = 3, withBuy = true } = {}) {
+// sign whatever typed data the page asks for (EIP-3009 authorization, Textile TakerControl) as eth_signTypedData_v4 would
+async function signTypedPayload(acct, td) {
+  const { EIP712Domain, ...types } = td.types;
+  const fields = types[td.primaryType];
+  const message = { ...td.message };
+  for (const f of fields) if (/^u?int/.test(f.type)) message[f.name] = BigInt(message[f.name]);
+  const domain = { ...td.domain };
+  if (domain.chainId !== undefined) domain.chainId = BigInt(domain.chainId);
+  return acct.signTypedData({ domain, types, primaryType: td.primaryType, message });
+}
+
+export async function startHarness({ seedLegacyDemoRows = true, capAtomic = 1_000_000n, minConfirmations = 3, withBuy = true, withConversion = false } = {}) {
   const mk = generateMasterKey('k1');
   const db = openDb(':memory:');
   // the legacy demo rows exist in the database (as in an old marketplace file): production must still never show or sell them
@@ -41,13 +56,27 @@ export async function startHarness({ seedLegacyDemoRows = true, capAtomic = 1_00
   };
   // a FAKE Buy AI gateway and chain: the production Buy payment code runs against them
   const fakeBuy = createFakeBuy({ now: Date.now });
+  // wallet USDT balances for the Buy payment check (a wallet not listed holds 10 USDT)
+  const usdtBalances = new Map();
   const buy = withBuy
-    ? createBuyPay({ db, catalog: { get: async () => fakeBuy.catalog }, policy: DEFAULT_POLICY, verify: fakeBuy.verify, chainId: 42220, usdt: USDT, payTo: PAY_TO, maxPerPaymentAtomic: 50_000n, feeBps: 300, fetchImpl: fakeBuy.fetchImpl, sleep: async () => undefined, settleDelayMs: 0 })
+    ? createBuyPay({ db, catalog: { get: async () => fakeBuy.catalog }, policy: DEFAULT_POLICY, verify: fakeBuy.verify, chainId: 42220, usdt: USDT, payTo: PAY_TO, maxPerPaymentAtomic: 50_000n, feeBps: 300, fetchImpl: fakeBuy.fetchImpl, sleep: async () => undefined, settleDelayMs: 0,
+      usdtBalance: async (w) => usdtBalances.get(String(w).toLowerCase()) ?? 10_000_000n })
+    : undefined;
+  // a SIMULATED Textile (no network): the production conversion code verifies its receipts
+  const simTextile = createSimProvider({ reactor: TEXTILE_REACTOR, now: Date.now });
+  const buyerSwapStub = {
+    converterFor: () => { throw new Error('not used'); },
+    prepare: async ({ op }) => ({ kind: 'ready', quoteId: 'rfq_fake', expiresAtMs: Date.now() + 40_000, steps: [{ kind: 'approve', to: '0xF6829D7393dAe24509eb1E52eE8e572e2E271a4f', data: '0x095ea7b3' }, { kind: 'swap', to: TEXTILE_REACTOR, data: '0x0d7a16c3' }], takerPays: op.sellAtomic.toString(), buyAmount: op.expectedAtomic.toString(), feeAmount: '1', notes: [] }),
+  };
+  if (withConversion) seedConversionAssets(db);
+  const buyConvert = withBuy && withConversion
+    ? createBuyConvert({ db, registry: new RouteRegistry(db, [simTextile]), provider: simTextile, buyerSwap: buyerSwapStub, reader: simTextile.reader, usdt: USDT, reactor: TEXTILE_REACTOR, chainId: 42220, minConfirmations: 3, maxUsdtAtomic: 5_000_000n })
     : undefined;
   const market = {
     db, keys: [mk], activeKey: mk,
     buyCatalog: async () => fakeBuy.catalog,
     ...(buy ? { buy } : {}),
+    ...(buyConvert ? { buyConvert } : {}),
     execute: {
       call: { limiter: new RateLimiter(100, 100), fetchOptions: { resolver, transport } },
       demoCall: { limiter: new RateLimiter(100, 100), fetchOptions: { resolver: demo.resolver, transport: demo.transport, timeoutMs: 500 } },
@@ -95,6 +124,21 @@ export async function startHarness({ seedLegacyDemoRows = true, capAtomic = 1_00
 
   // ---- the fake wallet for one browser
   let hashN = 0x1000;
+  // transactions of the Textile conversion (approval to the sell token, swap to the reactor): the SIMULATED Textile executes them
+  const CNGN = '0xF6829D7393dAe24509eb1E52eE8e572e2E271a4f';
+  const isConvTx = (tx) => withConversion && [TEXTILE_REACTOR.toLowerCase(), CNGN.toLowerCase()].includes(String(tx.to).toLowerCase());
+  const convTx = async (tx) => {
+    if (String(tx.to).toLowerCase() === CNGN.toLowerCase()) return `0x${(++hashN).toString(16).padStart(64, 'a')}`;
+    const row = db.prepare("SELECT * FROM buy_conversions WHERE lower(wallet) = ? AND state = 'PREPARED' ORDER BY created_at DESC LIMIT 1").get(String(tx.from).toLowerCase());
+    if (!row) throw new Error('no prepared conversion for this wallet');
+    const cngn = simTextile.assets.find((a) => a.ref.symbol === 'cNGN').ref;
+    const conv = simTextile.fundingConverter(cngn, { taker: tx.from, depositAddress: DEP });
+    const q = await conv.quote({ sellAtomic: BigInt(row.sell_atomic) });
+    const sent = await conv.execute({ opId: row.id, quoteId: q.quoteId, sellAtomic: BigInt(row.sell_atomic), minBuyAtomic: BigInt(row.min_atomic), digest: 'd' });
+    simTextile.advance(20);
+    usdtBalances.set(String(tx.from).toLowerCase(), (usdtBalances.get(String(tx.from).toLowerCase()) ?? 0n) + BigInt(row.expected_atomic));
+    return sent.swapTx;
+  };
   async function wire(b, key, { poll = 150 } = {}) {
     const acct = privateKeyToAccount(key);
     const wallet = { address: acct.address, sends: [], signs: [], typedSigns: [], sendMode: 'ok', denySign: false, denyTyped: false };
@@ -107,10 +151,13 @@ export async function startHarness({ seedLegacyDemoRows = true, capAtomic = 1_00
       try {
         if (kind === 'signTyped') {
           wallet.typedSigns.push(payload);
-          out = wallet.denyTyped ? { ok: false, error: 'User rejected the request.' } : { ok: true, value: await signAuthorization(acct, payload) };
+          out = wallet.denyTyped ? { ok: false, error: 'User rejected the request.' } : { ok: true, value: await signTypedPayload(acct, payload) };
         } else if (kind === 'sign') {
           wallet.signs.push(payload.message);
           out = wallet.denySign ? { ok: false, error: 'User rejected the request.' } : { ok: true, value: await acct.signMessage({ message: payload.message }) };
+        } else if (kind === 'send' && isConvTx(payload)) {
+          wallet.sends.push(payload);
+          out = { ok: true, value: await convTx(payload) };
         } else if (kind === 'send') {
           const tx = payload;
           wallet.sends.push(tx);
@@ -164,7 +211,7 @@ export async function startHarness({ seedLegacyDemoRows = true, capAtomic = 1_00
   }
 
   return {
-    BASE, token, db, call, receipts, txt, publish, demoIds, wire, fundedBuyer, sellerKey, sellerToken: sc.token, buyGateway: fakeBuy.gateway, buyChain: fakeBuy,
+    BASE, token, db, call, receipts, txt, publish, demoIds, wire, fundedBuyer, sellerKey, sellerToken: sc.token, buyGateway: fakeBuy.gateway, buyChain: fakeBuy, usdtBalances, simTextile,
     newKey: () => generatePrivateKey(),
     close: () => new Promise((r) => server.close(() => r())),
   };

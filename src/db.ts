@@ -533,6 +533,50 @@ CREATE TRIGGER buy_order_events_no_update BEFORE UPDATE ON buy_order_events BEGI
 CREATE TRIGGER buy_order_events_no_delete BEFORE DELETE ON buy_order_events BEGIN SELECT RAISE(ABORT, 'buy order events are append-only'); END;
 `;
 
+
+/**
+ * Version 13: conversions of a buyer's own currency (cNGN, ...) into the USDT a Buy AI purchase needs, done by Textile with the buyer's
+ * own wallet as taker. Output lands in the buyer's wallet; nothing is credited anywhere. A conversion is only CONFIRMED from the receipt.
+ * A Buy order may reference the conversion that funded it.
+ */
+const V13 = `
+CREATE TABLE buy_conversions (
+  id TEXT PRIMARY KEY,
+  buyer_id TEXT NOT NULL REFERENCES accounts(id),
+  wallet TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  sell_symbol TEXT NOT NULL,
+  sell_address TEXT NOT NULL,
+  sell_decimals INTEGER NOT NULL,
+  sell_atomic TEXT NOT NULL,
+  target_atomic TEXT NOT NULL,
+  expected_atomic TEXT NOT NULL,
+  min_atomic TEXT NOT NULL,
+  fee_atomic TEXT NOT NULL,
+  rate TEXT NOT NULL,
+  quote_id TEXT NOT NULL,
+  quote_expires_at TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('QUOTED','PREPARED','SUBMITTED','CONFIRMED','FAILED','REVIEW','EXPIRED')),
+  failure TEXT,
+  approve_txs TEXT NOT NULL DEFAULT '[]',
+  swap_tx TEXT UNIQUE,
+  received_atomic TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+) STRICT;
+CREATE INDEX buy_conversions_buyer ON buy_conversions (buyer_id, created_at);
+CREATE TABLE buy_conversion_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversion_id TEXT NOT NULL REFERENCES buy_conversions(id),
+  at TEXT NOT NULL,
+  state TEXT NOT NULL,
+  note TEXT NOT NULL
+) STRICT;
+CREATE TRIGGER buy_conversion_events_no_update BEFORE UPDATE ON buy_conversion_events BEGIN SELECT RAISE(ABORT, 'conversion events are append-only'); END;
+CREATE TRIGGER buy_conversion_events_no_delete BEFORE DELETE ON buy_conversion_events BEGIN SELECT RAISE(ABORT, 'conversion events are append-only'); END;
+ALTER TABLE buy_orders ADD COLUMN conversion_id TEXT;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'accounts, listings, contracts, ledger, executions, audit', sql: V1 },
   { version: 2, name: 'encrypted seller credentials', sql: V2 },
@@ -546,6 +590,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 10, name: 'deposit records carry network, token, recipient, confirmations and verification', sql: V10 },
   { version: 11, name: 'database environment marker (production / development)', sql: V11 },
   { version: 12, name: 'direct Buy AI purchases paid by the buyer wallet (orders and events)', sql: V12 },
+  { version: 13, name: 'buyer-wallet currency conversions that fund Buy AI purchases', sql: V13 },
 ];
 
 /** Open (creating the file and folder if needed) and bring the schema up to date. ':memory:' for tests. */
