@@ -925,6 +925,8 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
   if (method === 'GET' && path === '/config') {
     const tn = rt.escrow?.testnet;
     return ok({
+      environment: rt.live ? 'production' : 'development',
+      currency: rt.live ? 'USDT' : 'TESTUSDT',
       mode: rt.live ? 'real-funds' : 'test-credits',
       sandbox: Boolean(rt.sandbox) && !rt.live,
       realFunds: Boolean(rt.live),

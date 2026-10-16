@@ -9,6 +9,7 @@
   },
   "scripts": {
     "serve": "node --env-file=.env scripts/serve.ts",
+    "dev:market": "node scripts/dev-serve.ts",
     "rehearse": "node scripts/rehearse.ts",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --test \"test/*.test.ts\"",

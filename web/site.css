@@ -217,3 +217,7 @@ body.apipage { background: var(--bg); }
 .paysteps li[data-state="done"] .st { color: var(--ok); }
 .paysteps li[data-state="failed"] { background: var(--bad-bg); color: var(--bad); }
 .paysteps li[data-state="pending"] { color: var(--ink-2); }
+
+/* development environment: an unmistakable stripe so it is never mistaken for production */
+body[data-funds="dev"] .topbar { box-shadow: inset 0 4px 0 #b54708; }
+body[data-funds="dev"] .sidebar { box-shadow: inset 4px 0 0 #b54708; }

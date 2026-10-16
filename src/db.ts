@@ -470,6 +470,18 @@ ALTER TABLE chain_deposits ADD COLUMN confirmations INTEGER;
 ALTER TABLE chain_deposits ADD COLUMN verification TEXT;
 `;
 
+/**
+ * Version 11: a database remembers which ENVIRONMENT it belongs to ('production' or 'development'). The production server stamps
+ * 'production' and refuses a database stamped 'development'; the development server refuses anything stamped 'production'. See envguard.ts.
+ */
+const V11 = `
+CREATE TABLE app_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  set_at TEXT NOT NULL
+) STRICT;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'accounts, listings, contracts, ledger, executions, audit', sql: V1 },
   { version: 2, name: 'encrypted seller credentials', sql: V2 },
@@ -481,6 +493,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 8, name: 'multi-currency funding and payout conversion (stage 1)', sql: V8, rebuild: true },
   { version: 9, name: 'per-role wallet accounts (buyer wallet sign-in)', sql: V9 },
   { version: 10, name: 'deposit records carry network, token, recipient, confirmations and verification', sql: V10 },
+  { version: 11, name: 'database environment marker (production / development)', sql: V11 },
 ];
 
 /** Open (creating the file and folder if needed) and bring the schema up to date. ':memory:' for tests. */

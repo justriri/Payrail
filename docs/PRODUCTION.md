@@ -4,6 +4,13 @@ Payrail has **no demo, test-credit, sandbox or simulation mode**. `scripts/serve
 `--escrow-testnet` and `--scenario`, seeds no demo APIs, builds no simulated provider, and starts the marketplace only when the
 operator sets `PAYRAIL_MARKET_LIVE=1` (real USDT on Celo mainnet, chain 42220).
 
+## Development environment (separate)
+`npm run dev:market` starts `scripts/dev-serve.ts` on port 4403 with its own database in `data/dev/`. It shows test credits, demo and
+sandbox APIs, a sandbox seller and a simulated Buy gateway, labelled DEVELOPMENT everywhere. It cannot open `data/marketplace-live.db`
+or any file stamped `production` or holding verified on-chain deposits, it refuses to start if `PAYRAIL_MARKET_LIVE` is set, and it never
+reads the production deposit address or vault key. The production server, in turn, refuses databases inside `data/dev/` or stamped
+`development`, stamps its own database `production`, and has no route for the development scripts. See `test/environments.test.ts`.
+
 ## What the production server enforces (backend, not just screens)
 - Anonymous buyers (`POST /buyer`) and test credits (`POST /credits`) are refused (`NOT_AVAILABLE`). Buyers exist only through a
   wallet signature that names the network and is single-use.

@@ -6,6 +6,7 @@ import { createBuyerSwapRuntime } from './buyerswap.ts';
 import { TEXTILE_REACTOR } from './config.ts';
 import { RouteRegistry, seedConversionAssets } from './conversion.ts';
 import { openDb } from './db.ts';
+import { assertProductionDatabase, stampEnvironment, EnvironmentError } from './envguard.ts';
 import { RateLimiter } from './egress.ts';
 import { recoverExecutions } from './execute.ts';
 import type { ChainReader } from './funding.ts';
@@ -73,7 +74,19 @@ export async function setupMarket(d: SetupDeps): Promise<MarketRuntime | undefin
     // seller payouts stay refused over HTTP until the secure payout architecture is built and reviewed
     payoutRequestsEnabled: false,
   };
+  try {
+    assertProductionDatabase(dbPath); // read-only checks; a development or test-credit database is refused before anything is written
+  } catch (e) {
+    if (e instanceof EnvironmentError) throw new SetupError(e.message);
+    throw e;
+  }
   const db = openDb(dbPath);
+  try {
+    stampEnvironment(db, 'production');
+  } catch (e) {
+    if (e instanceof EnvironmentError) throw new SetupError(e.message);
+    throw e;
+  }
   const rec = recoverExecutions(db, { staleHeldMs: 5 * 60_000, unresolvedMs: 60 * 60_000 });
   if (rec.interrupted || rec.released) d.log(`Marketplace recovery: ${rec.interrupted} interrupted call(s) marked unresolved, ${rec.released} released to buyers.`);
   const limiter = () => new RateLimiter(60, 10);

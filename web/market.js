@@ -24,7 +24,10 @@ const store = {
   set(k, v) { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch { /* optional */ } },
 };
 const session = { buyer: store.get('payrail.buyer'), seller: store.get('payrail.seller') };
-let config = { mode: 'off', realFunds: false, legend: {} };
+let config = { mode: 'off', environment: 'production', realFunds: false, currency: 'USDT', legend: {} };
+/** the marketplace exists: real funds in production, or the separate development server */
+const marketOn = () => config.realFunds || config.environment === 'development';
+const isDev = () => config.environment === 'development';
 
 async function api(path, { body, bearer } = {}) {
   const headers = {};
@@ -42,20 +45,44 @@ const ORIGIN_CLASS = { 'buy-gateway': 'o-buy', 'payrail-seller': 'o-seller' };
 const ORIGIN_SHORT = { 'buy-gateway': 'BUY GATEWAY', 'payrail-seller': 'PAYRAIL SELLER' };
 
 // ------------------------------------------------------------------ banner + legend
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const t = document.createElement('script');
+    t.src = src;
+    t.onload = resolve;
+    t.onerror = () => reject(new Error(`could not load ${src}`));
+    document.head.append(t);
+  });
+}
 async function loadConfig() {
-  const d = await api('/config');
   const pill = $('mode-pill');
-  if (!d.ok || !d.realFunds) {
-    // there is no demo fallback: a server without real-funds mode simply has no marketplace
-    config = { mode: 'off', realFunds: false, legend: {} };
-    $('mode-banner').textContent = 'The API marketplace is not enabled on this server.';
+  const d = await api('/config');
+  if (d.ok && d.environment === 'development') {
+    // a DEVELOPMENT server: clearly labelled, test credits only, separate from production
+    config = { ...d, environment: 'development', realFunds: false, currency: d.currency || 'TESTUSDT' };
+    $('mode-banner').textContent = 'DEVELOPMENT ENVIRONMENT · test credits and simulated services · no real money, no real transactions';
     $('mode-banner').className = 'banner sim';
-    pill.textContent = 'OFF · marketplace not enabled';
+    pill.textContent = 'DEVELOPMENT · test credits, no real money';
+    pill.className = 'pill sim';
+    document.body.dataset.funds = 'dev';
+    document.title = '[DEV] Payrail';
+    try { await loadScript('/dev.js'); } catch (e) { $('mode-banner').textContent += ` (${e.message})`; }
+    const lg = $('legend');
+    clear(lg);
+    for (const [k, v] of Object.entries(d.legend || {})) lg.append(el('li', {}, el('span', { class: `badge ${ORIGIN_CLASS[k] || ''}`, text: ORIGIN_SHORT[k] || k }), ' ', v));
+    return;
+  }
+  if (!d.ok || !d.realFunds) {
+    // PRODUCTION server with the marketplace switched off: say so, and say how to develop instead of pretending
+    config = { mode: 'off', environment: 'production', realFunds: false, currency: 'USDT', legend: {} };
+    $('mode-banner').textContent = 'PRODUCTION server: the API marketplace is not enabled (real-funds mode is off).';
+    $('mode-banner').className = 'banner sim';
+    pill.textContent = 'PRODUCTION · marketplace off';
     pill.className = 'pill sim';
     document.body.dataset.funds = 'off';
     return;
   }
-  config = d;
+  config = { ...d, environment: 'production', currency: 'USDT' };
   const n = d.network;
   $('mode-banner').textContent = `REAL FUNDS · ${n.name} (chain ${n.chainId}) · pay in ${n.token.symbol} · ${n.platformFeePercent}% platform fee`;
   $('mode-banner').className = 'banner live';
@@ -66,7 +93,7 @@ async function loadConfig() {
   clear(lg);
   for (const [k, v] of Object.entries(d.legend || {})) lg.append(el('li', {}, el('span', { class: `badge ${ORIGIN_CLASS[k] || ''}`, text: ORIGIN_SHORT[k] || k }), ' ', v));
 }
-const notEnabled = (box) => { clear(box); box.append(el('p', { class: 'problem', id: 'not-enabled', text: 'The API marketplace is not enabled on this server (real-funds mode is off). Nothing can be bought, funded or sold here.' })); };
+const notEnabled = (box) => { clear(box); box.append(el('p', { class: 'problem', id: 'not-enabled', text: 'This PRODUCTION server has the API marketplace switched off, so nothing can be bought, funded or sold here. To develop and test the marketplace without real money, run the separate development server: npm run dev:market (it opens its own page on port 4403 and its own database).' })); };
 
 // ------------------------------------------------------------------ buyer
 async function buyerLoginWallet() {
@@ -89,7 +116,7 @@ async function buyerLoginWallet() {
 }
 async function renderBuyer() {
   const box = $('buyer');
-  if (!config.realFunds) return notEnabled(box);
+  if (!marketOn()) return notEnabled(box);
   clear(box);
   if (!session.buyer) {
     box.append(
@@ -120,7 +147,7 @@ async function loadCatalog() {
   const d = await api(`/catalog${q ? `?q=${encodeURIComponent(q)}` : ''}`);
   const list = $('cat-list');
   clear(list);
-  if (!d.ok) { $('cat-status').textContent = config.realFunds ? fail(d) : 'The API marketplace is not enabled on this server.'; return; }
+  if (!d.ok) { $('cat-status').textContent = marketOn() ? fail(d) : 'The API marketplace is not enabled on this production server.'; return; }
   const counts = {};
   for (const it of d.items) counts[it.origin] = (counts[it.origin] || 0) + 1;
   $('cat-status').textContent = `${d.items.length} services · ` + Object.entries(counts).map(([k, n]) => `${n} ${ORIGIN_SHORT[k] || k}`).join(', ')
@@ -154,7 +181,7 @@ async function showReceipt(box, id) {
   const rows = [
     ['Receipt', r.receiptId], ['Outcome', r.outcome], ['Charged', `${r.charged.display} ${r.asset}`], ['Held (not charged)', `${r.held.display} ${r.asset}`],
     ['Returned to you', `${r.returned.display} ${r.asset}`], ['Platform fee', r.platformFee ? `${r.platformFee.display} ${r.asset}` : '—'], ['Seller earned', r.sellerEarned ? `${r.sellerEarned.display} ${r.asset}` : '—'],
-    ['Settlement', 'Payrail ledger (USDT)'], ['Contract', r.contract ? `v${r.contract.version}` : '—'],
+    ['Settlement', isDev() ? 'Payrail ledger (development test credits)' : 'Payrail ledger (USDT)'], ['Contract', r.contract ? `v${r.contract.version}` : '—'],
     ['Response hash', r.validation.responseSha256 || '—'], ['Idempotency key', r.idempotencyKey],
   ];
   box.append(el('table', { class: 'quote' }, ...rows.map(([k, v]) => el('tr', {}, el('th', { text: k }), el('td', { class: 'v', text: String(v) })))));
@@ -167,7 +194,7 @@ async function renderHistory() {
   const box = $('history');
   const st = $('statement');
   clear(box); clear(st);
-  if (!config.realFunds) { box.textContent = 'The marketplace is not enabled on this server.'; return; }
+  if (!marketOn()) { box.textContent = 'The marketplace is not enabled on this server.'; return; }
   if (!session.buyer) { box.textContent = 'Sign in with your wallet first.'; return; }
   const [d, sm] = await Promise.all([api('/executions', { bearer: session.buyer }), api('/me/statement', { bearer: session.buyer })]);
   if (sm.ok) {
@@ -236,7 +263,7 @@ async function renderLiveDeposit(box) {
 
 async function renderAddFunds() {
   const box = $('fund');
-  if (!config.realFunds) return notEnabled(box);
+  if (!marketOn()) return notEnabled(box);
   clear(box);
   if (!session.buyer) { box.append(el('p', { class: 'muted', text: 'Sign in with your wallet (Buyer card) to fund your account.' })); return; }
   await renderLiveDeposit(box);
@@ -248,7 +275,7 @@ async function renderAddFunds() {
 async function renderAgents() {
   const box = $('agents');
   clear(box);
-  if (!config.realFunds) return notEnabled(box);
+  if (!marketOn()) return notEnabled(box);
   if (!session.buyer) { box.append(el('p', { class: 'muted', text: 'Sign in with your wallet first.' })); return; }
   const d = await api('/agents', { bearer: session.buyer });
   if (!d.ok) { box.append(el('p', { class: 'problem', text: fail(d) })); return; }
@@ -256,7 +283,7 @@ async function renderAgents() {
   const per = el('input', { value: '0.03', 'aria-label': 'Per-request cap' });
   const day = el('input', { value: '0.1', 'aria-label': 'Daily cap' });
   box.append(
-    el('p', { class: 'muted', text: 'An agent key lets a script spend your real USDT balance inside hard limits you set. It cannot create keys or change limits.' }),
+    el('p', { class: 'muted', text: (isDev() ? 'DEVELOPMENT: an agent key lets a script spend your test credits inside hard limits you set.' : 'An agent key lets a script spend your real USDT balance inside hard limits you set.') + ' It cannot create keys or change limits.' }),
     el('div', { class: 'row' }, name, el('label', {}, 'per request ', per), el('label', {}, 'per day ', day),
       el('button', { type: 'button', class: 'secondary', text: 'Create agent key', onclick: async () => {
         const r = await api('/agents', { body: { name: name.value, perRequestCap: per.value, dailyCap: day.value }, bearer: session.buyer });
@@ -343,7 +370,7 @@ const tick = (done, text) => el('li', { class: done ? 'step done' : 'step', text
 async function renderSeller() {
   const mine = ++renderToken;
   const box = $('seller');
-  if (!config.realFunds) { say(''); return notEnabled(box); }
+  if (!marketOn()) { say(''); return notEnabled(box); }
   if (!session.seller) {
     clear(box);
     say('');
@@ -366,7 +393,7 @@ async function renderSeller() {
   const published = listings.filter((l) => l.public).length;
   box.append(
     el('div', { class: 'row' },
-      el('strong', { text: `Earnings: ${earn.earnings} ${earn.asset}` }), chip('REAL USDT', 'ok'),
+      el('strong', { text: `Earnings: ${earn.earnings} ${earn.asset}` }), isDev() ? chip('TEST CREDITS (development)') : chip('REAL USDT', 'ok'),
       el('button', { type: 'button', class: 'secondary', text: 'Sign out', onclick: signOutSeller })),
     el('p', { class: 'muted', text: `${listings.length} API${listings.length === 1 ? '' : 's'} · ${published} published · payouts: disabled until the secure payout flow is reviewed (earnings stay in your USDT balance)` }),
     el('nav', { class: 'subtabs', 'aria-label': 'Seller sections' },
@@ -420,7 +447,7 @@ const sumDisplay = (items, pick) => {
 };
 function sellerOverviewPage(sm, listings) {
   const wrap = el('div', {});
-  const asset = 'USDT';
+  const asset = config.currency;
   const earned = sumDisplay(sm.buckets, (b) => b.sellerEarnings.display);
   const fees = sumDisplay(sm.buckets, (b) => b.platformFees.display);
   const available = sm.ledgerBalances.length ? sm.ledgerBalances.map((l) => l.available.display).join(' + ') : '0';
@@ -431,7 +458,7 @@ function sellerOverviewPage(sm, listings) {
     el('div', { class: 'stat-grid' },
       stat('Total earned', earned), stat('Platform fees (3%)', fees), stat('Available to pay out', available),
       stat('Payouts pending', pending), stat('Payouts completed', completed)),
-    el('p', { class: 'muted', text: 'Earnings are real USDT credited to your Payrail balance only for responses that met the contract. The 3% platform fee is already deducted.' }));
+    el('p', { class: 'muted', text: isDev() ? 'DEVELOPMENT: these are test credits. They are not money and cannot be withdrawn.' : 'Earnings are real USDT credited to your Payrail balance only for responses that met the contract. The 3% platform fee is already deducted.' }));
   wrap.append(el('p', {}, el('strong', { text: 'Payouts: ' }), 'disabled until the secure payout flow is reviewed · ',
     el('a', { href: '#/seller/payout-settings', text: 'Payout settings' }), ' · ', el('a', { href: '#/seller/payouts', text: 'Payout history' })));
   wrap.append(el('h3', { text: `Your APIs (${listings.length})` }));
@@ -533,7 +560,7 @@ function newListingPage() {
     el('label', { text: 'Description' }), bind(el('input', { placeholder: 'What does it return?' }), 'desc'),
     el('label', { text: 'Endpoint URL (https, fixed; buyers can only change input values)' }), bind(el('input', { placeholder: 'https://api.example.com/v1/price', type: 'url' }), 'url'),
     el('label', { text: 'HTTP method' }), method,
-    el('label', { text: 'Price per qualifying response (USDT)' }), bind(el('input', { placeholder: 'e.g. 0.02' }), 'price'),
+    el('label', { text: `Price per qualifying response (${isDev() ? 'test credits, development only' : 'USDT'})` }), bind(el('input', { placeholder: 'e.g. 0.02' }), 'price'),
     el('p', { class: 'muted', text: 'Listings are always priced in real USDT on Celo mainnet. Your endpoint must be a real, public https API you control.' }),
     el('p', { class: 'muted', text: 'Your entries are kept if something fails, and after a page reload, until you submit successfully.' }),
     el('div', { class: 'row' },
@@ -734,7 +761,7 @@ function applyView() {
   $('mode-line').textContent = v === 'buyer' ? 'You are in Buyer mode: browse APIs, fund your account in USDT and pay only for qualifying responses.' : 'You are in Seller mode: list APIs, verify ownership, set contracts and track earnings.';
   document.body.dataset.mode = v;
   window.scrollTo(0, 0);
-  document.title = `Payrail ${v === 'buyer' ? 'Buyer' : 'Seller'}: ${PANEL_TITLES[panel] || ''}`;
+  document.title = `${isDev() ? '[DEV] ' : ''}Payrail ${v === 'buyer' ? 'Buyer' : 'Seller'}: ${PANEL_TITLES[panel] || ''}`;
   if (v === 'seller') renderSeller();
   else { loadCatalog(); renderBuyer(); renderHistory(); renderAddFunds(); }
 }

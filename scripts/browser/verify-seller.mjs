@@ -94,7 +94,7 @@ await until(async () => /All requirements are met/.test((await seller()) || ''))
 check('after approving, the listing shows it is ready to publish and keeps its details', /All requirements are met/.test(await seller()) && (await b.ev(`document.querySelector('#seller details input')?.value`)) === 'My Quote API');
 check('the listing is still private before publishing (buyers cannot find it)', !(await h.call('GET', '/catalog')).items.some((i) => i.title === 'My Quote API'));
 await b.click('#seller button', 'Publish');
-await until(async () => /Published/.test((await bar()) || ''));
+await until(async () => /Published at/.test((await bar()) || '') && /Published/.test((await seller()) || ''));
 check('publish confirms in the status bar and the status updates', /Published at/.test(await bar()) && /Published/.test(await seller()), await bar());
 const cat = (await h.call('GET', '/catalog')).items.find((i) => i.title === 'My Quote API');
 check('the published API is in the public catalogue priced in real USDT with its seller', cat && cat.pricing.asset === 'USDT' && cat.pricing.usd === '0.02' && cat.available && /0x/.test(cat.seller), JSON.stringify(cat && { p: cat.pricing, s: cat.seller }));

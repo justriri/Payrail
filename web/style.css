@@ -109,3 +109,7 @@ table.quote { width:100%; margin: 8px 0; }
 table.quote th { font-weight:600; color: var(--muted); font-size:14px; }
 table.quote td.v { text-align:right; font-variant-numeric: tabular-nums; font-weight:700; }
 details > summary { cursor:pointer; padding:4px 0; }
+
+/* development-only origin badges */
+.o-sandbox { background:#efe3ff; color:#5a2a9a; }
+.o-demo { background:#ffe7e0; color:#9a3412; }

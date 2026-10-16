@@ -61,11 +61,21 @@ async function showReceipt(box, id) {
     ['Receipt', r.receiptId], ['Outcome', r.outcome], ['Charged', `${r.charged.display} ${r.asset}`], ['Held (not charged)', `${r.held.display} ${r.asset}`],
     ['Returned to you', `${r.returned.display} ${r.asset}`], ['Platform fee', r.platformFee ? `${r.platformFee.display} ${r.asset}` : '—'],
     ['Seller earned', r.sellerEarned ? `${r.sellerEarned.display} ${r.asset}` : '—'],
-    ['Settlement', 'Payrail ledger (USDT)'], ['Contract', r.contract ? `v${r.contract.version}` : '—'],
+    ['Settlement', window.PayrailDev && window.PayrailDev.api ? 'Payrail ledger (development test credits)' : 'Payrail ledger (USDT)'], ['Contract', r.contract ? `v${r.contract.version}` : '—'],
     ['Response hash', r.validation.responseSha256 || '—'], ['Idempotency key', r.idempotencyKey],
   ]));
   if (r.ledger.length) box.append(el('p', { class: 'muted', text: 'Ledger entries: ' + r.ledger.map((t) => `#${t.id} ${t.kind}`).join(', ') }));
   box.append(el('p', { class: 'muted', text: r.validation.note }));
+}
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const t = document.createElement('script');
+    t.src = src;
+    t.onload = resolve;
+    t.onerror = () => reject(new Error(`could not load ${src}`));
+    document.head.append(t);
+  });
 }
 
 async function main() {
@@ -73,7 +83,12 @@ async function main() {
   if (!/^[\w-]{1,80}$/.test(id)) return notFound('No API was specified.');
   const [d, cfg] = await Promise.all([api(`/listing/${encodeURIComponent(id)}`), api('/config')]);
   if (!d.ok) return notFound(d.code === 'NOT_FOUND' ? 'This API does not exist or is not published.' : fail(d));
-  if (!cfg.ok || !cfg.realFunds) return notFound('The API marketplace is not enabled on this server.');
+  const dev = cfg.ok && cfg.environment === 'development';
+  if (!cfg.ok || (!cfg.realFunds && !dev)) return notFound('The API marketplace is not enabled on this production server. (To develop and test it without real money, run the separate development server: npm run dev:market.)');
+  if (dev) {
+    // the development helper is served only by the development server; if it is missing the page refuses rather than guessing
+    try { await loadScript('/dev-api.js'); } catch { return notFound('The development helper could not be loaded.'); }
+  }
   render(d, cfg);
 }
 
@@ -88,7 +103,9 @@ function render(d, cfg) {
   const l = d.listing;
   const q = d.quote;
   const rules = d.inputRules;
-  if (q.asset !== 'USDT') return notFound('This API cannot be purchased: it is not priced in real USDT.');
+  // DEVELOPMENT only: the helper exists only on the development server and only when the server says it is the development environment
+  const devApi = cfg.environment === 'development' && window.PayrailDev ? window.PayrailDev.api : undefined;
+  if (q.asset !== 'USDT' && !devApi) return notFound('This API cannot be purchased: it is not priced in real USDT.');
   document.title = `${l.name} · Payrail`;
   clear(root);
   const kind = ['PAYRAIL SELLER', 'o-seller'];
@@ -141,7 +158,8 @@ function render(d, cfg) {
 
   const buyBox = el('section', { class: 'card', id: 'api-buy' },
     el('h2', { text: 'Use this API' }),
-    el('p', {}, el('span', { class: 'badge ok', id: 'mode-badge', text: 'REAL USDT' }), ' ', el('span', { class: 'muted', id: 'network-line', text: net ? `${net.name} (chain ${net.chainId}) · token ${net.token.symbol} ${net.token.address}` : '' })),
+    devApi ? el('div', { class: 'banner sim', role: 'note', id: 'dev-note', text: devApi.note }) : null,
+    el('p', {}, el('span', { class: `badge ${devApi ? 'o-sim' : 'ok'}`, id: 'mode-badge', text: devApi ? devApi.badge : 'REAL USDT' }), ' ', el('span', { class: 'muted', id: 'network-line', text: devApi ? devApi.networkLine : net ? `${net.name} (chain ${net.chainId}) · token ${net.token.symbol} ${net.token.address}` : '' })),
     balance,
     el('label', { for: 'run-input', text: 'Request input (JSON object)' }), input, problem,
     el('div', { class: 'row' }, runBtn, msg), confirmRow, out);
@@ -149,6 +167,17 @@ function render(d, cfg) {
   root.append(el('div', { class: 'apigrid' }, details, buyBox));
 
   async function refreshBalance() {
+    if (devApi) {
+      if (!buyerToken) {
+        clear(balance);
+        balance.append('No development session yet. ', el('a', { href: '/market.html#/buyer', text: 'Start one on the dashboard (Buyer card)' }), ' to get test credits.');
+        return;
+      }
+      const me = await api('/me', { bearer: buyerToken });
+      if (!me.ok) { buyerToken = null; store.set('payrail.buyer', null); return refreshBalance(); }
+      balance.textContent = devApi.balanceText(me);
+      return;
+    }
     if (!buyerToken) {
       clear(balance);
       balance.append('This API is charged in real USDT. Press Pay and Use API: your wallet signs in, tops up exactly what is missing and pays. Or ',
@@ -248,6 +277,13 @@ function render(d, cfg) {
     return false;
   }
 
+  /** DEVELOPMENT: a test-credit session is enough; there is no wallet, no transfer and no chain */
+  async function devSessionReady() {
+    if (buyerToken) return true;
+    msg.textContent = 'Start a development session on the dashboard first (Buyer card).';
+    return false;
+  }
+
   /** returns true when the balance covers the price and the request may run */
   async function payWithWallet() {
     clear(stepsBox);
@@ -314,8 +350,8 @@ function render(d, cfg) {
     if (!c.ok) { confirmRow.hidden = true; runBtn.disabled = false; problem.textContent = c.problem; problem.hidden = false; return; }
     confirmBtn.disabled = true;
     clear(out);
-    msg.textContent = 'Preparing payment from your wallet…';
-    const ready = await payWithWallet();
+    msg.textContent = devApi ? 'Checking your development session…' : 'Preparing payment from your wallet…';
+    const ready = devApi ? await devSessionReady() : await payWithWallet();
     msg.textContent = '';
     if (!ready) { confirmBtn.disabled = false; confirmRow.hidden = true; runBtn.disabled = false; refreshBalance(); return; }
     await runRequest(c.value);
@@ -324,7 +360,7 @@ function render(d, cfg) {
 
   // a transfer that was sent but not yet verified (for example the tab was closed) can be re-checked, never re-sent
   const pending = (() => { try { return JSON.parse(store.get('payrail.topup') || 'null'); } catch { return null; } })();
-  if (pending && /^0x[0-9a-fA-F]{64}$/.test(pending.hash)) {
+  if (!devApi && pending && /^0x[0-9a-fA-F]{64}$/.test(pending.hash)) {
     buyBox.insertBefore(el('p', { class: 'notice' }, 'A top-up transfer was sent from this browser and has not been confirmed yet. ',
       el('button', { type: 'button', class: 'secondary', id: 'check-pending', text: 'Check pending top-up', onclick: async (e) => {
         e.target.disabled = true; clear(stepsBox);

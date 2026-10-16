@@ -37,6 +37,12 @@ let pollTimer = null;
 function showBanner(mode, signing) {
   const b = $('banner');
   b.hidden = false;
+  if (mode === 'simulated') {
+    // only the DEVELOPMENT server runs the simulated Buy runtime; a production server never reports this mode
+    b.className = 'banner sim';
+    b.textContent = 'DEVELOPMENT SIMULATION: no real money, no real blockchain. Results below are fake.';
+    return;
+  }
   b.className = 'banner live';
   b.textContent = signing
     ? 'LIVE: payments use real funds on Celo mainnet, within your spending limits.'

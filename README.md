@@ -224,6 +224,20 @@ See `docs/ARCHITECTURE.md` for how the pieces fit together.
 
 See [docs/MARKETPLACE.md](docs/MARKETPLACE.md): what exists, how each part was verified, the two (test-credit / real-funds) modes, and the trust assumptions.
 
+## Two separate environments
+
+| | Production | Development |
+|---|---|---|
+| Start | `PAYRAIL_MARKET_LIVE=1 node --env-file=.env scripts/serve.ts --port 4402 --market-db data/marketplace-live.db` | `npm run dev:market` (port 4403) |
+| Money | real USDT on Celo mainnet | test credits only: no wallet, no chain, no real money |
+| APIs | only real, verified, USDT-priced listings | demo APIs, a sandbox seller, simulated Buy services |
+| Database | any file outside `data/dev/`, stamped `production` | only inside `data/dev/` (default `data/dev/marketplace-dev.db`), stamped `development` |
+| Page label | `LIVE · USDT on Celo mainnet` | `DEVELOPMENT · test credits, no real money` and `[DEV]` in the tab title |
+
+Each server refuses the other's database (checked read-only before anything is written), the development server refuses to run if
+`PAYRAIL_MARKET_LIVE` is set, and the production server cannot serve the development scripts (`dev.js`, `dev-api.js`).
+Plain `npm run serve` without `PAYRAIL_MARKET_LIVE=1` is production with the marketplace OFF, and the pages say so and point here.
+
 ## Marketplace (real USDT on Celo mainnet)
 
 Payrail runs an outcome-based API marketplace: sellers list real APIs, buyers pay in USDT from their own wallet and are charged

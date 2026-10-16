@@ -739,7 +739,16 @@ const WEB_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 
 /** A local-only HTTP server. Bound to 127.0.0.1; state-changing calls need a per-run token and a same-origin Origin. */
-export function createWebServer(rt: WebRuntime, opts: { webDir?: string; token?: string; market?: MarketRuntime } = {}): { server: Server; token: string; app: WebApp } {
+/** pages every server serves */
+const PAGES: Record<string, 1> = { 'index.html': 1, 'app.js': 1, 'style.css': 1, 'market.html': 1, 'market.js': 1, 'home.html': 1, 'site.css': 1, 'api.html': 1, 'api.js': 1, 'topup.js': 1, 'home.js': 1 };
+/** DEVELOPMENT-ONLY scripts (test credits, sandbox sellers). A production server cannot serve them: they are not in its allow-list. */
+const DEV_PAGES: Record<string, 1> = { 'dev.js': 1, 'dev-api.js': 1 };
+
+export function createWebServer(
+  rt: WebRuntime,
+  opts: { webDir?: string; token?: string; market?: MarketRuntime; /** default 'production' */ environment?: 'production' | 'development' } = {},
+): { server: Server; token: string; app: WebApp } {
+  const environment = opts.environment ?? 'production';
   const app = createWebApp(rt);
   const unlockLimiter = new RateLimiter(5, 5 / 60);
   const token = opts.token ?? randomBytes(24).toString('hex');
@@ -790,13 +799,15 @@ export function createWebServer(rt: WebRuntime, opts: { webDir?: string; token?:
 
       if (method === 'GET' && !url.pathname.startsWith('/api/')) {
         const name = url.pathname === '/' ? 'home.html' : url.pathname.slice(1);
-        if (!/^[a-z0-9._-]+$/i.test(name) || !(name in { 'index.html': 1, 'app.js': 1, 'style.css': 1, 'market.html': 1, 'market.js': 1, 'home.html': 1, 'site.css': 1, 'api.html': 1, 'api.js': 1, 'topup.js': 1, 'home.js': 1 })) return send(res, 404, 'not found', 'text/plain');
+        if (!/^[a-z0-9._-]+$/i.test(name) || !(name in PAGES || (environment === 'development' && name in DEV_PAGES))) return send(res, 404, 'not found', 'text/plain');
         let text = readFileSync(join(dir, name), 'utf8');
         if (name === 'index.html' || name === 'market.html' || name === 'api.html') text = text.replace('__PAYRAIL_TOKEN__', token).replace('__PAYRAIL_MODE__', rt.mode);
         const ext = name.slice(name.lastIndexOf('.'));
         return send(res, 200, text, TYPES[ext] ?? 'text/plain');
       }
 
+      // which environment this server is, and whether it has a marketplace at all (so the pages never have to guess)
+      if (method === 'GET' && url.pathname === '/api/environment') return send(res, 200, { ok: true, environment, marketplace: Boolean(opts.market) });
       if (method === 'GET' && url.pathname === '/api/status') return send(res, 200, await app.status());
       if (method === 'GET' && url.pathname === '/api/catalog') {
         const g = url.searchParams;
