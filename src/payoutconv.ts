@@ -21,7 +21,7 @@ import { verifyConversion, verifyDeposit } from './marketfunding.ts';
 import type { ChainReader } from './funding.ts';
 import { completeConvertedPayout, failSentPayout, getPayout, markSent, requestPayout } from './payouts.ts';
 import type { Payout, PayoutPolicy } from './payouts.ts';
-import type { SimProvider } from './simconversion.ts';
+import type { SimProvider } from './dev/simconversion.ts';
 
 export class PayoutConvError extends Error {
   code:

@@ -61,11 +61,10 @@ async function showReceipt(box, id) {
     ['Receipt', r.receiptId], ['Outcome', r.outcome], ['Charged', `${r.charged.display} ${r.asset}`], ['Held (not charged)', `${r.held.display} ${r.asset}`],
     ['Returned to you', `${r.returned.display} ${r.asset}`], ['Platform fee', r.platformFee ? `${r.platformFee.display} ${r.asset}` : '—'],
     ['Seller earned', r.sellerEarned ? `${r.sellerEarned.display} ${r.asset}` : '—'],
-    ['Settlement', r.settlement === 'escrow' ? 'on-chain escrow (testnet)' : 'Payrail ledger'], ['Contract', r.contract ? `v${r.contract.version}` : '—'],
+    ['Settlement', 'Payrail ledger (USDT)'], ['Contract', r.contract ? `v${r.contract.version}` : '—'],
     ['Response hash', r.validation.responseSha256 || '—'], ['Idempotency key', r.idempotencyKey],
   ]));
   if (r.ledger.length) box.append(el('p', { class: 'muted', text: 'Ledger entries: ' + r.ledger.map((t) => `#${t.id} ${t.kind}`).join(', ') }));
-  if (r.escrow) box.append(el('p', { class: 'muted', text: `Escrow hold ${r.escrow.holdId || '—'} · ` + Object.entries(r.escrow.txs).map(([k, v]) => `${k}: ${v}`).join(' · ') }));
   box.append(el('p', { class: 'muted', text: r.validation.note }));
 }
 
@@ -74,7 +73,8 @@ async function main() {
   if (!/^[\w-]{1,80}$/.test(id)) return notFound('No API was specified.');
   const [d, cfg] = await Promise.all([api(`/listing/${encodeURIComponent(id)}`), api('/config')]);
   if (!d.ok) return notFound(d.code === 'NOT_FOUND' ? 'This API does not exist or is not published.' : fail(d));
-  render(d, cfg.ok ? cfg : {});
+  if (!cfg.ok || !cfg.realFunds) return notFound('The API marketplace is not enabled on this server.');
+  render(d, cfg);
 }
 
 function notFound(text) {
@@ -88,9 +88,11 @@ function render(d, cfg) {
   const l = d.listing;
   const q = d.quote;
   const rules = d.inputRules;
+  if (q.asset !== 'USDT') return notFound('This API cannot be purchased: it is not priced in real USDT.');
   document.title = `${l.name} · Payrail`;
   clear(root);
-  const kind = l.demo ? ['DEMO', 'o-demo'] : l.sandbox ? ['SANDBOX', 'o-sandbox'] : ['PAYRAIL SELLER', 'o-seller'];
+  const kind = ['PAYRAIL SELLER', 'o-seller'];
+  const net = cfg.network;
 
   // ---------------------------------------------------------------- details (left)
   const details = el('section', { class: 'card', id: 'api-details' },
@@ -128,7 +130,7 @@ function render(d, cfg) {
   const msg = el('p', { class: 'muted', id: 'run-msg', role: 'status' });
   const out = el('div', { id: 'run-result' });
   const input = el('textarea', { id: 'run-input', rows: '4', spellcheck: 'false', 'aria-label': 'Request input (JSON object)' });
-  input.value = l.demo || l.sandbox ? (l.method === 'POST' ? '{"text":"hello"}' : '{"id":"eth"}') : '{}';
+  input.value = '{}';
   const problem = el('p', { class: 'problem', id: 'input-problem', hidden: '' });
   const balance = el('p', { id: 'api-balance', class: 'muted' });
   const confirmRow = el('div', { class: 'confirm', id: 'run-confirm-row', hidden: '' });
@@ -136,15 +138,12 @@ function render(d, cfg) {
   const confirmBtn = el('button', { id: 'run-confirm', type: 'button', text: `Confirm: pay up to ${q.buyerPays.display} ${q.asset}, only if the response qualifies` });
   const cancelBtn = el('button', { type: 'button', class: 'secondary', text: 'Cancel', onclick: () => { confirmRow.hidden = true; runBtn.disabled = false; } });
   confirmRow.append(el('p', { class: 'notice', text: `You will be charged ${q.buyerPays.display} ${q.asset} only if the response meets the contract. Otherwise nothing is charged.` }), el('div', { class: 'row' }, confirmBtn, cancelBtn));
-  const escrow = el('input', { type: 'checkbox', id: 'run-escrow' });
-  const escrowRow = cfg.escrow ? el('label', { class: 'check' }, escrow, el('span', { text: 'Settle through the testnet escrow contract (Celo Sepolia, mock token) instead of the Payrail ledger' })) : null;
 
   const buyBox = el('section', { class: 'card', id: 'api-buy' },
     el('h2', { text: 'Use this API' }),
-    el('p', {}, el('span', { class: `badge ${q.asset === 'USDT' ? 'ok' : 'warn'}`, id: 'mode-badge', text: q.asset === 'USDT' ? 'REAL USDT' : 'TEST CREDITS: no real money' })),
+    el('p', {}, el('span', { class: 'badge ok', id: 'mode-badge', text: 'REAL USDT' }), ' ', el('span', { class: 'muted', id: 'network-line', text: net ? `${net.name} (chain ${net.chainId}) · token ${net.token.symbol} ${net.token.address}` : '' })),
     balance,
     el('label', { for: 'run-input', text: 'Request input (JSON object)' }), input, problem,
-    escrowRow,
     el('div', { class: 'row' }, runBtn, msg), confirmRow, out);
 
   root.append(el('div', { class: 'apigrid' }, details, buyBox));
@@ -152,30 +151,18 @@ function render(d, cfg) {
   async function refreshBalance() {
     if (!buyerToken) {
       clear(balance);
-      if (q.asset === 'USDT') balance.append('This API is charged in real USDT. ', el('a', { href: '/market.html#/buyer', text: 'Sign in with your wallet and fund your account on the dashboard' }), '.');
-      else balance.append('No buyer account yet. ', el('button', { type: 'button', class: 'secondary', id: 'start-testing', text: 'Start testing: get 5 test credits', onclick: startTesting }),
-        ' or ', el('a', { href: '/market.html#/buyer', text: 'sign in on the dashboard' }), '.');
+      balance.append('This API is charged in real USDT. Press Pay and Use API: your wallet signs in, tops up exactly what is missing and pays. Or ',
+        el('a', { href: '/market.html#/buyer', text: 'sign in and fund your account on the dashboard' }), '.');
       return;
     }
     const me = await api('/me', { bearer: buyerToken });
-    if (!me.ok) { buyerToken = null; store.set('payrail.buyer', null); return refreshBalance(); }
-    const real = q.asset === 'USDT' && me.live;
-    const b = real ? me.live : me;
-    balance.textContent = `Available balance: ${b.available} ${b.asset} (held ${b.held})${real ? ' · real USDT' : ''}`;
-  }
-  async function startTesting() {
-    const b = await api('/buyer', { body: {} });
-    if (!b.ok) { msg.textContent = fail(b); return; }
-    buyerToken = b.token; store.set('payrail.buyer', b.token);
-    const c = await api('/credits', { body: { amount: '5' }, bearer: buyerToken });
-    if (!c.ok) msg.textContent = fail(c);
-    refreshBalance();
+    if (!me.ok || !me.live) { buyerToken = null; store.set('payrail.buyer', null); return refreshBalance(); }
+    balance.textContent = `Available balance: ${me.live.available} ${me.live.asset} (held ${me.live.held}) · real USDT`;
   }
 
   runBtn.addEventListener('click', () => {
     problem.hidden = true; msg.textContent = '';
     if (!q.available) { msg.textContent = `This API cannot be used right now: ${q.unavailableReason}.`; return; }
-    if (!buyerToken && q.asset !== 'USDT') { msg.textContent = 'Start testing or sign in first.'; return; }
     const c = checkInput(input.value, rules);
     if (!c.ok) { problem.textContent = c.problem; problem.hidden = false; return; }
     confirmRow.hidden = false;
@@ -301,20 +288,18 @@ function render(d, cfg) {
   }
 
   async function runRequest(inputValue) {
-    const useEscrow = Boolean(cfg.escrow && escrow.checked);
-    msg.textContent = useEscrow ? 'Running through the TESTNET escrow (on-chain transactions, may take ~20s)…' : 'Running…';
-    const r0 = await api('/execute', { body: { listingId: l.id, input: inputValue, idempotencyKey: newKey(), ...(useEscrow ? { settlement: 'escrow' } : {}) }, bearer: buyerToken });
+    msg.textContent = 'Running…';
+    const r0 = await api('/execute', { body: { listingId: l.id, input: inputValue, idempotencyKey: newKey() }, bearer: buyerToken });
     msg.textContent = '';
     clear(out);
     if (!r0.ok) { out.append(el('div', { class: 'problem', text: fail(r0) })); refreshBalance(); return; }
     const r = r0.result;
     const price = (Number(r.priceAtomic) / 1e6).toString();
     const headline = r.charged ? `Charged ${price} ${r.asset}: the response qualified.`
-      : r.held ? 'Outcome unknown: your credits are held, not charged. They are released automatically if this stays unresolved.'
+      : r.held ? 'Outcome unknown: the amount is held, not charged. It is released automatically if this stays unresolved.'
         : 'Not charged: the response did not meet the contract.';
     out.append(el('p', { class: `headline ${r.charged ? 'ok' : r.held ? 'warn' : 'bad'}`, id: 'run-headline', text: headline }), r.reason && el('p', { class: 'muted', text: r.reason }),
       el('p', {}, el('strong', { text: 'Transaction status: ' }), el('span', { id: 'run-status', text: r.charged ? 'completed and charged' : r.held ? 'held (outcome unknown)' : 'completed, not charged' })));
-    if (r0.settlement === 'escrow') out.append(el('p', { class: 'notice', text: 'Settled through the Celo Sepolia TESTNET escrow contract (mock token).' }));
     if (r.checks.length) out.append(el('ul', {}, ...r.checks.map((x) => el('li', { text: `${x.ok ? '✓' : '✗'} ${x.name} — ${x.detail}` }))));
     if (r.body !== undefined) out.append(el('h3', { text: 'API response' }), el('pre', { text: JSON.stringify(r.body, null, 2) }));
     const rec = el('details', { open: '' }, el('summary', { text: 'Receipt' }));
@@ -329,19 +314,17 @@ function render(d, cfg) {
     if (!c.ok) { confirmRow.hidden = true; runBtn.disabled = false; problem.textContent = c.problem; problem.hidden = false; return; }
     confirmBtn.disabled = true;
     clear(out);
-    if (q.asset === 'USDT') {
-      msg.textContent = 'Preparing payment from your wallet…';
-      const ready = await payWithWallet();
-      msg.textContent = '';
-      if (!ready) { confirmBtn.disabled = false; confirmRow.hidden = true; runBtn.disabled = false; refreshBalance(); return; }
-    }
+    msg.textContent = 'Preparing payment from your wallet…';
+    const ready = await payWithWallet();
+    msg.textContent = '';
+    if (!ready) { confirmBtn.disabled = false; confirmRow.hidden = true; runBtn.disabled = false; refreshBalance(); return; }
     await runRequest(c.value);
     confirmBtn.disabled = false; confirmRow.hidden = true; runBtn.disabled = false;
   });
 
   // a transfer that was sent but not yet verified (for example the tab was closed) can be re-checked, never re-sent
   const pending = (() => { try { return JSON.parse(store.get('payrail.topup') || 'null'); } catch { return null; } })();
-  if (pending && /^0x[0-9a-fA-F]{64}$/.test(pending.hash) && q.asset === 'USDT') {
+  if (pending && /^0x[0-9a-fA-F]{64}$/.test(pending.hash)) {
     buyBox.insertBefore(el('p', { class: 'notice' }, 'A top-up transfer was sent from this browser and has not been confirmed yet. ',
       el('button', { type: 'button', class: 'secondary', id: 'check-pending', text: 'Check pending top-up', onclick: async (e) => {
         e.target.disabled = true; clear(stepsBox);

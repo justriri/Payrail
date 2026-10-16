@@ -10,10 +10,11 @@ import type { Db } from '../src/db.ts';
 import { balance, createAccount, deposit, settleExecution, startExecution, verifyLedger } from '../src/ledger.ts';
 import type { MarketRuntime } from '../src/market.ts';
 import type { ConversionRuntime } from '../src/multifunding.ts';
-import { createSimProvider } from '../src/simconversion.ts';
+import { createSimProvider } from '../src/dev/simconversion.ts';
 import { generateMasterKey } from '../src/vault.ts';
 import { createWebServer } from '../src/webapi.ts';
-import { createSimulatedRuntime } from '../src/websim.ts';
+import { DEV_SCENARIOS } from '../src/dev/scenarios.ts';
+import { createSimulatedRuntime } from '../src/dev/websim.ts';
 
 const mk = generateMasterKey('k1');
 const USDT = ASSETS.find((a) => a.symbol === 'USDT')!.address;
@@ -29,7 +30,7 @@ async function start(o: { live?: boolean } = {}) {
   };
   conversion.payout = { registry, provider, reader: provider.reader, reactor: TEXTILE_REACTOR, custody: `0x${'0'.repeat(34)}c0570d`, minConfirmations: 3, policy: { payableAssets: ['TESTUSDT'], minAtomic: 1n, maxAtomic: 10n ** 12n } };
   const market: MarketRuntime = {
-    db, keys: [mk], activeKey: mk, sandbox: !o.live, conversion,
+    db, keys: [mk], activeKey: mk, sandbox: !o.live, conversion, dev: DEV_SCENARIOS,
     ...(o.live ? { live: { funding: { chainId: 42220, token: USDT, asset: 'USDT', depositAddress: '0x1', minConfirmations: 1, maxDepositAtomic: 1n, reader: provider.reader }, payout: { payableAssets: ['USDT'], minAtomic: 1n, maxAtomic: 1n } } } : {}),
   };
   const { server, token } = createWebServer(createSimulatedRuntime({ scenario: 'ok', delayMs: 5 }), { token: 'mc-token', market });

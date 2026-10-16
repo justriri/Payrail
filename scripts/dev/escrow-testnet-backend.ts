@@ -4,12 +4,12 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createPublicClient, createWalletClient, defineChain, http } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
-import { openDb } from '../src/db.ts';
-import { createDemoNetwork, seedDemo } from '../src/demoapis.ts';
-import { RateLimiter } from '../src/egress.ts';
-import { createViemEscrowClient, executeEscrowRequest, holdIdFor, recoverEscrow } from '../src/escrow.ts';
-import { createAccount } from '../src/ledger.ts';
-import { generateMasterKey } from '../src/vault.ts';
+import { openDb } from '../../src/db.ts';
+import { createDemoNetwork, seedDemo } from '../../src/dev/demoapis.ts';
+import { RateLimiter } from '../../src/egress.ts';
+import { createViemEscrowClient, executeEscrowRequest, holdIdFor, recoverEscrow } from '../../src/escrow.ts';
+import { createAccount } from '../../src/ledger.ts';
+import { generateMasterKey } from '../../src/vault.ts';
 
 const ID = 11142220;
 const RPC = process.env.TESTNET_RPC ?? 'https://forno.celo-sepolia.celo-testnet.org';

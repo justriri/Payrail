@@ -37,15 +37,10 @@ let pollTimer = null;
 function showBanner(mode, signing) {
   const b = $('banner');
   b.hidden = false;
-  if (mode === 'simulated') {
-    b.className = 'banner sim';
-    b.textContent = 'SIMULATION MODE: no real money, no real blockchain. Results below are fake and for demonstration only.';
-  } else {
-    b.className = 'banner live';
-    b.textContent = signing
-      ? 'LIVE: payments use real funds on Celo mainnet, within your spending limits.'
-      : 'LIVE (read-only): you can inspect services and quotes. Payments are disabled until you unlock with your keystore passphrase (or start the server with a wallet key).';
-  }
+  b.className = 'banner live';
+  b.textContent = signing
+    ? 'LIVE: payments use real funds on Celo mainnet, within your spending limits.'
+    : 'LIVE (read-only): you can inspect services and quotes. Payments are disabled until you unlock with your keystore passphrase (or start the server with a wallet key).';
 }
 
 $('unlock').addEventListener('submit', async (e) => {
@@ -225,7 +220,6 @@ function renderOrder(o) {
 
   const links = $('order-links');
   clear(links);
-  if (o.mode === 'simulated') links.append(el('p', { class: 'hint', text: 'Simulation: the transactions below are fake and not on any blockchain.' }));
   if (o.conversion) for (const t of o.conversion.txs) links.append(el('p', {}, 'Conversion: ', el('a', { href: t.url, target: '_blank', rel: 'noopener noreferrer', text: t.hash })));
   if (o.payment && o.payment.url) links.append(el('p', {}, `Payment (${o.payment.status}): `, el('a', { href: o.payment.url, target: '_blank', rel: 'noopener noreferrer', text: o.payment.txHash })));
   if (o.payment && o.payment.receiptId) links.append(el('p', { class: 'hint', text: `Receipt: ${o.payment.receiptId}` }));
@@ -323,8 +317,7 @@ async function loadCatalog(reset) {
   } else {
     $('browse-status').textContent =
       `Showing ${shown} of ${data.matched} matching services (${data.total} listed by ${data.source === 'buy-gateway' ? 'the Buy gateway' : data.source})` +
-      (data.stale ? '. This list may be out of date: the catalog could not be refreshed.' : '.') +
-      (data.mode === 'simulated' ? ' SIMULATED catalog.' : '');
+      (data.stale ? '. This list may be out of date: the catalog could not be refreshed.' : '.');
   }
   $('browse-more').hidden = BR.offset >= data.matched;
 }
@@ -345,6 +338,5 @@ $('inspect-btn').addEventListener('click', () => { source = 'auto'; inspect(); }
 $('url').addEventListener('keydown', (e) => { if (e.key === 'Enter') { source = 'auto'; inspect(); } });
 $('agree').addEventListener('change', syncApprove);
 $('approve-btn').addEventListener('click', approve);
-if (MODE === 'simulated') $('url').placeholder = 'https://gateway.usebuy.ai/v1/social/x/posts/search  (simulation)';
 loadWallet();
 loadCatalog(true);

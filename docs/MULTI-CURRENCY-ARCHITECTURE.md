@@ -1,5 +1,8 @@
 # Multi-currency funding and payouts: findings and recommended architecture
 
+> **Historical document.** It describes development modes (test credits, simulation, testnet escrow) that are not part of the production product. See [PRODUCTION.md](PRODUCTION.md) for what is real today.
+
+
 > **Status: Stage 1 (simulation) is implemented and approved; everything LIVE remains unimplemented.**
 > See "Implementation status (Stage 1)" at the end. Nothing here signs, sends or converts anything real, and
 > `PAYRAIL_MARKET_LIVE` is untouched. Facts below come from **read-only** requests made on 2026-10-14 to

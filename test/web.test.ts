@@ -9,8 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { normalizeCatalog } from '../src/catalog.ts';
 import { boundsFor, createWebServer, describeOrder, exampleBody, friendlyProblem, resolveService } from '../src/webapi.ts';
-import { createSimulatedRuntime } from '../src/websim.ts';
-import type { SimScenario } from '../src/websim.ts';
+import { createSimulatedRuntime } from '../src/dev/websim.ts';
+import type { SimScenario } from '../src/dev/websim.ts';
 
 interface Harness {
   base: string;

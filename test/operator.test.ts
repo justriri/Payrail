@@ -19,7 +19,7 @@ import {
   confirmConversionQuote, executeConversionPayout, payoutAddressMessage, registerPayoutAddress, requestConversionPayout, setPayoutPreference,
 } from '../src/payoutconv.ts';
 import type { PayoutConversionConfig } from '../src/payoutconv.ts';
-import { createSimProvider } from '../src/simconversion.ts';
+import { createSimProvider } from '../src/dev/simconversion.ts';
 
 const T0 = 1_800_000_000_000;
 const CUSTODY = '0x00000000000000000000000000000000c0570d1a';

@@ -120,7 +120,6 @@ response. It runs on your own computer (`127.0.0.1` only) and **never asks for a
 by the server using the key file you load when you start it.
 
 ```sh
-npm run serve:sim      # SIMULATION: fake balances, conversion and payment. Safe to explore; clearly labelled
 npm run serve          # LIVE, read-only: inspect real services, balances and quotes (no key loaded, cannot pay)
 node --env-file=<your key file> scripts/serve.ts    # LIVE with payments enabled; every payment needs your approval
 ```
@@ -225,28 +224,20 @@ See `docs/ARCHITECTURE.md` for how the pieces fit together.
 
 See [docs/MARKETPLACE.md](docs/MARKETPLACE.md): what exists, how each part was verified, the two (test-credit / real-funds) modes, and the trust assumptions.
 
-## Marketplace and multi-currency (hackathon demo)
+## Marketplace (real USDT on Celo mainnet)
 
-Payrail also runs an outcome-based API marketplace: sellers list APIs, buyers pay only for responses that meet a
-seller-approved contract (3% platform fee). Everything below runs in **simulation / test credits**; no real funds move.
+Payrail runs an outcome-based API marketplace: sellers list real APIs, buyers pay in USDT from their own wallet and are charged
+only for responses that meet a seller-approved contract (3% platform fee). **There is no demo, test-credit or simulation mode in
+the product.** The marketplace is off unless the operator starts it in real-funds mode:
 
 ```
-node scripts/serve.ts --simulate --port 4402 --market-db data/marketplace.db   # landing page: http://127.0.0.1:4402/  app: /market.html
+PAYRAIL_MARKET_LIVE=1 node --env-file=.env scripts/serve.ts --port 4402 --market-db data/marketplace-live.db
 ```
 
-`/` is the Payrail landing page, `/market.html` is the dashboard (Buyer: Overview, Explore APIs, My API usage, Wallet and funding,
-Transactions; Seller: Overview, My APIs, Create API, Earnings, Payout settings, Payout history), and `/index.html` is the
-original wallet payment page (Buy gateway). API cards open a dedicated details/purchase page at `/api.html?id=...`. Browser regressions: `scripts/browser/verify-*.mjs`
-(including `verify-ui.mjs` and `verify-api.mjs`). Real-money testing: `docs/LIVE-TEST-RUNBOOK.md`.
+It needs `PAYRAIL_DEPOSIT_ADDRESS` (an address you control) and `PAYRAIL_VAULT_KEY`; run `node --env-file=.env scripts/golive-check.ts`
+first (read-only). `/` is the landing page, `/market.html` the dashboard, `/api.html?id=...` an API's details and purchase page, and
+`/index.html` the original wallet payment page (Buy gateway). Seller payouts and currency conversion are **not enabled**.
 
-Demo: Buyer tab -> Start testing -> add funds (pick cNGN/wARS/USDT, approve the quote, see the verified credit) -> buy a
-demo API. Seller tab -> sandbox seller -> Payout settings -> verify address -> Earnings -> request, confirm and (simulated)
-approve a payout. `node scripts/operator.ts queue|inspect|reconcile --db data/marketplace.db` is a read-only operator report.
-
-| Verified against real Textile data / executed on mainnet | Simulation only |
-|---|---|
-| Public ladder and indicative quotes (read-only), `docs/ROUTE-MATRIX.md`; USDT->cNGN and cNGN->USDT each executed once by our code (txs in the matrix) | All marketplace funding and payout conversions, buyer wallet flow after the authorization check, USDT payout lifecycle, operator recovery |
-
-Not wired: live marketplace funding and payouts (`PAYRAIL_MARKET_LIVE` is off), HTTP operator mutations (no operator
-authentication exists; recovery actions are library-level and tested), CWT (not present on any Textile route).
-See `docs/MULTI-CURRENCY-ARCHITECTURE.md`, `docs/OPERATOR-GUIDE.md`.
+What is real, what has been verified on mainnet and what is blocked: [docs/PRODUCTION.md](docs/PRODUCTION.md). Controlled live test:
+[docs/LIVE-TEST-RUNBOOK.md](docs/LIVE-TEST-RUNBOOK.md). Automated tests, including browser regressions that run the production code
+against a FAKE chain with a fake wallet, are development-only (`npm test`, `scripts/browser/verify-*.mjs`).

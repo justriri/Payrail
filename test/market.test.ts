@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { normalizeCatalog } from '../src/catalog.ts';
 import { openDb } from '../src/db.ts';
-import { createDemoNetwork, seedDemo } from '../src/demoapis.ts';
+import { createDemoNetwork, seedDemo } from '../src/dev/demoapis.ts';
 import { RateLimiter } from '../src/egress.ts';
 import type { Resolver, Transport } from '../src/egress.ts';
 import { TEST_CREDIT_CAP } from '../src/market.ts';
@@ -15,7 +15,7 @@ import { generateMasterKey } from '../src/vault.ts';
 import { createWebServer } from '../src/webapi.ts';
 import { TRANSFER_TOPIC, fundingMessage } from '../src/funding.ts';
 import type { ChainReader, ChainReceipt } from '../src/funding.ts';
-import { createSimulatedRuntime } from '../src/websim.ts';
+import { createSimulatedRuntime } from '../src/dev/websim.ts';
 
 const SELLER_SECRET = 'sk_seller_http_secret_9876543210abcdef';
 const mk = generateMasterKey('k1');
@@ -351,7 +351,13 @@ test('real-funds mode over HTTP (fake chain): register wallet, confirm a deposit
   };
   const h = await start(liveCfg);
   try {
-    const bt = await buyer(h);
+    // real-funds mode has no anonymous buyers: the buyer signs in with a wallet signature
+    assert.equal((await h.call('POST', '/buyer')).body.code, 'NOT_AVAILABLE');
+    assert.equal((await h.call('POST', '/credits', { bearer: 'x', body: { amount: '1' } })).body.code, 'NOT_AVAILABLE');
+    const bw = privateKeyToAccount(generatePrivateKey());
+    const bs = await h.call('POST', '/buyer/login/start', { body: { wallet: bw.address, chainId: 42220 } });
+    const bc = await h.call('POST', '/buyer/login/complete', { body: { wallet: bw.address, nonce: bs.body.nonce, signature: await bw.signMessage({ message: bs.body.message }) } });
+    const bt = bc.body.token as string;
     const w = privateKeyToAccount(generatePrivateKey());
     const buyerId = (await h.call('GET', '/me', { bearer: bt })).body.accountId as string;
     const info = await h.call('GET', '/funding', { bearer: bt });
@@ -369,7 +375,7 @@ test('real-funds mode over HTTP (fake chain): register wallet, confirm a deposit
     assert.equal((await h.call('POST', '/funding/confirm', { bearer: bt, body: { txHash: hash } })).body.credited[0].alreadyCredited, true);
     const me = await h.call('GET', '/me', { bearer: bt });
     assert.equal(me.body.live.available, '1');
-    assert.equal(me.body.available, '0', 'test credits are separate');
+    assert.equal(me.body.available, undefined, 'real-funds mode exposes no test-credit balance');
 
     // a seller prices a real listing; the buyer pays real (ledger) USDT only for a qualifying answer
     const { w: sw, token: st } = await seller(h);

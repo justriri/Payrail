@@ -13,7 +13,7 @@ import { approveFunding, getFundingOp, recordClientTx, requestFundingQuote } fro
 import type { FundingConfig } from '../src/marketfunding.ts';
 import { recoverAllFunding } from '../src/multifunding.ts';
 import type { ConversionRuntime } from '../src/multifunding.ts';
-import { createSimProvider } from '../src/simconversion.ts';
+import { createSimProvider } from '../src/dev/simconversion.ts';
 import { CNGN, NOW, OTHER, PAYER, SELL, TAG, USDT, goodQuote } from './swapsupport.ts';
 
 const DEPOSIT = '0x00000000000000000000000000000000000dEaD1';

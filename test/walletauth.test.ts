@@ -56,7 +56,7 @@ test('wallet sign-in creates one buyer account, binds the network, and rejects r
 
 test('HTTP: wallet sign-in yields a working buyer session; wrong chain and bad signature are refused with clear codes', async () => {
   const { createWebServer } = await import('../src/webapi.ts');
-  const { createSimulatedRuntime } = await import('../src/websim.ts');
+  const { createSimulatedRuntime } = await import('../src/dev/websim.ts');
   const { generateMasterKey } = await import('../src/vault.ts');
   const mk = generateMasterKey('k1');
   const db = openDb(':memory:');

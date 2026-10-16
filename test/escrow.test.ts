@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { openDb } from '../src/db.ts';
-import { createDemoNetwork, seedDemo } from '../src/demoapis.ts';
+import { createDemoNetwork, seedDemo } from '../src/dev/demoapis.ts';
 import { RateLimiter } from '../src/egress.ts';
 import { EscrowError, executeEscrowRequest, holdIdFor, recoverEscrow } from '../src/escrow.ts';
 import type { EscrowClient, OnChainHold } from '../src/escrow.ts';

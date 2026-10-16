@@ -6,15 +6,15 @@
 //   demo-echo.payrail.example    POST /v1/echo    text            [scenario]   returns the text with its length
 //
 // scenario (failure injection): ok | stale | http500 | html | empty | wrongtype | missing | hang | badkey
-import type { Db } from './db.ts';
+import type { Db } from '../db.ts';
 import { lookup as dnsLookup, resolveTxt } from 'node:dns/promises';
-import { httpsTransport } from './egress.ts';
-import type { EgressRequest, EgressResponse, Resolver, Transport } from './egress.ts';
-import { createAccount } from './ledger.ts';
-import { putCredential } from './vault.ts';
-import type { MasterKey } from './vault.ts';
-import { approveContract, proposeContract } from './contracts.ts';
-import { audit } from './db.ts';
+import { httpsTransport } from '../egress.ts';
+import type { EgressRequest, EgressResponse, Resolver, Transport } from '../egress.ts';
+import { createAccount } from '../ledger.ts';
+import { putCredential } from '../vault.ts';
+import type { MasterKey } from '../vault.ts';
+import { approveContract, proposeContract } from '../contracts.ts';
+import { audit } from '../db.ts';
 import { randomUUID } from 'node:crypto';
 
 export const DEMO_PRICE_HOST = 'demo-prices.payrail.example';
@@ -149,9 +149,8 @@ export function seedDemo(db: Db, mk: MasterKey, now: () => number = Date.now): {
 // whole listing flow in a browser without owning a domain. Because Payrail serves both the API and the verification
 // token for these hosts, a sandbox verification proves NOTHING about real ownership and is labelled as such. Every other
 // host is passed through to the real resolver/transport unchanged (and is still subject to all egress checks).
-export const SANDBOX_SUFFIX = '.sandbox.payrail.example';
-const SANDBOX_HOST = /^[a-z0-9]([a-z0-9-]{0,40}[a-z0-9])?\.sandbox\.payrail\.example$/;
-export const isSandboxHost = (h: string): boolean => SANDBOX_HOST.test(h);
+import { SANDBOX_SUFFIX, isSandboxHost } from '../hosts.ts';
+export { SANDBOX_SUFFIX, isSandboxHost };
 
 function challengeToken(db: Db, host: string): string | undefined {
   const r = db

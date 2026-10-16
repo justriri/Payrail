@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { MIGRATIONS, migrate, openDb, query } from '../src/db.ts';
 import { AgentError, authenticateAgent, createAgent, executeAsAgent, listAgents, revokeAgent } from '../src/agents.ts';
-import { createDemoNetwork, seedDemo } from '../src/demoapis.ts';
+import { createDemoNetwork, seedDemo } from '../src/dev/demoapis.ts';
 import { RateLimiter } from '../src/egress.ts';
 import type { ExecuteOptions } from '../src/execute.ts';
 import { TRANSFER_TOPIC, confirmDeposit, fundingMessage, registerFundingWallet } from '../src/funding.ts';
@@ -69,7 +69,7 @@ test('migration v5 preserves a populated database, keeps the immutability trigge
   const hold = startExecution(db, { buyerId: buyer, listingId: demo.priceListingId, contractVersionId: (db.prepare('SELECT id FROM contract_versions WHERE listing_id = ?').get(demo.priceListingId) as { id: string }).id, idempotencyKey: 'old-exec-1', requestHash: 'h' }, () => T0);
   const before = { avail: balance(db, buyer, 'buyer_available', 'TESTUSDT'), held: balance(db, buyer, 'buyer_held', 'TESTUSDT') };
 
-  assert.deepEqual(migrate(db, MIGRATIONS), [5, 6, 7, 8, 9]);
+  assert.deepEqual(migrate(db, MIGRATIONS), [5, 6, 7, 8, 9, 10]);
   assert.equal(balance(db, buyer, 'buyer_available', 'TESTUSDT'), before.avail);
   assert.equal(balance(db, buyer, 'buyer_held', 'TESTUSDT'), before.held);
   assert.deepEqual(verifyLedger(db), { ok: true, problems: [] });

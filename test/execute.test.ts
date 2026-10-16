@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { openDb } from '../src/db.ts';
 import type { Db } from '../src/db.ts';
-import { createDemoNetwork, seedDemo } from '../src/demoapis.ts';
+import { createDemoNetwork, seedDemo } from '../src/dev/demoapis.ts';
 import { executeRequest, executionResult, recoverExecutions } from '../src/execute.ts';
 import type { ExecuteOptions } from '../src/execute.ts';
 import type { Transport } from '../src/egress.ts';

@@ -9,7 +9,7 @@ import { USDT_CELO } from './conversion.ts';
 import type { FundingConfig, FundingOp } from './marketfunding.ts';
 import { getFundingOp, parkSimulatedAfterRestart, verifyAndCredit } from './marketfunding.ts';
 import type { ChainReader } from './funding.ts';
-import type { SimProvider } from './simconversion.ts';
+import type { SimProvider } from './dev/simconversion.ts';
 import type { PayoutConversionConfig } from './payoutconv.ts';
 import type { BuyerSwapRuntime } from './buyerswap.ts';
 

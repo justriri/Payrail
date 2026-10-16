@@ -9,7 +9,6 @@
   },
   "scripts": {
     "serve": "node --env-file=.env scripts/serve.ts",
-    "serve:sim": "node scripts/serve.ts --simulate",
     "rehearse": "node scripts/rehearse.ts",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --test \"test/*.test.ts\"",

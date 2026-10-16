@@ -457,6 +457,19 @@ CREATE TABLE account_wallets (
 ) STRICT;
 `;
 
+/**
+ * Version 10: every credited on-chain deposit records WHICH network and token contract it was verified on, who it was
+ * sent to, how many confirmations had been seen when it was verified, and that verification succeeded. Old rows keep NULLs
+ * (they were verified before these fields existed); nothing is rewritten.
+ */
+const V10 = `
+ALTER TABLE chain_deposits ADD COLUMN chain_id INTEGER;
+ALTER TABLE chain_deposits ADD COLUMN token TEXT;
+ALTER TABLE chain_deposits ADD COLUMN to_address TEXT;
+ALTER TABLE chain_deposits ADD COLUMN confirmations INTEGER;
+ALTER TABLE chain_deposits ADD COLUMN verification TEXT;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'accounts, listings, contracts, ledger, executions, audit', sql: V1 },
   { version: 2, name: 'encrypted seller credentials', sql: V2 },
@@ -467,6 +480,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 7, name: 'marketplace funding operations', sql: V7 },
   { version: 8, name: 'multi-currency funding and payout conversion (stage 1)', sql: V8, rebuild: true },
   { version: 9, name: 'per-role wallet accounts (buyer wallet sign-in)', sql: V9 },
+  { version: 10, name: 'deposit records carry network, token, recipient, confirmations and verification', sql: V10 },
 ];
 
 /** Open (creating the file and folder if needed) and bring the schema up to date. ':memory:' for tests. */

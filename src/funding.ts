@@ -144,8 +144,8 @@ export async function confirmDeposit(db: Db, cfg: FundingConfig, buyerId: string
     // deposit() is atomic and idempotent per ref; chain_deposits is a read-friendly record of what was credited
     const { created } = deposit(db, { buyerId, asset: cfg.asset, amountAtomic: amount, ref, memo: `on-chain deposit ${lower(txHash)}` }, now);
     db.prepare(
-      'INSERT OR IGNORE INTO chain_deposits (ref, buyer_id, tx_hash, log_index, from_address, amount_atomic, asset, block_number, credited_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    ).run(ref, buyerId, lower(txHash), log.logIndex, from, amount, cfg.asset, receipt.blockNumber, new Date(now()).toISOString());
+      'INSERT OR IGNORE INTO chain_deposits (ref, buyer_id, tx_hash, log_index, from_address, amount_atomic, asset, block_number, credited_at, chain_id, token, to_address, confirmations, verification) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(ref, buyerId, lower(txHash), log.logIndex, from, amount, cfg.asset, receipt.blockNumber, new Date(now()).toISOString(), cfg.chainId, lower(cfg.token), lower(cfg.depositAddress), confirmations, 'verified');
     out.push({ ref, amountAtomic: amount, from, logIndex: log.logIndex, created });
   }
   if (out.length === 0) {

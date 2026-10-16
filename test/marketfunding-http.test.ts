@@ -4,15 +4,16 @@ import { test } from 'node:test';
 import { ASSETS } from '../src/assets.ts';
 import { TEXTILE_REACTOR } from '../src/config.ts';
 import { openDb } from '../src/db.ts';
-import { createDemoNetwork, seedDemo } from '../src/demoapis.ts';
+import { createDemoNetwork, seedDemo } from '../src/dev/demoapis.ts';
 import { RateLimiter } from '../src/egress.ts';
 import { verifyLedger } from '../src/ledger.ts';
 import type { MarketRuntime } from '../src/market.ts';
 import type { FundingConfig } from '../src/marketfunding.ts';
-import { createSimFunding } from '../src/simfunding.ts';
+import { createSimFunding } from '../src/dev/simfunding.ts';
 import { generateMasterKey } from '../src/vault.ts';
 import { createWebServer } from '../src/webapi.ts';
-import { createSimulatedRuntime } from '../src/websim.ts';
+import { DEV_SCENARIOS } from '../src/dev/scenarios.ts';
+import { createSimulatedRuntime } from '../src/dev/websim.ts';
 
 const mk = generateMasterKey('k1');
 const USDT = ASSETS.find((a) => a.symbol === 'USDT')!.address;
@@ -28,7 +29,7 @@ async function start(o: { mode?: 'simulated' | 'live'; noFunding?: boolean } = {
     limits: { minSellAtomic: 100_000_000n, maxSellAtomic: 7_000_000_000n, maxPerDaySellAtomic: 14_000_000_000n, maxOpenOps: 3 }, creditAsset: 'TESTUSDT',
   };
   const market: MarketRuntime = {
-    db, keys: [mk], activeKey: mk, sandbox: true,
+    db, keys: [mk], activeKey: mk, sandbox: true, dev: DEV_SCENARIOS,
     execute: { demoCall: { limiter: new RateLimiter(100, 100), fetchOptions: { resolver: dn.resolver, transport: dn.transport, timeoutMs: 300 } } },
     ...(o.noFunding ? {} : { funding }),
   };

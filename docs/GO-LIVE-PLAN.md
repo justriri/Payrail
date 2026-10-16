@@ -1,5 +1,8 @@
 # Path from simulated marketplace to on-chain product (audit and staged plan)
 
+> **Historical document.** It describes development modes (test credits, simulation, testnet escrow) that are not part of the production product. See [PRODUCTION.md](PRODUCTION.md) for what is real today.
+
+
 Audited 2026-10-15 at commit 8566438. Status key: REAL = works against the real network when real-funds mode is enabled;
 SIM = simulation only; MISSING = not built.
 

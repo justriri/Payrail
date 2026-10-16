@@ -5,14 +5,14 @@ import { test } from 'node:test';
 import { openDb } from '../src/db.ts';
 import type { Db } from '../src/db.ts';
 import { evaluate, parseContractBody } from '../src/contracts.ts';
-import { createDemoNetwork, createSandboxNetwork, seedDemo, PRICE_CONTRACT } from '../src/demoapis.ts';
+import { createDemoNetwork, createSandboxNetwork, seedDemo, PRICE_CONTRACT } from '../src/dev/demoapis.ts';
 import { RateLimiter } from '../src/egress.ts';
 import { recoverExecutions } from '../src/execute.ts';
 import { balance, verifyLedger } from '../src/ledger.ts';
 import type { MarketRuntime } from '../src/market.ts';
 import { generateMasterKey } from '../src/vault.ts';
 import { createWebServer } from '../src/webapi.ts';
-import { createSimulatedRuntime } from '../src/websim.ts';
+import { createSimulatedRuntime } from '../src/dev/websim.ts';
 import { buyerStatement, platformStatement, sellerStatement } from '../src/billing.ts';
 
 const T0 = Date.now();

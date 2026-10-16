@@ -9,7 +9,7 @@ Nothing in this runbook has been executed by the build. Every step that moves mo
 | Buyer wallet sign-in (signature, network named, single-use) | Implemented | Unit and HTTP tests with local signers. Never tried with a browser wallet extension. |
 | Real USDT funding: one-click from your wallet (or send manually and paste the hash) | Implemented | `test/market.test.ts` runs the whole path against a fake chain reader: token, sender (your verified wallet), recipient, amount, confirmations, credited once. **Never run on mainnet.** |
 | Create, verify and publish a real API (`REAL USDT` option) | Implemented | Same test covers DNS proof, credential, contract, publish with fakes. In real-funds mode the server now uses the real SSRF-safe egress and real DNS. **Untested against the real internet.** |
-| Pay and Use API with outcome-based billing in USDT | Implemented | Same engine as test credits; charges only validated outcomes. Real-USDT path covered by the fake-chain test. |
+| Pay and Use API with outcome-based billing in USDT | Implemented | Charges only validated outcomes. Real-USDT path covered by the fake-chain test. |
 | Receipts and on-chain verification of deposits | Implemented | Receipt page; deposits verified from the chain before any credit. |
 | Seller earnings accounting (USDT ledger) | Implemented | Ledger tests; `scripts/operator.ts reconcile`. |
 | Buyer-signed conversion (non-USDT assets) | Built, wired behind `PAYRAIL_BUYER_SWAP=1` | Fakes only. **Do not use in the first live test.** |
@@ -56,8 +56,8 @@ Verified with a fake chain and a fake wallet (`scripts/browser/verify-pay.mjs`);
    send 0.5 USDT from that wallet to the deposit address using your wallet app -> paste the transaction hash.
    Expect PENDING until confirmations, then SUCCESS. Check the transaction on a Celo explorer (token = USDT
    `0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e`, recipient = your deposit address).
-6. **Seller (optional, needs a public https API you control):** Seller -> sign in with wallet -> Create API -> tick
-   "Charge buyers in REAL USDT" -> prove the wallet and the domain (DNS TXT or well-known file) -> add the credential if needed
+6. **Seller (optional, needs a public https API you control):** Seller -> sign in with wallet -> Create API (every listing is priced in real USDT)
+   -> prove the wallet and the domain (DNS TXT or well-known file) -> add the credential if needed
    -> Test -> approve the suggested contract -> Publish.
 7. **Buy it:** Buyer -> Explore APIs -> View API -> Pay and Use API -> Confirm. Check the charge, the receipt and your
    balance. Opening the page charges nothing; only the confirmed request does, and only if the response qualifies.

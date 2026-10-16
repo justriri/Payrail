@@ -50,20 +50,19 @@
 
     <main class="workspace" id="workspace">
     <section class="card" id="buyer-card" data-view="buyer" data-panel="overview funding" data-span="5">
-      <h2>Buyer: test credits</h2>
+      <h2>Buyer account</h2>
       <div id="buyer"></div>
     </section>
 
     <section class="card" id="fund-card" data-view="buyer" data-panel="overview funding" data-span="7">
-      <h2>Add funds: cNGN to USDT through Textile</h2>
+      <h2>Add funds (USDT)</h2>
       <div id="fund"></div>
     </section>
 
     <section class="card" id="services-card" data-view="buyer" data-panel="explore" data-span="12">
       <h2>Services</h2>
       <details><summary>Where does each service come from?</summary><ul id="legend" class="legend"></ul></details>
-      <div class="filters"><input id="q" type="search" placeholder="Search services" autocomplete="off">
-        <label id="demo-toggle" class="check" hidden><input id="show-demo" type="checkbox"> <span>Show demo APIs (test credits, no real money)</span></label></div>
+      <div class="filters"><input id="q" type="search" placeholder="Search services" autocomplete="off"></div>
       <p id="cat-status" class="muted" role="status">Loading…</p>
       <div id="cat-list" class="cards"></div>
     </section>
@@ -71,7 +70,7 @@
         <section class="card" id="history-card" data-view="buyer" data-panel="overview usage transactions" data-span="12">
       <h2>Your requests and transaction history</h2>
       <div id="statement"></div>
-      <div id="history" class="muted">Start testing first.</div>
+      <div id="history" class="muted">Sign in with your wallet first.</div>
     </section>
 
     <section class="card" id="seller-card" data-view="seller" data-panel="overview apis new earnings payout-settings payouts edit" data-span="12">
@@ -86,17 +85,7 @@
       <div id="agents"></div>
     </section>
 
-    <section class="card" id="escrow-card" data-view="buyer" data-panel="funding" data-span="12">
-      <h2>Escrow settlement (testnet only)</h2>
-      <div id="escrow"></div>
-    </section>
-
-    <section class="card" id="funding-card" data-view="buyer" data-panel="funding" data-span="12">
-      <h2>Payment options</h2>
-      <p class="hint">Pay a Buy gateway service directly with your own wallet and currency conversion: <a href="/index.html">open the wallet payment page</a>.</p>
-      <div id="funding"></div>
-    </section>
-  </main>
+          </main>
   </div>
 </div>
 <script src="/market.js"></script>

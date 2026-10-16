@@ -64,8 +64,6 @@ ol { padding-left: 20px; }
 .o-buy { background:#e3f1ff; color:#0b4f8a; }
 .o-sim { background:#fff3d6; color:#8a5a00; }
 .o-seller { background:#e0f5e6; color:#0b6b2a; }
-.o-sandbox { background:#efe3ff; color:#5a2a9a; }
-.o-demo { background:#ffe7e0; color:#9a3412; }
 .notice { background:#eef6ff; border-left:4px solid #3b82f6; padding:8px 12px; margin:6px 0; border-radius:0 8px 8px 0; }
 .legend { list-style:none; padding:0; margin:8px 0; }
 .legend li { margin:6px 0; }

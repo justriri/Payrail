@@ -3,10 +3,10 @@
 // (verifyConversion), so every funding rule is exercised. Anything it credits is labelled simulated and is credited in the
 // TEST asset only.
 import { toEventSelector } from 'viem';
-import { TRANSFER_TOPIC } from './funding.ts';
-import type { ChainLog, ChainReader, ChainReceipt } from './funding.ts';
-import type { ConverterQuote, ExecuteResult, FundingConverter } from './marketfunding.ts';
-import { FundingOpError } from './marketfunding.ts';
+import { TRANSFER_TOPIC } from '../funding.ts';
+import type { ChainLog, ChainReader, ChainReceipt } from '../funding.ts';
+import type { ConverterQuote, ExecuteResult, FundingConverter } from '../marketfunding.ts';
+import { FundingOpError } from '../marketfunding.ts';
 
 export const SIM_RECIPIENT = `0x${'0'.repeat(34)}51aa11`;
 const OTHER_ADDRESS = `0x${'0'.repeat(34)}0b0b0b`;

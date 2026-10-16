@@ -18,7 +18,7 @@ import { VaultError, listCredentials, putCredential, revokeCredential } from './
 import type { MasterKey } from './vault.ts';
 import { randomBytes, createHash, createHmac } from 'node:crypto';
 import { privateKeyToAccount } from 'viem/accounts';
-import { isSandboxHost } from './demoapis.ts';
+import { isSandboxHost } from './hosts.ts';
 import { AgentError, authenticateAgent, createAgent, executeAsAgent, listAgents, revokeAgent } from './agents.ts';
 import { FundingError, confirmDeposit, fundingMessage, fundingMessageOnChain, fundingWallets, registerFundingWallet } from './funding.ts';
 import { takerControlTypedData, verifyTakerProof } from './takerproof.ts';
@@ -33,10 +33,8 @@ import type { PayoutPolicy } from './payouts.ts';
 import { EscrowError, executeEscrowRequest } from './escrow.ts';
 import { FundingOpError, approveFunding, fundingEvents, fundingView, getFundingOp, listFundingOps, recordClientTx, requestFundingQuote, verifyAndCredit } from './marketfunding.ts';
 import type { FundingConfig as ConversionFundingConfig } from './marketfunding.ts';
-import { SIM_SCENARIOS } from './simfunding.ts';
 import { fundingConfigFor, fundingConfigForOp, routeLimits } from './multifunding.ts';
 import type { ConversionRuntime } from './multifunding.ts';
-import { SIM_FUNDING_SCENARIOS, SIM_PAYOUT_SCENARIOS } from './simconversion.ts';
 import {
   PayoutConvError, confirmConversionQuote, executeConversionPayout, getPayoutPreference, payoutAddressMessage, payoutAddresses, payoutEvents,
   recheckConversionPayout, registerPayoutAddress, requestConversionPayout, requoteConversionPayout, retryConversionDelivery, setPayoutPreference,
@@ -72,6 +70,11 @@ export interface MarketRuntime {
   /** Stage 1 multi-currency: route discovery, asset-agnostic funding, payout preferences and simulated payout conversion */
   conversion?: ConversionRuntime;
   /** real-funds mode. Absent = test credits only and every real-money route answers LIVE_DISABLED. */
+  /**
+   * DEVELOPMENT TESTS ONLY. The failure-injection scenario names the simulated providers understand. scripts/serve.ts never sets
+   * this, so production accepts no scenario parameter at all.
+   */
+  dev?: { fundingScenarios?: readonly string[]; payoutScenarios?: readonly string[]; legacyScenarios?: readonly string[] };
   live?: {
     funding: FundingConfig;
     payout: PayoutPolicy;
@@ -209,8 +212,20 @@ export function sellerLabel(db: Db, sellerId: string): string {
   return addr ? short(addr) : 'Payrail seller';
 }
 
-export function payrailItems(db: Db): MarketItem[] {
-  return query(db, "SELECT * FROM listings WHERE status = 'published' ORDER BY created_at, name").map((r) => ({
+/**
+ * PRODUCTION RULE: a listing can be sold only if it is priced in real USDT, is not a Payrail demo, and does not live on the
+ * in-process sandbox network. Anything else (demo listings, test-credit listings, sandbox listings) is invisible and
+ * unpurchasable when the server runs in real-funds mode, whatever the client asks for.
+ */
+export function isRealListing(l: { asset: string; demo: boolean; host: string | null }): boolean {
+  return l.asset === 'USDT' && !l.demo && !isSandboxHost(String(l.host ?? ''));
+}
+
+export function payrailItems(db: Db, opts: { realOnly?: boolean } = {}): MarketItem[] {
+  const rows = query(db, "SELECT * FROM listings WHERE status = 'published' ORDER BY created_at, name").filter(
+    (r) => !opts.realOnly || isRealListing({ asset: String(r.asset), demo: Number(r.demo) === 1, host: r.host === null ? null : String(r.host) }),
+  );
+  return rows.map((r) => ({
     seller: Number(r.demo) === 1 ? 'Payrail demo' : sellerLabel(db, String(r.seller_id)),
     id: String(r.id),
     title: String(r.name),
@@ -227,7 +242,7 @@ export function payrailItems(db: Db): MarketItem[] {
 }
 
 export async function mergedCatalog(rt: MarketRuntime, q?: string): Promise<{ items: MarketItem[]; buy: { available: boolean; stale?: boolean; message?: string } }> {
-  let items = payrailItems(rt.db);
+  let items = payrailItems(rt.db, { realOnly: Boolean(rt.live) });
   let buy: { available: boolean; stale?: boolean; message?: string } = { available: false, message: 'Buy catalog not connected' };
   if (rt.buyCatalog) {
     try {
@@ -380,6 +395,14 @@ const str = (v: unknown, what: string, max = 500): string => {
   return v;
 };
 
+function safeHost(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
 function mapError(e: unknown): MarketResponse {
   if (e instanceof ApiError) return { status: e.status, body: { ok: false, code: e.code, message: e.message, retryable: e.status >= 500 || e.status === 429 } };
   const code = (e as { code?: string }).code ?? 'ERROR';
@@ -436,15 +459,20 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
     return id;
   };
   let m: RegExpMatchArray | null;
+  /** production only: refuse to sell anything that is not a verified, real-USDT, non-demo, non-sandbox listing */
+  const assertRealListing = (listingId: string) => {
+    const l = getListing(db, listingId);
+    if (!l || !isRealListing(l)) throw new ApiError(409, 'NOT_REAL_LISTING', 'this listing cannot be purchased: only real-USDT listings with verified ownership are sold in real-funds mode');
+  };
 
   // ---- public
   if (method === 'GET' && path === '/catalog') {
     const c = await mergedCatalog(rt, req.query.get('q') ?? undefined);
-    return ok({ mode: 'test-credits', ...c });
+    return ok({ mode: rt.live ? 'real-funds' : 'test-credits', ...c });
   }
   if (method === 'GET' && (m = path.match(/^\/listing\/([\w-]{1,80})$/))) {
     const l = getListing(db, m[1]!);
-    if (!l || l.status !== 'published') throw new ApiError(404, 'NOT_FOUND', 'no such listing');
+    if (!l || l.status !== 'published' || (rt.live && !isRealListing(l))) throw new ApiError(404, 'NOT_FOUND', 'no such listing');
     return ok({
       listing: listingView(db, l, false),
       quote: quoteFor(db, l.id, { escrowEnabled: Boolean(rt.escrow) }),
@@ -462,15 +490,25 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
     const q = quoteFor(db, m[1]!, { escrowEnabled: Boolean(rt.escrow) });
     if (!q) throw new ApiError(404, 'NOT_FOUND', 'no such listing');
     const l = getListing(db, m[1]!);
-    if (!l || l.status !== 'published') throw new ApiError(404, 'NOT_FOUND', 'no such listing');
+    if (!l || l.status !== 'published' || (rt.live && !isRealListing(l))) throw new ApiError(404, 'NOT_FOUND', 'no such listing');
     return ok({ quote: q });
   }
 
   // ---- buyer
-  if (method === 'POST' && path === '/buyer') return ok(createBuyer(rt), 201);
+  if (method === 'POST' && path === '/buyer') {
+    if (rt.live) throw new ApiError(403, 'NOT_AVAILABLE', 'anonymous test buyers do not exist in real-funds mode: sign in with your wallet (POST /buyer/login/start)');
+    return ok(createBuyer(rt), 201);
+  }
   if (method === 'GET' && path === '/me') {
     const id = account();
     const kind = kindOf(id);
+    if (rt.live) {
+      // real-funds mode reports REAL balances only; test-credit balances are never shown or spendable
+      const real: Record<string, unknown> = { accountId: id, kind, mode: 'real-funds', asset: LIVE_ASSET };
+      if (kind === 'buyer') real.live = { asset: LIVE_ASSET, available: formatAtomic(balance(db, id, 'buyer_available', LIVE_ASSET)), held: formatAtomic(balance(db, id, 'buyer_held', LIVE_ASSET)) };
+      else real.live = { asset: LIVE_ASSET, earnings: formatAtomic(balance(db, id, 'seller_earnings', LIVE_ASSET)), pendingPayout: formatAtomic(balance(db, id, 'payout_pending', LIVE_ASSET)) };
+      return ok(real);
+    }
     const out: Record<string, unknown> = { accountId: id, kind, mode: 'test-credits', asset: TEST_ASSET };
     if (kind === 'buyer') {
       out.available = formatAtomic(balance(db, id, 'buyer_available', TEST_ASSET));
@@ -486,6 +524,7 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
     return ok(out);
   }
   if (method === 'POST' && path === '/credits') {
+    if (rt.live) throw new ApiError(403, 'NOT_AVAILABLE', 'test credits do not exist in real-funds mode');
     const id = buyer();
     const r = grantTestCredits(rt, id, parseAtomic(body.amount ?? '1'));
     return ok({ granted: formatAtomic(r.granted), totalGranted: formatAtomic(r.total), note: 'TEST CREDITS - not real money' });
@@ -497,6 +536,7 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
       const er = await executeEscrowRequest(db, rt.keys, rt.escrow.client, { buyerId: id, listingId: str(body.listingId, 'listingId', 80), idempotencyKey: str(body.idempotencyKey, 'idempotencyKey', 100), input: body.input ?? {}, asset: rt.escrow.asset }, { ...(rt.execute?.call ? { call: rt.execute.call } : {}), ...(rt.execute?.demoCall ? { demoCall: rt.execute.demoCall } : {}), ...(rt.now ? { now: rt.now } : {}) });
       return ok({ result: er, settlement: 'escrow' }, er.replay ? 200 : 201);
     }
+    if (rt.live) assertRealListing(str(body.listingId, 'listingId', 80));
     const r = await executeRequest(db, rt.keys, { buyerId: id, listingId: str(body.listingId, 'listingId', 80), idempotencyKey: str(body.idempotencyKey, 'idempotencyKey', 100), input: body.input ?? {} }, rt.execute ?? {});
     return ok({ result: r }, r.replay ? 200 : 201);
   }
@@ -631,7 +671,7 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
         agent: { id: agent.id, name: agent.name, status: agent.status },
         limits: { perRequest: formatAtomic(agent.perRequestCapAtomic), daily: formatAtomic(agent.dailyCapAtomic), allowedListings: agent.allowedListings },
         usage: { spentLast24h: formatAtomic(u.spentLast24hAtomic), remainingDaily: formatAtomic(u.remainingDailyAtomic) },
-        credits: [TEST_ASSET, ...(rt.live ? [LIVE_ASSET] : [])].map((asset) => ({ asset, available: formatAtomic(balance(db, agent.ownerId, 'buyer_available', asset)) })),
+        credits: (rt.live ? [LIVE_ASSET] : [TEST_ASSET]).map((asset) => ({ asset, available: formatAtomic(balance(db, agent.ownerId, 'buyer_available', asset)) })),
       });
     }
     if (method === 'GET' && path === '/agent/catalog') {
@@ -644,6 +684,7 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
       return ok({ listing: item });
     }
     if (method === 'POST' && path === '/agent/execute') {
+      if (rt.live) assertRealListing(str(body.listingId, 'listingId', 80));
       const r = await executeAsAgent(db, rt.keys, agent, { listingId: str(body.listingId, 'listingId', 80), idempotencyKey: str(body.idempotencyKey, 'idempotencyKey', 50), input: body.input ?? {} }, rt.execute ?? {});
       const receipt = receiptFor(db, r.executionId)!;
       const advice =
@@ -669,6 +710,7 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
   if (path.startsWith('/fund/') && rt.conversion) {
     const id = buyer();
     const c = rt.conversion;
+    if (rt.live && c.simulated) throw new ApiError(403, 'NOT_AVAILABLE', 'simulated conversion does not exist in real-funds mode');
     // defence in depth: a live provider is never used unless real-funds mode was explicitly enabled
     if (!c.simulated && !rt.live) throw new ApiError(409, 'LIVE_DISABLED', 'live conversion is disabled: real-funds mode is not enabled');
     const walletOf = (buyerId: string): string | undefined => fundingWallets(db, buyerId)[0];
@@ -740,7 +782,7 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
         note: 'Routes are discovered live from the provider and filtered by the operator allow-list. A route that works into USDT says nothing about the reverse direction.',
         deliversTo: 'USDT on Celo',
         routes: rs.map(routeView),
-        scenarios: c.simulated ? SIM_FUNDING_SCENARIOS : [],
+        scenarios: c.simulated ? (rt.dev?.fundingScenarios ?? []) : [],
       });
     }
     if (method === 'GET' && path === '/fund/config') {
@@ -750,7 +792,7 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
         buy: 'USDT', creditAsset: c.creditAsset, creditLabel: c.simulated ? 'test credits (simulated funding)' : 'USDT',
         depositAddress: c.depositAddress, minConfirmations: c.minConfirmations, usdt: c.usdt, buyerSigned: Boolean(c.buyerSwap && !c.simulated && rt.live), chainId: c.chainId,
         steps: ['Pick an asset and an amount and get a quote (nothing is converted yet)', 'Review the rate, fee, minimum and what will be credited, then approve', 'Your wallet converts, then deposits the USDT; each step is verified on-chain before your balance is credited'],
-        scenarios: c.simulated ? SIM_FUNDING_SCENARIOS : [],
+        scenarios: c.simulated ? (rt.dev?.fundingScenarios ?? []) : [],
       });
     }
     if (method === 'GET' && path === '/fund/ops') {
@@ -771,7 +813,7 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
       if (!route.usable) throw new ApiError(422, 'UNSUPPORTED_ASSET', `${route.from.symbol} cannot be used to fund right now: ${route.reason ?? 'unavailable'}`);
       const amount = parseUnitsText(body.amount, route.from.decimals);
       const key = typeof body.idempotencyKey === 'string' && /^[\w.:-]{8,100}$/.test(body.idempotencyKey) ? body.idempotencyKey : `q-${randomBytes(12).toString('hex')}`;
-      const scenario = c.simulated && typeof body.scenario === 'string' && (SIM_FUNDING_SCENARIOS as readonly string[]).includes(body.scenario) ? body.scenario : undefined;
+      const scenario = c.simulated && typeof body.scenario === 'string' && (rt.dev?.fundingScenarios ?? []).includes(body.scenario) ? body.scenario : undefined;
       const w = walletOf(id);
       // simulation may use a stand-in wallet; anything live needs a wallet the buyer proved
       if (!c.simulated && !w) throw new ApiError(409, 'NO_FUNDING_WALLET', 'connect and verify your wallet before requesting a funding quote');
@@ -822,6 +864,7 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
 
   // ---- marketplace funding: cNGN -> (Textile) -> USDT -> marketplace balance
   if (path.startsWith('/fund/')) {
+    if (rt.live) throw new ApiError(403, 'NOT_AVAILABLE', 'simulated marketplace funding does not exist in real-funds mode');
     const id = buyer();
     const f = rt.funding;
     if (!f) throw new ApiError(409, 'FUNDING_DISABLED', 'marketplace funding is not configured on this server');
@@ -841,7 +884,7 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
         creditLabel: sim ? 'test credits (simulated funding)' : 'USDT',
         limits: { min: dec(f.limits.minSellAtomic), max: dec(f.limits.maxSellAtomic), perDay: dec(f.limits.maxPerDaySellAtomic), openOperations: f.limits.maxOpenOps },
         minConfirmations: f.minConfirmations,
-        scenarios: sim ? SIM_SCENARIOS : [],
+        scenarios: sim ? (rt.dev?.legacyScenarios ?? []) : [],
         recipient: f.converter.recipient,
         steps: ['Enter a cNGN amount and get a quote (nothing is converted yet)', 'Review the rate, fees, minimum and what will be credited, then approve', 'The conversion is verified on-chain before your balance is credited'],
       });
@@ -861,7 +904,7 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
     if (method === 'POST' && path === '/fund/quote') {
       const sell = parseAtomic(body.amount);
       const key = typeof body.idempotencyKey === 'string' && /^[\w.:-]{8,100}$/.test(body.idempotencyKey) ? body.idempotencyKey : `q-${randomBytes(12).toString('hex')}`;
-      const scenario = f.converter.mode === 'simulated' && typeof body.scenario === 'string' && (SIM_SCENARIOS as readonly string[]).includes(body.scenario) ? body.scenario : undefined;
+      const scenario = f.converter.mode === 'simulated' && typeof body.scenario === 'string' && (rt.dev?.legacyScenarios ?? []).includes(body.scenario) ? body.scenario : undefined;
       const o = await requestFundingQuote(db, f, { buyerId: id, sellAtomic: sell, idempotencyKey: key, ...(scenario ? { scenario } : {}) }, now);
       return ok({ operation: fundingView(o, now()) }, 201);
     }
@@ -887,7 +930,22 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
       realFunds: Boolean(rt.live),
       buySimulated: Boolean(rt.buySimulated),
       escrow: tn ? { network: 'Celo Sepolia TESTNET', chainId: tn.chainId, contract: tn.escrow, token: tn.token, wallet: tn.wallet, explorer: tn.explorer } : null,
-      legend: ORIGIN_LABELS,
+      legend: rt.live ? { 'buy-gateway': ORIGIN_LABELS['buy-gateway'], 'payrail-seller': ORIGIN_LABELS['payrail-seller'] } : ORIGIN_LABELS,
+      ...(rt.live ? {
+        network: {
+          name: 'Celo mainnet',
+          chainId: rt.live.funding.chainId,
+          token: { symbol: rt.live.funding.asset, address: rt.live.funding.token, decimals: 6 },
+          depositAddress: rt.live.funding.depositAddress,
+          minConfirmations: rt.live.funding.minConfirmations,
+          maxDeposit: formatAtomic(rt.live.funding.maxDepositAtomic),
+          platformFeePercent: 3,
+        },
+        features: {
+          conversion: Boolean(rt.conversion && !rt.conversion.simulated),
+          payouts: Boolean(rt.live.payoutRequestsEnabled),
+        },
+      } : {}),
     });
   }
 
@@ -1009,9 +1067,10 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
     }
     if (method === 'POST' && path === '/seller/payouts/convert') {
       if (!c.payout) throw new ApiError(409, 'CONVERSION_DISABLED', 'payout conversion is not configured');
+      if (rt.live && c.simulated) throw new ApiError(403, 'NOT_AVAILABLE', 'simulated payouts do not exist in real-funds mode');
       const asset = c.simulated ? TEST_ASSET : LIVE_ASSET;
       const amount = parseAtomic(body.amount);
-      const scenario = c.simulated && typeof body.scenario === 'string' && (SIM_PAYOUT_SCENARIOS as readonly string[]).includes(body.scenario) ? body.scenario : undefined;
+      const scenario = c.simulated && typeof body.scenario === 'string' && (rt.dev?.payoutScenarios ?? []).includes(body.scenario) ? body.scenario : undefined;
       const p = await requestConversionPayout(db, c.payout, { sellerId: sid, amountAtomic: amount, asset, ...(typeof body.listingId === 'string' && body.listingId ? { listingId: body.listingId } : {}), ...(scenario ? { scenario } : {}) }, now);
       return ok({ payout: view(p.id) }, 201);
     }
@@ -1033,7 +1092,7 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
         if (!c.simulated || rt.live) throw new ApiError(409, 'SIMULATION_ONLY', 'this control exists only in simulation; real payouts are approved and executed by the operator tooling');
         if (action === 'simulate-approve') approvePayout(db, pid, 'simulated-operator', now);
         else {
-          const scenario = typeof body.scenario === 'string' && (SIM_PAYOUT_SCENARIOS as readonly string[]).includes(body.scenario) ? body.scenario : undefined;
+          const scenario = typeof body.scenario === 'string' && (rt.dev?.payoutScenarios ?? []).includes(body.scenario) ? body.scenario : undefined;
           await executeConversionPayout(db, c.payout, { payoutId: pid, ...(scenario ? { scenario } : {}) }, now);
         }
       }
@@ -1071,10 +1130,11 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
   if (method === 'POST' && path === '/seller/listings') {
     const id = seller();
     const meth = body.method === 'POST' ? 'POST' : 'GET';
+    if (rt.live && isSandboxHost(safeHost(str(body.endpointUrl, 'endpointUrl', 500)))) throw new ApiError(422, 'NOT_A_REAL_ENDPOINT', 'sandbox endpoints cannot be listed in real-funds mode: use your real, public https API');
     const r = submitListing(
       db,
       id,
-      { name: str(body.name, 'name', 80), description: typeof body.description === 'string' ? body.description : '', endpointUrl: str(body.endpointUrl, 'endpointUrl', 500), method: meth, priceAtomic: parseAtomic(body.price), asset: body.live === true ? liveOnly().asset : TEST_ASSET },
+      { name: str(body.name, 'name', 80), description: typeof body.description === 'string' ? body.description : '', endpointUrl: str(body.endpointUrl, 'endpointUrl', 500), method: meth, priceAtomic: parseAtomic(body.price), asset: rt.live ? liveOnly().asset : body.live === true ? liveOnly().asset : TEST_ASSET },
       now,
     );
     return ok({ listing: listingView(db, r.listing, true, rt.keys.map((k) => k.id)) }, 201);
@@ -1167,12 +1227,13 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
     const id = seller();
     const states = query(db, 'SELECT e.state, COUNT(*) AS n, SUM(COALESCE(e.seller_atomic, 0)) AS s FROM executions e JOIN listings l ON l.id = e.listing_id WHERE l.seller_id = ? GROUP BY e.state', id);
     const recent = query(db, 'SELECT e.*, l.name FROM executions e JOIN listings l ON l.id = e.listing_id WHERE l.seller_id = ? ORDER BY e.created_at DESC LIMIT 30', id);
+    const earnAsset = rt.live ? LIVE_ASSET : TEST_ASSET;
     return ok({
-      asset: TEST_ASSET,
-      earnings: formatAtomic(balance(db, id, 'seller_earnings', TEST_ASSET)),
+      asset: earnAsset,
+      earnings: formatAtomic(balance(db, id, 'seller_earnings', earnAsset)),
       byState: states.map((r) => ({ state: String(r.state), count: Number(r.n), sellerAtomic: formatAtomic(BigInt(r.s as bigint)) })),
       recent: recent.map(executionRow),
-      note: 'Test credits. Settlement of real funds is not enabled.',
+      note: rt.live ? 'Real USDT earnings in your Payrail balance. Payouts are disabled until the secure payout flow is reviewed.' : 'Test credits. Settlement of real funds is not enabled.',
     });
   }
   audit(db, 'system', 'market.unknown_route', `${method} ${path.slice(0, 80)}`, undefined, new Date(now()));

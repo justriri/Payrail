@@ -5,11 +5,11 @@
 // and a listed-but-empty one (G$). Prices are simulation constants, not live rates. Execution writes FAKE chain receipts
 // that go through the same verification code as a live conversion.
 import { toEventSelector } from 'viem';
-import { TRANSFER_TOPIC } from './funding.ts';
-import type { ChainLog, ChainReader, ChainReceipt } from './funding.ts';
-import { USDT_CELO } from './conversion.ts';
-import type { AssetRef, ConversionProvider, ConversionQuote, Direction, Route, UnavailableReason } from './conversion.ts';
-import type { ExecuteResult, FundingConverter } from './marketfunding.ts';
+import { TRANSFER_TOPIC } from '../funding.ts';
+import type { ChainLog, ChainReader, ChainReceipt } from '../funding.ts';
+import { USDT_CELO } from '../conversion.ts';
+import type { AssetRef, ConversionProvider, ConversionQuote, Direction, Route, UnavailableReason } from '../conversion.ts';
+import type { ExecuteResult, FundingConverter } from '../marketfunding.ts';
 
 const FILL = toEventSelector('Fill(bytes32,address,address,uint256)');
 const pad = (a: string) => `0x${a.toLowerCase().replace('0x', '').padStart(64, '0')}`;

@@ -1,5 +1,8 @@
 # Payrail Marketplace
 
+> **Historical document.** It describes development modes (test credits, simulation, testnet escrow) that are not part of the production product. See [PRODUCTION.md](PRODUCTION.md) for what is real today.
+
+
 Outcome-based API marketplace on top of the existing Buy/x402 payment flow. **Pay only for responses that meet a
 written contract.** The Buy flow (cNGN → USDT → x402) is unchanged and independent.
 

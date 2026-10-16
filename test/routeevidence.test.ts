@@ -6,7 +6,7 @@ import { TEXTILE_REACTOR } from '../src/config.ts';
 import { RouteRegistry, seedConversionAssets, setAssetEnabled } from '../src/conversion.ts';
 import { openDb } from '../src/db.ts';
 import { evidenceFor } from '../src/routeevidence.ts';
-import { createSimProvider } from '../src/simconversion.ts';
+import { createSimProvider } from '../src/dev/simconversion.ts';
 import { createTextileRouteProvider } from '../src/textileroutes.ts';
 import type { LadderPair } from '../src/textile.ts';
 

@@ -1,0 +1,120 @@
+// Builds the PRODUCTION marketplace runtime: real funds only (USDT on Celo mainnet). There is no demo or test mode to fall back to.
+// It lives here, not inline in scripts/serve.ts, so that the exact startup logic (refusals, limits, what is and is not switched on)
+// can be exercised by tests with a fake chain, without a network and without starting a server.
+import { ASSETS } from './assets.ts';
+import { createBuyerSwapRuntime } from './buyerswap.ts';
+import { TEXTILE_REACTOR } from './config.ts';
+import { RouteRegistry, seedConversionAssets } from './conversion.ts';
+import { openDb } from './db.ts';
+import { RateLimiter } from './egress.ts';
+import { recoverExecutions } from './execute.ts';
+import type { ChainReader } from './funding.ts';
+import type { MarketRuntime } from './market.ts';
+import { recoverAllFunding } from './multifunding.ts';
+import type { ConversionRuntime } from './multifunding.ts';
+import type { SimProvider } from './dev/simconversion.ts';
+import { firmQuote } from './textile.ts';
+import { createTextileRouteProvider } from './textileroutes.ts';
+import { masterKeyFrom } from './vault.ts';
+
+export class SetupError extends Error {}
+
+export interface SetupDeps {
+  env: Record<string, string | undefined>;
+  /** --market-db; defaults to data/marketplace-live.db */
+  dbPath: string | undefined;
+  /** the chain id from PAYRAIL_CHAIN_ID */
+  configuredChainId: number;
+  attributionTag: string;
+  /** what the RPC itself reports (eth_chainId) */
+  readChainId(): Promise<number>;
+  makeReader(): ChainReader;
+  readAllowance(token: `0x${string}`, owner: `0x${string}`, spender: `0x${string}`): Promise<bigint>;
+  buyCatalog: MarketRuntime['buyCatalog'];
+  log(line: string): void;
+}
+
+/** returns undefined when the marketplace is simply not switched on; throws SetupError when it is switched on but unsafe or incomplete */
+export async function setupMarket(d: SetupDeps): Promise<MarketRuntime | undefined> {
+  const env = d.env;
+  if (env.PAYRAIL_MARKET_LIVE !== '1') {
+    d.log('Marketplace: OFF. Payrail has no demo mode; set PAYRAIL_MARKET_LIVE=1 (with PAYRAIL_DEPOSIT_ADDRESS and PAYRAIL_VAULT_KEY) to run the real-funds marketplace.');
+    return undefined;
+  }
+  const depositAddress = env.PAYRAIL_DEPOSIT_ADDRESS;
+  if (!depositAddress || !/^0x[0-9a-fA-F]{40}$/.test(depositAddress)) throw new SetupError('PAYRAIL_MARKET_LIVE=1 needs PAYRAIL_DEPOSIT_ADDRESS (a 0x address you control).');
+  if (/^0x0{40}$/.test(depositAddress)) throw new SetupError('PAYRAIL_DEPOSIT_ADDRESS must not be the zero address.');
+  const usdt = ASSETS.find((a) => a.symbol === 'USDT')!;
+  if ([usdt.address, TEXTILE_REACTOR].some((a) => a.toLowerCase() === depositAddress.toLowerCase())) throw new SetupError('PAYRAIL_DEPOSIT_ADDRESS must be a wallet you control, not a token or protocol contract.');
+  if (!env.PAYRAIL_VAULT_KEY) throw new SetupError('PAYRAIL_MARKET_LIVE=1 needs PAYRAIL_VAULT_KEY (64 hex characters): it encrypts stored seller credentials and must survive restarts.');
+  if (d.configuredChainId !== 42220) throw new SetupError(`PAYRAIL_CHAIN_ID is ${d.configuredChainId}; the marketplace runs on Celo mainnet (42220) only.`);
+  const dbPath = d.dbPath ?? 'data/marketplace-live.db';
+  if (dbPath === ':memory:') throw new SetupError('a real-funds marketplace needs a persistent database file, not :memory:.');
+  const capUsd = Number(env.PAYRAIL_MAX_DEPOSIT_USD ?? '5');
+  if (!Number.isFinite(capUsd) || capUsd <= 0) throw new SetupError('PAYRAIL_MAX_DEPOSIT_USD must be a positive number.');
+  const confirmations = Number(env.PAYRAIL_DEPOSIT_CONFIRMATIONS ?? '20');
+  if (!Number.isInteger(confirmations) || confirmations < 1) throw new SetupError('PAYRAIL_DEPOSIT_CONFIRMATIONS must be a whole number of at least 1.');
+
+  // the RPC must really be Celo mainnet before anything is verified against it
+  let rpcChain: number;
+  try {
+    rpcChain = await d.readChainId();
+  } catch (e) {
+    throw new SetupError(`could not read the chain id from the RPC: ${(e as Error).message.slice(0, 100)}`);
+  }
+  if (rpcChain !== 42220) throw new SetupError(`the RPC reports chain ${rpcChain}, not Celo mainnet (42220).`);
+
+  const vaultKey = masterKeyFrom(env.PAYRAIL_VAULT_KEY_ID ?? 'k1', env.PAYRAIL_VAULT_KEY);
+  const reader = d.makeReader();
+  const cap = BigInt(Math.round(capUsd * 1_000_000));
+  const live: NonNullable<MarketRuntime['live']> = {
+    funding: { chainId: 42220, token: usdt.address, asset: 'USDT', depositAddress, minConfirmations: confirmations, maxDepositAtomic: cap, reader },
+    payout: { payableAssets: ['USDT'], minAtomic: 1_000_000n, maxAtomic: cap },
+    // seller payouts stay refused over HTTP until the secure payout architecture is built and reviewed
+    payoutRequestsEnabled: false,
+  };
+  const db = openDb(dbPath);
+  const rec = recoverExecutions(db, { staleHeldMs: 5 * 60_000, unresolvedMs: 60 * 60_000 });
+  if (rec.interrupted || rec.released) d.log(`Marketplace recovery: ${rec.interrupted} interrupted call(s) marked unresolved, ${rec.released} released to buyers.`);
+  const limiter = () => new RateLimiter(60, 10);
+
+  // Buyer-signed conversion is a SEPARATE explicit opt-in. The buyer's own wallet signs every transaction; this server holds no buyer
+  // key and spends no operator funds on a buyer's behalf. It has never been run against mainnet: leave it off until it has.
+  let conversion: ConversionRuntime | undefined;
+  if (env.PAYRAIL_BUYER_SWAP === '1') {
+    seedConversionAssets(db);
+    const textile = createTextileRouteProvider();
+    conversion = {
+      registry: new RouteRegistry(db, [textile]),
+      provider: textile as unknown as SimProvider,
+      reader,
+      reactor: TEXTILE_REACTOR,
+      usdt: usdt.address,
+      chainId: 42220,
+      minConfirmations: confirmations,
+      creditAsset: 'USDT',
+      depositAddress,
+      maxPerDayBuyAtomic: cap * 5n,
+      simulated: false,
+      buyerSwap: createBuyerSwapRuntime({ firmQuote, getAllowance: d.readAllowance, provider: textile, chainId: 42220, tag: d.attributionTag }),
+    };
+    await recoverAllFunding(db, conversion, Date.now);
+    d.log('BUYER-SIGNED CONVERSION ENABLED (never run on mainnet yet): buyers convert with their own wallets; Textile firm quotes are validated server-side.');
+  }
+
+  const market: MarketRuntime = {
+    db,
+    keys: [vaultKey],
+    activeKey: vaultKey,
+    // seller APIs and DNS/well-known proofs go over the REAL internet through the SSRF-safe egress gateway
+    execute: { call: { limiter: limiter(), fetchOptions: { timeoutMs: 8_000 } } },
+    testCall: { limiter: limiter(), fetchOptions: { timeoutMs: 8_000 } },
+    domain: {},
+    ...(d.buyCatalog ? { buyCatalog: d.buyCatalog } : {}),
+    live,
+    ...(conversion ? { conversion } : {}),
+  };
+  d.log(`REAL-FUNDS MARKETPLACE: USDT on Celo mainnet. Deposits to ${depositAddress} are credited after ${confirmations} confirmations (cap ${cap / 1_000_000n} USDT each). Seller payouts: DISABLED. Conversion: ${conversion ? 'buyer-signed (unverified on mainnet)' : 'DISABLED'}. Database: ${dbPath}.`);
+  return market;
+}
+

@@ -19,7 +19,7 @@ import {
   registerPayoutAddress, requestConversionPayout, requoteConversionPayout, retryConversionDelivery, setPayoutPreference,
 } from '../src/payoutconv.ts';
 import type { PayoutConversionConfig } from '../src/payoutconv.ts';
-import { createSimProvider } from '../src/simconversion.ts';
+import { createSimProvider } from '../src/dev/simconversion.ts';
 
 const T0 = 1_800_000_000_000;
 const TOKEN_USDT = ASSETS.find((a) => a.symbol === 'USDT')!.address;

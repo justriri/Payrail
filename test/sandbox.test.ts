@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { normalizeCatalog } from '../src/catalog.ts';
 import { openDb } from '../src/db.ts';
-import { createDemoNetwork, createSandboxNetwork, seedDemo } from '../src/demoapis.ts';
+import { createDemoNetwork, createSandboxNetwork, seedDemo } from '../src/dev/demoapis.ts';
 import { RateLimiter } from '../src/egress.ts';
 import type { EscrowClient, OnChainHold } from '../src/escrow.ts';
 import { holdIdFor } from '../src/escrow.ts';
@@ -12,7 +12,7 @@ import { verifyLedger } from '../src/ledger.ts';
 import type { MarketRuntime } from '../src/market.ts';
 import { generateMasterKey } from '../src/vault.ts';
 import { createWebServer } from '../src/webapi.ts';
-import { createSimulatedRuntime } from '../src/websim.ts';
+import { createSimulatedRuntime } from '../src/dev/websim.ts';
 
 const mk = generateMasterKey('k1');
 const WALLET = '0x00000000000000000000000000000000000dEaD3';

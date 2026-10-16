@@ -2,8 +2,8 @@
 import { readFileSync } from 'node:fs';
 import { createPublicClient, createWalletClient, defineChain, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { createViemEscrowClient } from './escrow.ts';
-import type { MarketRuntime } from './market.ts';
+import { createViemEscrowClient } from '../escrow.ts';
+import type { MarketRuntime } from '../market.ts';
 
 export const SEPOLIA_CHAIN_ID = 11142220;
 export const SEPOLIA_EXPLORER = 'https://celo-sepolia.blockscout.com';

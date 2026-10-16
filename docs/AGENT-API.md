@@ -1,5 +1,8 @@
 # Payrail agent API
 
+> **Historical document.** It describes development modes (test credits, simulation, testnet escrow) that are not part of the production product. See [PRODUCTION.md](PRODUCTION.md) for what is real today.
+
+
 Let an AI agent or script discover APIs, inspect their terms, buy one request at a time, and receive a receipt. The agent
 is **charged only for responses that meet the seller-approved contract**.
 

@@ -1,5 +1,8 @@
 # Marketplace funding through Textile (cNGN → USDT → marketplace balance)
 
+> **Historical document.** It describes development modes (test credits, simulation, testnet escrow) that are not part of the production product. See [PRODUCTION.md](PRODUCTION.md) for what is real today.
+
+
 > **Status: SIMULATION + automated tests + browser-verified. NOT verified on a testnet. NOT verified with real funds.**
 > The live adapter exists but is deliberately not wired into the server. Nothing here has converted real cNGN.
 

@@ -12,11 +12,11 @@ import { verifyLedger } from '../src/ledger.ts';
 import type { MarketRuntime } from '../src/market.ts';
 import { verifyDeposit } from '../src/marketfunding.ts';
 import type { ConversionRuntime } from '../src/multifunding.ts';
-import { createSimProvider } from '../src/simconversion.ts';
+import { createSimProvider } from '../src/dev/simconversion.ts';
 import { takerControlTypedData } from '../src/takerproof.ts';
 import { generateMasterKey } from '../src/vault.ts';
 import { createWebServer } from '../src/webapi.ts';
-import { createSimulatedRuntime } from '../src/websim.ts';
+import { createSimulatedRuntime } from '../src/dev/websim.ts';
 
 const mk = generateMasterKey('k1');
 const USDT = ASSETS.find((a) => a.symbol === 'USDT')!.address;
@@ -47,6 +47,13 @@ type H = Awaited<ReturnType<typeof start>>;
 const newBuyer = async (h: H) => {
   const b = await h.call('POST', '/buyer');
   return { token: b.body.token as string, id: b.body.accountId as string };
+};
+/** real-funds mode has no anonymous buyers: sign in with a wallet signature, exactly as the browser does */
+const walletBuyer = async (h: H) => {
+  const k = privateKeyToAccount(generatePrivateKey());
+  const s = await h.call('POST', '/buyer/login/start', undefined, { wallet: k.address, chainId: 42220 });
+  const c = await h.call('POST', '/buyer/login/complete', undefined, { wallet: k.address, nonce: s.body.nonce, signature: await k.signMessage({ message: s.body.message }) });
+  return { token: c.body.token as string, id: c.body.accountId as string };
 };
 const connect = async (h: H, b: { token: string; id: string }, key = generatePrivateKey()) => {
   const w = privateKeyToAccount(key);
@@ -175,7 +182,7 @@ test('demo wallet exists only in simulation; real-funds mode requires a proven w
     const lb = await newBuyer(liveBad);
     assert.equal((await liveBad.call('POST', '/fund/quote', lb.token, { asset: 'cNGN', amount: '1364' })).body.code, 'LIVE_DISABLED');
 
-    const l = await newBuyer(live);
+    const l = await walletBuyer(live);
     assert.equal((await live.call('POST', '/fund/quote', l.token, { asset: 'cNGN', amount: '1364' })).body.code, 'NO_FUNDING_WALLET');
     assert.equal((await live.call('POST', '/fund/wallet', l.token, { demo: true, chainId: 42220 })).body.code, 'SANDBOX_DISABLED');
   } finally {

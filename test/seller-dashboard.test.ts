@@ -5,13 +5,13 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { openDb } from '../src/db.ts';
 import type { Db } from '../src/db.ts';
-import { createDemoNetwork, createSandboxNetwork, seedDemo } from '../src/demoapis.ts';
+import { createDemoNetwork, createSandboxNetwork, seedDemo } from '../src/dev/demoapis.ts';
 import { RateLimiter } from '../src/egress.ts';
 import { verifyLedger } from '../src/ledger.ts';
 import type { MarketRuntime } from '../src/market.ts';
 import { generateMasterKey } from '../src/vault.ts';
 import { createWebServer } from '../src/webapi.ts';
-import { createSimulatedRuntime } from '../src/websim.ts';
+import { createSimulatedRuntime } from '../src/dev/websim.ts';
 import { tempDir } from './support.ts';
 
 const mk = generateMasterKey('k1');
