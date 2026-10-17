@@ -28,7 +28,7 @@ import type { FundingOp } from './marketfunding.ts';
 import type { TakerProof } from './textile.ts';
 
 export class BuyConvertError extends Error {
-  readonly code: 'UNSUPPORTED_CURRENCY' | 'NOT_FOUND' | 'NOT_OWNER' | 'WRONG_STATE' | 'BAD_INPUT' | 'ABOVE_LIMIT' | 'RATE_LIMITED' | 'NO_QUOTE' | 'TX_ALREADY_USED' | 'QUOTE_STALE';
+  readonly code: 'UNSUPPORTED_CURRENCY' | 'NOT_FOUND' | 'NOT_OWNER' | 'WRONG_STATE' | 'BAD_INPUT' | 'ABOVE_LIMIT' | 'RATE_LIMITED' | 'NO_QUOTE' | 'TX_ALREADY_USED' | 'QUOTE_STALE' | 'INSUFFICIENT_FUNDS';
   constructor(code: BuyConvertError['code'], message: string) {
     super(message);
     this.name = 'BuyConvertError';
@@ -58,6 +58,10 @@ export interface BuyConvertDeps {
   minConfirmations: number;
   /** the most USDT one conversion may deliver (operator cap) */
   maxUsdtAtomic: bigint;
+  /** read-only balance of an ERC-20 for a wallet; when present, a conversion the wallet cannot fund is refused before anything is signed */
+  tokenBalance?: (token: Address, wallet: Address) => Promise<bigint>;
+  /** read-only native CELO balance of a wallet (gas); only used to warn */
+  nativeBalance?: (wallet: Address) => Promise<bigint>;
   now?: () => number;
   explorerTx?: (hash: string) => string;
 }
@@ -180,6 +184,8 @@ export function createBuyConvert(d: BuyConvertDeps) {
         maxSell: selectable ? formatUnits(r.maxInputAtomic, r.from.decimals) : null,
         minUsdt,
         route: `${r.from.symbol} -> USDT on Textile (Celo)`,
+        /** the general Textile integration label, SEPARATE from the verification status above: true only when a real (non-simulated) Textile ladder shows makers right now */
+        textileLive: r.enabled && r.available && !d.provider.simulated,
         /** Buy's 402 challenge offers USDC and USAT as well; Payrail's flow is pinned to USDT, so these are converted instead (documented, not a verified direct payment) */
         directNote: r.from.symbol === 'USDC' || r.from.symbol === 'USAT'
           ? `Buy's gateway also offers ${r.from.symbol} for its APIs, so converting is not strictly needed; Payrail's payment flow only supports USDT today, so ${r.from.symbol} is converted to USDT first.`
@@ -194,6 +200,11 @@ export function createBuyConvert(d: BuyConvertDeps) {
     cache = { at: now(), value };
     return value;
   }
+
+  const balanceOf = async (token: Address, wallet: Address): Promise<bigint | undefined> => {
+    if (!d.tokenBalance) return undefined;
+    try { return await d.tokenBalance(token, wallet); } catch { return undefined; }
+  };
 
   async function estimate(a: { buyerId: string; wallet: string; symbol: string; targetAtomic: bigint }) {
     if (a.targetAtomic <= 0n) throw new BuyConvertError('BAD_INPUT', 'there is nothing to convert for: the API price is zero');
@@ -213,6 +224,18 @@ export function createBuyConvert(d: BuyConvertDeps) {
     }
     if (q.minOutputAtomic < a.targetAtomic) throw new BuyConvertError('NO_QUOTE', 'Textile could not quote enough USDT for this API right now');
     if (q.expectedOutputAtomic > d.maxUsdtAtomic) throw new BuyConvertError('ABOVE_LIMIT', `this conversion would deliver ${usdtText(q.expectedOutputAtomic)} USDT, above the limit of ${usdtText(d.maxUsdtAtomic)} USDT per conversion`);
+    // the wallet must actually hold the amount to be sold (a read-only check; nothing is signed)
+    const bal = await balanceOf(route.from.address as Address, a.wallet as Address);
+    if (bal !== undefined && bal < sell) {
+      throw new BuyConvertError('INSUFFICIENT_FUNDS', `your wallet holds ${formatUnits(bal, route.from.decimals)} ${route.from.symbol} but the smallest conversion that covers this API needs ${formatUnits(sell, route.from.decimals)} ${route.from.symbol} (Textile's minimum swap is about 1 USD). Nothing was signed or sent.`);
+    }
+    let gas: { celoBalance: string; recommendedCelo: string; low: boolean } | null = null;
+    if (d.nativeBalance) {
+      try {
+        const celo = await d.nativeBalance(a.wallet as Address);
+        gas = { celoBalance: formatUnits(celo, 18), recommendedCelo: '0.03', low: celo < 30_000_000_000_000_000n };
+      } catch { /* unknown: no warning */ }
+    }
     const id = `cnv_${randomUUID()}`;
     d.db.prepare(
       `INSERT INTO buy_conversions (id, buyer_id, wallet, provider, sell_symbol, sell_address, sell_decimals, sell_atomic, target_atomic, expected_atomic, min_atomic, fee_atomic, rate, quote_id, quote_expires_at, state, created_at, updated_at)
@@ -221,7 +244,7 @@ export function createBuyConvert(d: BuyConvertDeps) {
       q.feeAtomic.toString(), q.rate, q.id, iso(now() + QUOTE_LIFETIME_MS), iso(now()), iso(now()));
     event(id, 'QUOTED', 'indicative price shown; nothing signed or sent yet');
     audit(d.db, a.buyerId, 'buyconv.quoted', id, { sell: route.from.symbol, sellAtomic: sell.toString() }, new Date(now()));
-    return { conversion: view(get(id)!), evidence: route.evidence, notes: q.notes, limits: { minSell: formatUnits(route.minInputAtomic, route.from.decimals), maxSell: formatUnits(route.maxInputAtomic, route.from.decimals) } };
+    return { conversion: view(get(id)!), evidence: route.evidence, notes: q.notes, limits: { minSell: formatUnits(route.minInputAtomic, route.from.decimals), maxSell: formatUnits(route.maxInputAtomic, route.from.decimals) }, walletHolds: bal === undefined ? null : formatUnits(bal, route.from.decimals), gas };
   }
 
   /** The buyer's wallet signed Textile's TakerControl proof: ask Textile for a FIRM quote, validate every field, return only validated steps. */
@@ -229,6 +252,10 @@ export function createBuyConvert(d: BuyConvertDeps) {
     const r = owned(a.buyerId, a.conversionId);
     if (r.wallet.toLowerCase() !== a.wallet.toLowerCase()) throw new BuyConvertError('NOT_OWNER', 'this conversion belongs to another wallet');
     if (!['QUOTED', 'PREPARED'].includes(r.state)) throw new BuyConvertError('WRONG_STATE', `a ${r.state} conversion cannot be prepared`);
+    {
+      const bal = await balanceOf(r.sell_address as Address, r.wallet as Address);
+      if (bal !== undefined && bal < BigInt(r.sell_atomic)) throw new BuyConvertError('INSUFFICIENT_FUNDS', `your wallet now holds ${formatUnits(bal, r.sell_decimals)} ${r.sell_symbol}, less than the ${formatUnits(BigInt(r.sell_atomic), r.sell_decimals)} ${r.sell_symbol} this conversion needs. Nothing was signed or sent.`);
+    }
     if (Date.parse(r.quote_expires_at) < now()) {
       setState(r.id, 'EXPIRED', 'the estimate expired before signing started; nothing was sent');
       throw new BuyConvertError('QUOTE_STALE', 'this estimate expired; get a new one. Nothing was sent or charged.');

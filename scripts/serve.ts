@@ -197,6 +197,8 @@ try {
     readAllowance: (token, owner, spender) => live.client.readContract({ address: token, abi: erc20Abi, functionName: 'allowance', args: [owner, spender] }),
     buyCatalog: () => runtime.catalog(),
     buyVerify: live.verify,
+    readTokenBalance: (token, wallet) => live.client.readContract({ address: token, abi: erc20Abi, functionName: 'balanceOf', args: [wallet] }),
+    readNativeBalance: (wallet) => live.client.getBalance({ address: wallet }),
     readUsdtBalance: (wallet) => live.client.readContract({ address: '0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e', abi: erc20Abi, functionName: 'balanceOf', args: [wallet] }),
     buyPolicy: spendingPolicy,
     log: line,

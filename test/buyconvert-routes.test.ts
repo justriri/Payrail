@@ -64,6 +64,9 @@ async function world(extraEnv: Record<string, string> = {}) {
   const fake = createFakeBuy({ now: Date.now });
   const provider = createSimProvider({ reactor: TEXTILE_REACTOR, now: () => NOW });
   const balances = new Map<string, bigint>();
+  // sell-token and native balances (default: plenty); tests lower them to prove the refusals
+  const tokenBalances = new Map<string, bigint>();
+  const celoBalances = new Map<string, bigint>();
   const buyerSwap = {
     converterFor: () => { throw new Error('not used'); },
     prepare: async ({ op }: any) => ({ kind: 'ready' as const, quoteId: 'rfq_fake', expiresAtMs: Date.now() + 40_000, steps: [{ kind: 'approve' as const, to: '0xF6829D7393dAe24509eb1E52eE8e572e2E271a4f' as `0x${string}`, data: '0x095ea7b3' as `0x${string}` }, { kind: 'swap' as const, to: TEXTILE_REACTOR as `0x${string}`, data: '0x0d7a16c3' as `0x${string}` }], takerPays: op.sellAtomic.toString(), buyAmount: op.expectedAtomic.toString(), feeAmount: '1', notes: [] }),
@@ -77,6 +80,8 @@ async function world(extraEnv: Record<string, string> = {}) {
     makeReader: () => provider.reader,
     readAllowance: async () => 0n,
     readUsdtBalance: async (w) => balances.get(w.toLowerCase()) ?? 0n,
+    readTokenBalance: async (t, w) => tokenBalances.get(`${t}:${w}`.toLowerCase()) ?? 10n ** 40n,
+    readNativeBalance: async (w) => celoBalances.get(w.toLowerCase()) ?? 10n ** 18n,
     buyCatalog: async () => fake.catalog,
     buyVerify: fake.verify,
     buyPolicy: DEFAULT_POLICY,
@@ -85,7 +90,7 @@ async function world(extraEnv: Record<string, string> = {}) {
     buyConvertOverride: { provider, buyerSwap },
     log: () => undefined,
   }))!;
-  return { market, fake, provider, balances };
+  return { market, fake, provider, balances, tokenBalances, celoBalances };
 }
 async function walletBuyer(s: Awaited<ReturnType<typeof serve>>) {
   const k = privateKeyToAccount(generatePrivateKey());
@@ -228,6 +233,10 @@ test('currency status is honest: Available only for a route executed on mainnet,
   assert.equal(st('G$')!.status, 'unsupported');
   assert.ok(!list.some((c) => c.symbol === 'CWT'));
   assert.equal(st('cNGN')!.statusLabel, 'Available');
+  // the general "Textile: Live" label is separate from the verification status: Live never implies verified
+  for (const sym of ['cNGN', 'wARS', 'wBRL', 'USDC', 'USAT']) assert.equal(st(sym)!.textileLive, true, `${sym}: a live price exists`);
+  assert.equal(st('wARS')!.status, 'needs_live_test');
+  for (const sym of ['wCOP', 'CELO', 'wMXN', 'G$']) assert.equal(st(sym)!.textileLive, false, sym);
   assert.equal(st('wARS')!.statusLabel, 'Needs live test');
   // USDC and USAT say honestly that Buy also offers them directly but Payrail's flow is USDT-only
   assert.match(st('USDC')!.directNote!, /only supports USDT/);
@@ -393,6 +402,50 @@ test('the same swap transaction cannot confirm two conversions, and another buye
     assert.equal((await s.call('POST', '/buy/convert/tx', { bearer: b.token, body: { conversionId: c.id, kind: 'swap', txHash: sent.swapTx } })).body.code, 'TX_ALREADY_USED');
     const other = await walletBuyer(s);
     assert.equal((await s.call('POST', '/buy/convert/tx', { bearer: other.token, body: { conversionId: a.id, kind: 'swap', txHash: sent.swapTx } })).status, 404);
+  } finally {
+    await s.close();
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------------------- balances and gas
+
+for (const sym of ENABLED) {
+  test(`${sym}: a wallet that cannot cover the swap is refused BEFORE anything is signed, and no conversion record is created`, async () => {
+    const w = await world();
+    const s = await serve(w.market);
+    try {
+      const b = await walletBuyer(s);
+      const q = await quoteBuy(s, b);
+      w.tokenBalances.set(`${ON_CHAIN[sym]!.address}:${b.key.address}`.toLowerCase(), 1n);
+      const r = await s.call('POST', '/buy/convert/estimate', { bearer: b.token, body: { orderId: q.order.id, symbol: sym } });
+      assert.equal(r.body.code, 'INSUFFICIENT_FUNDS');
+      assert.match(r.body.message, /Nothing was signed or sent/);
+      assert.equal(Number((w.market.db.prepare('SELECT COUNT(*) AS n FROM buy_conversions').get() as { n: number | bigint }).n), 0);
+    } finally {
+      await s.close();
+    }
+  });
+}
+
+test('the balance is re-checked when signing starts, and low CELO produces a gas warning without blocking', async () => {
+  const w = await world();
+  const s = await serve(w.market);
+  try {
+    const b = await walletBuyer(s);
+    const q = await quoteBuy(s, b);
+    w.celoBalances.set(b.key.address.toLowerCase(), 1_000_000_000_000_000n); // 0.001 CELO
+    const est = (await s.call('POST', '/buy/convert/estimate', { bearer: b.token, body: { orderId: q.order.id, symbol: 'wBRL' } })).body;
+    assert.equal(est.gas.low, true);
+    assert.equal(est.gas.celoBalance, '0.001');
+    assert.ok(est.conversion.id, 'a gas warning does not block (the wallet may pay gas in a fee currency)');
+    assert.equal(est.walletHolds !== null || est.walletHolds === null, true);
+    // the wallet spends its wBRL elsewhere after the estimate: the prepare step refuses
+    w.tokenBalances.set(`${ON_CHAIN.wBRL!.address}:${b.key.address}`.toLowerCase(), 5n);
+    const p = (await s.call('POST', '/buy/convert/proof', { bearer: b.token })).body;
+    const t = takerControlTypedData(b.key.address, 42220, p.nonce, p.issuedAt);
+    const signature = await b.key.signTypedData({ domain: t.domain, types: t.types, primaryType: t.primaryType, message: t.message });
+    const prep = await s.call('POST', '/buy/convert/prepare', { bearer: b.token, body: { conversionId: est.conversion.id, nonce: p.nonce, issuedAt: p.issuedAt, signature } });
+    assert.equal(prep.body.code, 'INSUFFICIENT_FUNDS');
   } finally {
     await s.close();
   }

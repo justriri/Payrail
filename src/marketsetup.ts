@@ -44,6 +44,9 @@ export interface SetupDeps {
   buyVerify?: VerifyDeps;
   /** USDT balance of a wallet (read-only). Needed for PAYRAIL_BUY_CONVERSION=1 and used to refuse a payment the wallet cannot cover. */
   readUsdtBalance?(wallet: `0x${string}`): Promise<bigint>;
+  /** read-only balance of any ERC-20 and of native CELO (used to refuse a conversion the wallet cannot fund, and to warn about gas) */
+  readTokenBalance?(token: `0x${string}`, wallet: `0x${string}`): Promise<bigint>;
+  readNativeBalance?(wallet: `0x${string}`): Promise<bigint>;
   buyPolicy?: SpendingPolicy;
   /** tests only: the fetch used for the gateway (production leaves it undefined = the global fetch) */
   buyFetch?: typeof fetch;
@@ -165,6 +168,7 @@ export async function setupMarket(d: SetupDeps): Promise<MarketRuntime | undefin
       db, registry: new RouteRegistry(db, [textile]), provider: textile,
       buyerSwap: d.buyConvertOverride?.buyerSwap ?? createBuyerSwapRuntime({ firmQuote, getAllowance: d.readAllowance, provider: textile, chainId: 42220, tag: d.attributionTag }),
       reader, usdt: usdt.address, reactor: TEXTILE_REACTOR, chainId: 42220, minConfirmations: confirmations, maxUsdtAtomic: BigInt(Math.round(maxUsd * 1_000_000)),
+      ...(d.readTokenBalance ? { tokenBalance: d.readTokenBalance } : {}), ...(d.readNativeBalance ? { nativeBalance: d.readNativeBalance } : {}),
     });
     d.log(`BUY CONVERSION ENABLED (not yet run on mainnet): buyers convert cNGN etc. to USDT with Textile in their own wallet (up to ${maxUsd} USDT per conversion), then pay Buy. Platform fee: none added here.`);
   }

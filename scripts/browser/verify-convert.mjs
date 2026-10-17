@@ -32,6 +32,7 @@ check('simulated routes are never labelled Available, and every selectable route
 check('the gas token CELO and G$ are Unsupported; CWT is not listed', cardOf('CELO').status === 'unsupported' && /Unsupported/.test(cardOf('CELO').text) && (!cardOf('G$') || cardOf('G$').status === 'unsupported') && !cardOf('CWT'));
 check('no route is claimed as mainnet-verified here', !cards.some((c) => /verified on mainnet|mainnet-verified/i.test(c.text)));
 check('USDC explains that Buy also offers it directly but Payrail pays in USDT only', /only supports USDT/.test(cardOf('USDC').text) && /only supports USDT/.test(cardOf('USAT').text));
+check('every card carries a separate Textile label; a SIMULATED Textile is never labelled Live (production, with the real ladder, shows Textile: Live)', cards.filter((c) => /Textile: Not live/.test(c.text)).length === cards.length && !cards.some((c) => /Textile: Live/.test(c.text)), cards[0].text.replace(/\s+/g, ' '));
 check('each selectable currency states its smallest swap', ['cNGN', 'wARS', 'wBRL', 'USDC', 'USAT'].every((x) => /Smallest swap/.test(cardOf(x).text)));
 await b.set('#pay-currency', 'cNGN');
 await b.ev(`document.querySelector('#pay-currency').dispatchEvent(new Event('change')); 0`);
@@ -88,6 +89,8 @@ await b.click('#quote-btn', 'Get the exact price');
 await until(async () => (await b.ev(`!!document.querySelector('#currency-status')`)));
 const mc = await b.ev(`JSON.stringify([...document.querySelectorAll('#currency-status .cur')].map(c => { const r = c.getBoundingClientRect(); return { l: Math.round(r.left), r: Math.round(r.right) }; }))`).then(JSON.parse);
 check('mobile: currency cards are one column, inside the screen, no horizontal overflow', mc.length >= 9 && mc.every((c) => c.l >= 0 && c.r <= 390 && Math.abs(c.l - mc[0].l) < 3) && (await overflow()) <= 0, JSON.stringify(mc.slice(0, 2)) + ' overflow=' + (await overflow()));
+const qt = await b.ev(`(() => { const t = document.querySelector('#quote-table'); const r = t.getBoundingClientRect(); return JSON.stringify({ r: Math.round(r.right), sw: t.scrollWidth, cw: t.clientWidth }); })()`).then(JSON.parse);
+check('mobile: the quote table fits the screen (long addresses wrap)', qt.r <= 390 && qt.sw <= qt.cw + 1, JSON.stringify(qt));
 await b.shot('convert-mobile-currencies');
 
 // mobile

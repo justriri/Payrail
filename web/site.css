@@ -231,3 +231,9 @@ main.workspace .cards .more { grid-column: 1 / -1; text-align: center; padding: 
 .curlist .cur { border: 1px solid var(--border, #d0d7de); border-radius: 8px; padding: 8px 10px; min-width: 0; overflow-wrap: anywhere; }
 .curlist .cur p { margin: 4px 0 0; font-size: .85em; }
 @media (max-width: 560px) { .curlist { grid-template-columns: 1fr; } }
+
+.curlist .cur .cur-live { font-weight: 600; margin-top: 4px; }
+
+/* long addresses and amounts in quote, estimate and receipt tables wrap instead of running off a phone screen */
+#quote-box table.quote, #estimate-box table.quote, #run-result table.quote { width: 100%; table-layout: fixed; }
+#quote-box table.quote th, #quote-box table.quote td, #estimate-box table.quote th, #estimate-box table.quote td, #run-result table.quote th, #run-result table.quote td { overflow-wrap: anywhere; word-break: break-word; }

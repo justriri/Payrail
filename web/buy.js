@@ -217,6 +217,8 @@ function renderBuy(d, cfg) {
     const list = el('ul', { class: 'curlist', id: 'currency-status' }, ...sorted.map((c) => el('li', { class: 'cur', 'data-symbol': c.symbol, 'data-status': c.status },
       el('div', { class: 'cur-top' }, el('strong', { text: c.symbol }), ' ', el('span', { class: `badge ${BADGE[c.status] || ''}`, text: c.statusLabel })),
       el('p', { class: 'muted', text: c.statusDetail }),
+      // the general Textile label, kept apart from the verification status shown in the badge above
+      el('p', { class: 'cur-live', 'data-live': c.textileLive ? 'yes' : 'no', text: c.textileLive ? 'Textile: Live' : 'Textile: Not live' }),
       c.available ? el('p', { class: 'muted', text: `Smallest swap ${c.minSell} ${c.symbol}${c.minUsdt ? ` (about ${c.minUsdt} USDT)` : ''}.` }) : null,
       c.directNote ? el('p', { class: 'muted', text: c.directNote }) : null)));
     panel.append(el('h3', { text: 'Pay with another currency' }), el('p', { class: 'muted', text: 'Textile converts it to USDT in your own wallet, then Buy is paid in USDT.' }), list);
@@ -237,11 +239,11 @@ function renderBuy(d, cfg) {
       const r = await api('/buy/convert/estimate', { body: { orderId: o.id, symbol: sel.value }, bearer: buyerToken });
       estBtn.disabled = false;
       if (!r.ok) { box.append(el('p', { class: 'problem', id: 'estimate-error', text: fail(r) })); return; }
-      showEstimate(o, r.conversion, r.evidence, box, r.limits);
+      showEstimate(o, r.conversion, r.evidence, box, r.limits, r.gas);
     });
   }
 
-  function showEstimate(o, cv, evidence, box, limits) {
+  function showEstimate(o, cv, evidence, box, limits, gas) {
     clear(box);
     box.append(
       el('table', { class: 'quote', id: 'estimate-table' },
@@ -256,6 +258,7 @@ function renderBuy(d, cfg) {
         el('tr', {}, el('th', { text: 'Payrail fee' }), el('td', { class: 'v', text: `3% platform fee on the API price (${o.fee.amount} USDT), recorded as DUE, not collected. Payrail adds nothing to the conversion.` }))),
       el('p', { class: 'muted', id: 'est-why', text: 'Textile converts at least about 1 USD at a time, so the conversion is larger than this API costs. The USDT you do not spend stays in your wallet. This is an estimate: the final price is fixed by Textile when you approve, and the conversion is rejected if it would give you less than the minimum shown.' }),
       el('p', { class: 'muted', text: evidence && evidence.basis ? `Route evidence: ${evidence.basis}` : '' }),
+      gas && gas.low ? el('p', { class: 'notice', id: 'gas-warning', text: `Your wallet holds ${gas.celoBalance} CELO. The approval and the swap need gas (about ${gas.recommendedCelo} CELO is comfortable). Add a little CELO first, or the wallet may refuse the transaction.` }) : null,
       el('div', { class: 'row' }, el('button', { type: 'button', id: 'convert-btn', text: `Approve: convert ${cv.sell.amount} ${cv.sell.symbol} to USDT with my wallet` })));
     box.querySelector('#convert-btn').addEventListener('click', () => runConversion(o, cv, box));
   }
