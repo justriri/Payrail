@@ -68,6 +68,48 @@ await b.click('#sign-btn', 'Sign and pay');
 await until(async () => /declined/i.test(await b.text('#pay-steps')), 20000);
 check('declining the signature: clear message, nothing sent to Buy, nothing charged', /Nothing was sent or charged/.test(await b.text('#pay-steps')) && h.buyGateway.paidRequests === 1, await b.text('#pay-steps'));
 
+// ================= a LONG receipt (long hashes, a very large API response with an unbroken token) stays inside its box
+wallet.denyTyped = false;
+const BIG = JSON.stringify({ token: 'A'.repeat(4000), url: `https://example.com/${'path/'.repeat(80)}${'x'.repeat(600)}`, posts: Array.from({ length: 400 }, (_, i) => ({ id: i, text: `post ${i} ${'lorem ipsum '.repeat(25)}`, hash: `0x${'ab'.repeat(32)}` })), END_MARKER: 'THE-VERY-LAST-FIELD' });
+h.buyGateway.responseBody = BIG;
+const checkReceiptFits = async (label) => {
+  const m = await b.ev(`(() => {
+    const box = document.querySelector('#run-result').getBoundingClientRect();
+    const bad = [];
+    for (const e of document.querySelectorAll('#run-result *')) {
+      const r = e.getBoundingClientRect();
+      if (r.width && (r.right > box.right + 1 || r.left < box.left - 1)) bad.push(e.tagName + '#' + (e.id || '') + ' ' + Math.round(r.right) + '>' + Math.round(box.right));
+    }
+    const pre = document.querySelector('#api-response');
+    const rc = document.querySelector('#receipt').getBoundingClientRect();
+    return JSON.stringify({ bad: bad.slice(0, 5), pageOverflow: document.documentElement.scrollWidth - window.innerWidth, preScrollsSideways: pre.scrollWidth > pre.clientWidth + 1, preH: Math.round(pre.getBoundingClientRect().height), vh: window.innerHeight, preFull: pre.textContent.includes('THE-VERY-LAST-FIELD') && pre.textContent.includes('A'.repeat(4000)), receiptRight: Math.round(rc.right), boxRight: Math.round(box.right), hasTx: document.querySelector('#receipt').innerText.includes('${'0x' + 'ab'.repeat(32)}'), sha: /Response SHA-256: [0-9a-f]{64}/.test(document.querySelector('#run-result').innerText.replace(/\s+/g, '')) || /[0-9a-f]{64}/.test(document.querySelector('#run-result').innerText.replace(/\s+/g, '')) });
+  })()`).then(JSON.parse);
+  check(`${label}: nothing in the receipt extends beyond its box and the page does not scroll sideways`, m.bad.length === 0 && m.pageOverflow <= 0 && m.receiptRight <= m.boxRight + 1, JSON.stringify(m));
+  check(`${label}: the API response wraps (no sideways scrolling), is scrollable vertically within 70% of the screen, and holds the complete content`, !m.preScrollsSideways && m.preH <= m.vh * 0.7 + 2 && m.preFull, JSON.stringify(m));
+  check(`${label}: the transaction hash and the response SHA-256 are still shown in full`, m.hasTx && m.sha, JSON.stringify(m));
+};
+await viewport(1366, 900, false);
+await b.goto(`${h.BASE}/api.html?src=buy&id=instagram.profile`, 2000);
+await b.set('#run-input', '{"username":"celo"}');
+await b.click('#quote-btn', 'Get the exact price');
+await until(async () => (await b.ev(`!!document.querySelector('#sign-btn')`)));
+await b.click('#sign-btn', 'Sign and pay');
+await until(async () => (await b.ev(`!!document.querySelector('#run-headline')`)), 30000);
+check('the large purchase was paid and verified as before (status, one more paid request)', /settled and verified on-chain/.test(await b.text('#run-result')) && h.buyGateway.paidRequests === 2, String(h.buyGateway.paidRequests));
+await checkReceiptFits('desktop');
+await b.shot('buy-receipt-long-desktop');
+for (const [w, hh] of [[1100, 800], [900, 800], [768, 900]]) {
+  await viewport(w, hh, false);
+  await b.sleep(400);
+  await checkReceiptFits(`${w}px wide`);
+}
+await viewport(390, 844, true);
+await b.sleep(400);
+await checkReceiptFits('mobile');
+await b.shot('buy-receipt-long-mobile');
+h.buyGateway.responseBody = undefined;
+await viewport(1366, 900, false);
+
 // ================= an unavailable Buy API cannot be bought
 await b.goto(`${h.BASE}/api.html?src=buy&id=down.api`, 2000);
 check('an API Buy reports as unavailable cannot be bought', await b.ev(`document.querySelector('#quote-btn').disabled`) && /Unavailable/.test(await b.text('#api-status')));

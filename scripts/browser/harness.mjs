@@ -51,6 +51,7 @@ export async function startHarness({ seedLegacyDemoRows = true, capAtomic = 1_00
     const ok = r.headers['x-api-key'] === SELLER_SECRET;
     const scenario = /[?&]scenario=([a-z0-9]+)/.exec(r.path)?.[1];
     const asOf = scenario === 'stale' ? new Date(Date.now() - 3_600_000).toISOString() : new Date().toISOString();
+    if (ok && scenario === 'long') return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ quote: 7, asOf, token: 'A'.repeat(4000), url: `https://example.com/${'p/'.repeat(300)}${'x'.repeat(600)}`, rows: Array.from({ length: 300 }, (_, i) => ({ id: i, text: `row ${i} ${'lorem ipsum '.repeat(20)}`, hash: `0x${'cd'.repeat(32)}` })), END_MARKER: 'THE-VERY-LAST-FIELD' })) };
     if (ok && scenario === 'http500') return { status: 500, headers: { 'content-type': 'application/json' }, body: Buffer.from('{"error":"boom"}') };
     return { status: ok ? 200 : 401, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify(ok ? { quote: 7, asOf } : { error: 'bad key' })) };
   };

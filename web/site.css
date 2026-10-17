@@ -237,3 +237,19 @@ main.workspace .cards .more { grid-column: 1 / -1; text-align: center; padding: 
 /* long addresses and amounts in quote, estimate and receipt tables wrap instead of running off a phone screen */
 #quote-box table.quote, #estimate-box table.quote, #run-result table.quote { width: 100%; table-layout: fixed; }
 #quote-box table.quote th, #quote-box table.quote td, #estimate-box table.quote th, #estimate-box table.quote td, #run-result table.quote th, #run-result table.quote td { overflow-wrap: anywhere; word-break: break-word; }
+
+/* ------------------------------------------------------------------ receipts: everything stays inside its box
+   Long unbroken strings (transaction hashes, nonces, SHA-256, URLs, JSON values) wrap; the box grows downward; only the raw API
+   response is a scroll area (vertical, and only when it is taller than 70% of the screen), and it still holds the full content. */
+.apigrid > *, .apiwrap .card, #run-result, #quote-box, #estimate-box { min-width: 0; max-width: 100%; }
+#run-result { overflow-wrap: anywhere; word-break: break-word; }
+#run-result p, #run-result a, #run-result h3, #run-result summary, #run-result li, #run-result .headline, #run-result .problem, #quote-box p, #estimate-box p { overflow-wrap: anywhere; word-break: break-word; max-width: 100%; }
+#run-result details { max-width: 100%; }
+/* the phone rule turns every table into a scrolling block; receipts and quotes must instead be real fixed tables that wrap */
+#run-result table, #quote-box table, #estimate-box table { display: table; width: 100%; table-layout: fixed; }
+#run-result table th, #run-result table td, #quote-box table th, #quote-box table td, #estimate-box table th, #estimate-box table td { overflow-wrap: anywhere; word-break: break-word; vertical-align: top; }
+#run-result table th, #quote-box table th, #estimate-box table th { width: 36%; text-align: left; }
+@media (max-width: 520px) {
+  #run-result table td.v, #quote-box table td.v, #estimate-box table td.v { text-align: left; }
+}
+#run-result pre, #api-response { max-width: 100%; box-sizing: border-box; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; overflow-x: hidden; overflow-y: auto; max-height: min(70vh, 640px); }

@@ -38,7 +38,7 @@ export interface FakeBuyOptions {
 }
 
 export function createFakeBuy(o: FakeBuyOptions) {
-  const gateway = { paidRequests: 0, unpaidRequests: 0, mode: (o.mode ?? 'ok') as FakeMode, lastAuth: undefined as undefined | { from: string; to: string; value: string; nonce: string } };
+  const gateway = { responseBody: undefined as string | undefined, paidRequests: 0, unpaidRequests: 0, mode: (o.mode ?? 'ok') as FakeMode, lastAuth: undefined as undefined | { from: string; to: string; value: string; nonce: string } };
   const settled = new Set<string>();
   const transfers = new Map<string, { from: string; to: string; value: bigint; asset: string }>();
   const challenge = (url: string) => {
@@ -83,7 +83,7 @@ export function createFakeBuy(o: FakeBuyOptions) {
       }
     }
     const pr = Buffer.from(JSON.stringify({ success: gateway.mode !== 'ok_failed_flag', transaction: FAKE_TX, network: 'celo', payer: a.from })).toString('base64');
-    return new Response('{"posts":[{"id":1,"text":"hello from the fake gateway"}]}', { status: 200, headers: { 'content-type': 'application/json', 'x-payment-response': pr } });
+    return new Response(gateway.responseBody ?? '{"posts":[{"id":1,"text":"hello from the fake gateway"}]}', { status: 200, headers: { 'content-type': 'application/json', 'x-payment-response': pr } });
   }) as typeof fetch;
   const verify: VerifyDeps = {
     resolveAuthorization: async (p) => (settled.has(p.authorization.nonce) ? { state: 'settled', txHash: FAKE_TX } : { state: 'not_settled', detail: 'nonce unused' }),

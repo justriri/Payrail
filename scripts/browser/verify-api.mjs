@@ -98,6 +98,35 @@ await b.goto(`${h.BASE}/market.html#/buyer/transactions`, 2200);
 const stmt = await b.text('#statement');
 check('statement: deposited 0.5, charged 0.02, returned 0.02, available 0.48', /Deposited \/ granted\s+0\.5/.test(stmt) && /Charged for qualifying responses\s+0\.02/.test(stmt) && /Returned \(non-qualifying or expired\)\s+0\.02/.test(stmt) && /Available\s+0\.48/.test(stmt), stmt.replace(/\s+/g, ' '));
 
+// ================= a LONG response and receipt stay inside their box (desktop and phone)
+await b.goto(`${h.BASE}/api.html?id=${ids.price}`, 2000);
+await b.set('#run-input', '{"scenario":"long"}');
+await b.click('#run-btn', 'Pay and Use API');
+await b.sleep(300);
+await b.click('#run-confirm', 'Confirm');
+await until(async () => /Idempotency key/.test((await b.text('#run-result')) || ''), 25000);
+const fits = async (label) => {
+  const m = await b.ev(`(() => {
+    const box = document.querySelector('#run-result').getBoundingClientRect();
+    const bad = [];
+    for (const e of document.querySelectorAll('#run-result *')) { const r = e.getBoundingClientRect(); if (r.width && (r.right > box.right + 1 || r.left < box.left - 1)) bad.push(e.tagName + ' ' + Math.round(r.right) + '>' + Math.round(box.right)); }
+    const pre = document.querySelector('#run-result pre');
+    const text = document.querySelector('#run-result').innerText;
+    return JSON.stringify({ bad: bad.slice(0, 5), pageOverflow: document.documentElement.scrollWidth - window.innerWidth, preSideways: pre.scrollWidth > pre.clientWidth + 1, preH: Math.round(pre.getBoundingClientRect().height), vh: window.innerHeight, full: pre.textContent.includes('THE-VERY-LAST-FIELD') && pre.textContent.includes('A'.repeat(4000)), receipt: /Idempotency key/.test(text) && /Response hash/.test(text) && /[0-9a-f]{64}/.test(text.replace(/\s+/g, '')) });
+  })()`).then(JSON.parse);
+  check(`${label}: the long response and receipt stay inside their box; the page does not scroll sideways`, m.bad.length === 0 && m.pageOverflow <= 0, JSON.stringify(m));
+  check(`${label}: the response wraps, scrolls only vertically (within 70% of the screen) and is complete; the receipt keeps its hash and key`, !m.preSideways && m.preH <= m.vh * 0.7 + 2 && m.full && m.receipt, JSON.stringify(m));
+};
+check('the long-response purchase was charged and receipted as usual', /Charged 0\.02 USDT/.test(await b.text('#run-result')) && /Transaction status:\s*completed and charged/.test(await b.text('#run-result')));
+await fits('desktop');
+await b.shot('api-receipt-long-desktop');
+await viewport(390, 844, true);
+await b.sleep(400);
+await fits('mobile');
+await b.shot('api-receipt-long-mobile');
+await viewport(1366, 900, false);
+await b.goto(`${h.BASE}/market.html#/buyer/transactions`, 800);
+
 // ================= back to the marketplace
 await b.goto(`${h.BASE}/api.html?id=${ids.price}`, 1800);
 await b.click('#back-link', 'Back to the marketplace');
