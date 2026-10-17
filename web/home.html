@@ -102,16 +102,12 @@
   <section class="band" id="currencies">
     <div class="wrap">
       <h2>Currencies and verified routes</h2>
-      <p class="sub">Balances, prices and earnings are held in USDT on Celo mainnet. Other currencies are added only when a conversion route has been executed and verified end to end.</p>
-      <div class="assets">
-        <div class="asset"><b>USDT</b><small>Available now</small></div>
-        <div class="asset"><b>cNGN</b><small>Not enabled yet</small></div>
-        <div class="asset"><b>wARS</b><small>Not enabled yet</small></div>
-        <div class="asset"><b>wBRL</b><small>Not enabled yet</small></div>
-        <div class="asset"><b>USDC</b><small>Not enabled yet</small></div>
-        <div class="asset"><b>USAT</b><small>Not enabled yet</small></div>
+      <p class="sub">Balances, prices and earnings are held in USDT on Celo mainnet. Other currencies are converted into USDT by Textile Protocol in your own wallet before Buy is paid. Each currency below shows its real status, read from this server.</p>
+      <div class="assets" id="asset-cards">
+        <div class="asset"><b>USDT</b><small>Settlement currency: Buy is paid in USDT on Celo</small></div>
+        <div class="asset" id="asset-loading"><b>Other currencies</b><small>Loading each currency's real status from this server…</small></div>
       </div>
-      <p class="callout"><strong>Availability depends on verified routes.</strong> An indicative quote is not proof of liquidity, and a route in one direction says nothing about the other. Assets without a verified route are shown as unavailable and are never offered. Fund your account in USDT today.</p>
+      <p class="callout"><strong>Status is shown exactly as it is.</strong> "Available" means Payrail has executed that route on mainnet. "Needs live test" means it is implemented and Textile has a live price, but it has not been executed on mainnet yet. An indicative quote is not proof of liquidity. Unsupported or unavailable currencies cannot be selected.</p>
     </div>
   </section>
 
@@ -124,7 +120,7 @@
       <div><h4>Product</h4><a href="/market.html#/buyer/explore">Explore APIs</a><a href="/market.html#/buyer/funding">Wallet and funding</a><a href="/index.html">Pay a service with your wallet</a></div>
       <div><h4>Sellers</h4><a href="/market.html#/seller/new">Create an API</a><a href="/market.html#/seller/earnings">Earnings</a><a href="/market.html#/seller/payout-settings">Payout settings</a></div>
       <div><h4>Company</h4><a href="#how">How it works</a><a href="#currencies">Supported currencies</a><a href="/market.html#/buyer">Open the app</a></div>
-      <div class="legal">Payrail is a hackathon project. Payments are real. Funds pass through the Payrail deposit address and ledger until spent. Seller payouts and currency conversion are not enabled yet.</div>
+      <div class="legal">Payrail is a hackathon project. Payments are real. Funds pass through the Payrail deposit address and ledger until spent. Seller payouts are not enabled yet. Currency conversion is run by Textile in your own wallet; its status per currency is shown above.</div>
     </div>
   </footer>
   <script src="/home.js"></script>

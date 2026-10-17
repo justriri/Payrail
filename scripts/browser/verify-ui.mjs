@@ -27,7 +27,9 @@ check('landing: headline and supporting text', /Pay for the response, not the pr
 check('landing: "Explore APIs" and "Start selling" calls to action link into the app', (await b.ev(`document.querySelector('#cta-explore')?.getAttribute('href')`)) === '/market.html#/buyer/explore' && (await b.ev(`document.querySelector('#cta-sell')?.getAttribute('href')`)) === '/market.html#/seller');
 check('landing: product preview is shown and labelled as a preview', /preview/i.test(await b.text('.preview')) && (await vis('.preview')));
 check('landing: how it works, benefits and currencies sections', (await vis('#how')) && (await vis('#benefits')) && (await vis('#currencies')));
-check('landing: only USDT is offered; other currencies are "not enabled yet"', /USDT\s+Available now/.test(t) && (t.match(/Not enabled yet/g) || []).length >= 5 && /Availability depends on verified routes/.test(t));
+await b.sleep(1200);
+t = await b.text('body');
+check('landing: USDT is the settlement currency; with conversion switched off the page says so instead of listing currencies as enabled', /USDT\s+Settlement currency/.test(t) && !/Not enabled yet/.test(t) && /not enabled on this server|Only USDT on Celo/.test(t) && /Status is shown exactly as it is/.test(t), (await b.text('#asset-cards')).replace(/\s+/g, ' '));
 check('landing: the real network and token are stated from the server', /Real funds: USDT on Celo mainnet \(chain 42220\)/.test(await b.text('#mode-note')));
 check('landing: no demo / test-credit / simulation language anywhere', (await noDemo()) === '', await noDemo());
 check('landing: footer navigation and no horizontal overflow', (await b.ev(`document.querySelectorAll('.footer a').length`)) >= 8 && (await overflow()) <= 0);

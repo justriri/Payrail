@@ -16,3 +16,37 @@
     }
   } catch { /* the static text stays */ }
 })();
+
+// Landing page: the currency cards come from the server (the same data the Buy page uses), never from fixed text.
+(async () => {
+  const box = document.getElementById('asset-cards');
+  const loading = document.getElementById('asset-loading');
+  if (!box) return;
+  const card = (sym, ...lines) => {
+    const d = document.createElement('div');
+    d.className = 'asset';
+    const b = document.createElement('b');
+    b.textContent = sym;
+    d.append(b);
+    for (const t of lines) { const s = document.createElement('small'); s.textContent = t; s.style.display = 'block'; d.append(s); }
+    return d;
+  };
+  try {
+    const d = await (await fetch('/api/market/buy/currencies')).json();
+    if (loading) loading.remove();
+    if (!d.ok || !d.enabled) {
+      box.append(card('Other currencies', d.note || 'Paying with another currency is not switched on on this server. Only USDT works.'));
+      return;
+    }
+    const order = { available: 0, needs_live_test: 1, temporarily_unavailable: 2, unsupported: 3 };
+    for (const c of [...d.currencies].sort((x, y) => order[x.status] - order[y.status] || x.symbol.localeCompare(y.symbol))) {
+      const el = card(c.symbol, c.statusLabel, c.textileLive ? 'Textile: Live' : 'Textile: Not live');
+      el.dataset.symbol = c.symbol;
+      el.dataset.status = c.status;
+      box.append(el);
+    }
+  } catch {
+    if (loading) loading.remove();
+    box.append(card('Other currencies', 'Status could not be read from this server right now.'));
+  }
+})();

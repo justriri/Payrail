@@ -63,6 +63,21 @@ check('the fee is shown as due, not collected', /not collected/i.test(rc));
 check('the API response is shown', /hello from the fake gateway/.test(await b.text('#api-response')));
 await b.shot('convert-receipt');
 
+// the LANDING page reads each currency's real status from the server (no fixed "Not enabled yet" text)
+await b.goto(`${h.BASE}/`, 2200);
+const land = await b.ev(`JSON.stringify([...document.querySelectorAll('#asset-cards .asset')].map(c => ({ sym: c.dataset.symbol || '', status: c.dataset.status || '', text: c.innerText })))`).then(JSON.parse);
+const landOf = (x) => land.find((c) => c.sym === x);
+check('landing: no currency says "Not enabled yet"; the cards come from the server', !/Not enabled yet/i.test(await b.text('#currencies')) && ['cNGN', 'wARS', 'wBRL', 'USDC', 'USAT'].every((x) => landOf(x)), land.map((c) => `${c.sym}:${c.status}`).join(' '));
+check('landing: each currency shows its real status and a separate Textile label (simulated here, so never Live)', ['cNGN', 'wARS', 'wBRL', 'USDC', 'USAT'].every((x) => /Needs live test/.test(landOf(x).text) && /Textile: Not live/.test(landOf(x).text)) && /Unsupported/.test(landOf('CELO').text), land.map((c) => c.text.replace(/\s+/g, ' ')).join(' | '));
+check('landing: nothing claims a route is verified when it is not', !/Available/.test(landOf('wARS').text) && !/Available/.test(landOf('cNGN').text));
+await b.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+await b.goto(`${h.BASE}/`, 2200);
+check('landing (mobile): the currency cards fit with no horizontal overflow', (await overflow()) <= 0, await overflow());
+await b.shot('landing-currencies-mobile');
+await b.send('Emulation.setDeviceMetricsOverride', { width: 1366, height: 900, deviceScaleFactor: 1, mobile: false });
+await b.goto(`${h.BASE}/`, 2000);
+await b.shot('landing-currencies-desktop');
+
 // a declined swap leaves everything unchanged
 h.usdtBalances.set(addr.toLowerCase(), 0n);
 const sendsBefore = wallet.sends.length;
