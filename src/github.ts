@@ -56,6 +56,37 @@ export function parseRepoUrl(raw: string): { owner: string; name: string } | und
   return { owner: owner!, name: name! };
 }
 
+/** the exact callback address Payrail asks GitHub to return to, built from PAYRAIL_PUBLIC_URL */
+export const GITHUB_CALLBACK_PATH = '/api/market/github/callback';
+
+/**
+ * PAYRAIL_PUBLIC_URL is the address a seller's browser uses to reach THIS server. The callback is that origin plus a fixed path.
+ *  - production: https only;
+ *  - local development: plain http is accepted ONLY for a loopback host (127.0.0.1, [::1], localhost), which GitHub allows for OAuth Apps;
+ *  - no credentials, path, query or fragment: nothing but an origin, so the callback cannot be steered anywhere else.
+ * Throws a plain Error with the reason (marketsetup turns it into a startup refusal).
+ */
+export function githubRedirectUri(publicUrl: string): { redirectUri: string; local: boolean; warning?: string } {
+  let u: URL;
+  try {
+    u = new URL(publicUrl.trim());
+  } catch {
+    throw new Error('PAYRAIL_PUBLIC_URL must be a full address such as https://payrail.example.com or, for local development, http://127.0.0.1:4402');
+  }
+  const loopback = u.hostname === '127.0.0.1' || u.hostname === '[::1]' || u.hostname === 'localhost';
+  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && loopback)) {
+    throw new Error('PAYRAIL_PUBLIC_URL must be https (plain http is accepted only for a loopback address such as http://127.0.0.1:4402)');
+  }
+  if (u.username || u.password || u.search || u.hash || (u.pathname !== '/' && u.pathname !== '')) {
+    throw new Error('PAYRAIL_PUBLIC_URL must be only the address (scheme, host and optional port): no path, query, fragment or credentials');
+  }
+  return {
+    redirectUri: `${u.origin}${GITHUB_CALLBACK_PATH}`,
+    local: loopback,
+    ...(u.hostname === 'localhost' ? { warning: 'GitHub advises against "localhost" for OAuth; use http://127.0.0.1:<port> and open Payrail at that same address' } : {}),
+  };
+}
+
 interface Cfg {
   clientId: string;
   clientSecret: string;

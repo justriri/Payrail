@@ -23,7 +23,7 @@ import { EXPECTED_PAY_TO } from './buy.ts';
 import { createBuyPay } from './buypay.ts';
 import { createBuyConvert } from './buyconvert.ts';
 import { createCheckout } from './checkout.ts';
-import { createGitHubApi } from './github.ts';
+import { createGitHubApi, githubRedirectUri } from './github.ts';
 import type { GitHubApi } from './github.ts';
 import { createGitHubVerification } from './githubproof.ts';
 import { createOfficialCorridors } from './textiledocs.ts';
@@ -60,6 +60,8 @@ export interface SetupDeps {
   officialCorridors?: () => Promise<OfficialCorridors>;
   /** tests only: a fake GitHub API (production builds the real one from the OAuth App settings in the environment) */
   githubApi?: GitHubApi;
+  /** tests only: the fetch used for GitHub OAuth and API calls (production leaves it undefined = the global fetch) */
+  githubFetch?: typeof fetch;
   /** tests only: how the GitHub verification reaches the seller's deployed host */
   githubFetchOptions?: import('./egress.ts').FetchOptions;
   /** tests only: replace the live Textile provider and the buyer-signed swap runtime used for PAYRAIL_BUY_CONVERSION */
@@ -200,12 +202,24 @@ export async function setupMarket(d: SetupDeps): Promise<MarketRuntime | undefin
   // GitHub-based ownership proof: needs a GitHub OAuth App (PAYRAIL_GITHUB_CLIENT_ID, PAYRAIL_GITHUB_CLIENT_SECRET) and the public address of this server
   // (PAYRAIL_PUBLIC_URL) for the callback. Missing = the option is simply not offered; DNS and the well-known file keep working.
   let github: ReturnType<typeof createGitHubVerification> | undefined;
-  const ghApi = d.githubApi ?? (env.PAYRAIL_GITHUB_CLIENT_ID && env.PAYRAIL_GITHUB_CLIENT_SECRET && env.PAYRAIL_PUBLIC_URL
-    ? createGitHubApi({ clientId: env.PAYRAIL_GITHUB_CLIENT_ID, clientSecret: env.PAYRAIL_GITHUB_CLIENT_SECRET, redirectUri: `${env.PAYRAIL_PUBLIC_URL.replace(/\/+$/, '')}/api/market/github/callback` })
-    : undefined);
+  let ghApi = d.githubApi;
+  let ghNote = '';
+  const partial = [env.PAYRAIL_GITHUB_CLIENT_ID, env.PAYRAIL_GITHUB_CLIENT_SECRET, env.PAYRAIL_PUBLIC_URL].filter(Boolean).length;
+  if (!ghApi && partial === 3) {
+    let target: ReturnType<typeof githubRedirectUri>;
+    try {
+      target = githubRedirectUri(env.PAYRAIL_PUBLIC_URL!);
+    } catch (e) {
+      throw new SetupError((e as Error).message);
+    }
+    ghApi = createGitHubApi({ clientId: env.PAYRAIL_GITHUB_CLIENT_ID!, clientSecret: env.PAYRAIL_GITHUB_CLIENT_SECRET!, redirectUri: target.redirectUri, ...(d.githubFetch ? { fetchImpl: d.githubFetch } : {}) });
+    ghNote = ` ${target.local ? 'LOCAL DEVELOPMENT' : 'Public'} callback to register in the GitHub OAuth App: ${target.redirectUri}.${target.warning ? ` Warning: ${target.warning}.` : ''}`;
+  } else if (!ghApi && partial > 0) {
+    d.log('GitHub verification is OFF: set all of PAYRAIL_GITHUB_CLIENT_ID, PAYRAIL_GITHUB_CLIENT_SECRET and PAYRAIL_PUBLIC_URL (only some are set).');
+  }
   if (ghApi) {
     github = createGitHubVerification({ db, keys: [vaultKey], api: ghApi, ...(d.githubFetchOptions ? { fetchOptions: d.githubFetchOptions } : {}) });
-    d.log('GITHUB VERIFICATION ENABLED: sellers can prove ownership with a GitHub repository plus the proof file on their deployed host (no scopes are requested).');
+    d.log(`GITHUB VERIFICATION ENABLED: sellers can prove ownership with a GitHub repository plus the proof file on their deployed host (no scopes are requested).${ghNote}`);
   }
 
   const market: MarketRuntime = {
