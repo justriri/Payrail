@@ -218,4 +218,25 @@ test('a price derived from a stale Textile quote cannot be published until it is
   assert.equal(stale.ready, false);
 });
 
+test('GET /buy/currencies (the landing page data): carries checkedAt, the rules for the three lists, and an explicit error instead of hiding the section when the status cannot be read', async () => {
+  const w = await world();
+  const s = await serve(w.market);
+  try {
+    const ok = (await s.call('GET', '/buy/currencies')).body;
+    assert.equal(ok.ok, true);
+    assert.equal(ok.enabled, true);
+    assert.ok(ok.checkedAt && !Number.isNaN(Date.parse(ok.checkedAt)));
+    assert.ok(ok.rules.conversion && ok.rules.pricing && /USDT/.test(ok.rules.settlement));
+    assert.ok(Array.isArray(ok.currencies) && ok.currencies.length >= 5);
+    for (const c of ok.currencies) assert.ok(['live', 'simulated', 'temporarily_unavailable', 'unsupported'].includes(c.status), `${c.symbol}: ${c.status}`);
+    assert.ok(ok.officialList && Array.isArray(ok.officialList.symbols));
+    (w.market.buyConvert as { currencies: () => Promise<unknown> }).currencies = async () => { throw new Error('boom'); };
+    const bad = (await s.call('GET', '/buy/currencies')).body;
+    assert.equal(bad.ok, true);
+    assert.equal(bad.enabled, true);
+    assert.match(bad.error, /could not be read just now/);
+    assert.deepEqual(bad.currencies, []);
+  } finally { await s.close(); }
+});
+
 test.after(() => { try { rmSync(root, { recursive: true, force: true }); } catch { /* temp folder */ } });

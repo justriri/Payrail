@@ -17,36 +17,86 @@
   } catch { /* the static text stays */ }
 })();
 
-// Landing page: the currency cards come from the server (the same data the Buy page uses), never from fixed text.
-(async () => {
+// Landing page: the currency routes come from the server (GET /api/market/buy/currencies, the same data the checkout uses), never from fixed text.
+// Every outcome is visible: loading, success, empty, "not enabled", and an error with a Retry button. The section is never silently empty.
+(() => {
   const box = document.getElementById('asset-cards');
-  const loading = document.getElementById('asset-loading');
+  const meta = document.getElementById('routes-meta');
   if (!box) return;
-  const card = (sym, ...lines) => {
+  const txt = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; e.textContent = text; return e; };
+  const card = (sym, status, ...lines) => {
     const d = document.createElement('div');
     d.className = 'asset';
-    const b = document.createElement('b');
-    b.textContent = sym;
-    d.append(b);
-    for (const t of lines) { const s = document.createElement('small'); s.textContent = t; s.style.display = 'block'; d.append(s); }
+    if (sym) d.dataset.symbol = sym;
+    if (status) d.dataset.status = status;
+    d.append(txt('b', '', sym || ''));
+    for (const l of lines) if (l) d.append(l);
     return d;
   };
-  try {
-    const d = await (await fetch('/api/market/buy/currencies')).json();
-    if (loading) loading.remove();
-    if (!d.ok || !d.enabled) {
-      box.append(card('Other currencies', d.note || 'Paying with another currency is not switched on on this server. Only USDT works.'));
-      return;
+  const note = (state, title, text, retry) => {
+    box.dataset.state = state;
+    box.replaceChildren(card('USDT', 'settlement', txt('small', '', 'Settlement currency: Buy is paid in USDT on Celo')));
+    const n = document.createElement('div');
+    n.className = `asset routes-note ${state}`;
+    n.id = 'routes-note';
+    n.append(txt('b', '', title), txt('small', '', text));
+    if (retry) { const b = txt('button', 'secondary', 'Retry'); b.type = 'button'; b.id = 'routes-retry'; b.addEventListener('click', () => load()); n.append(b); }
+    box.append(n);
+    if (meta) meta.textContent = '';
+  };
+  const BADGE = { live: 'Live', simulated: 'Simulated', temporarily_unavailable: 'Temporarily unavailable', unsupported: 'Unsupported' };
+  const ORDER = ['live', 'simulated', 'temporarily_unavailable', 'unsupported'];
+  const GROUP_TITLE = { live: 'Live', simulated: 'Simulated (development)', temporarily_unavailable: 'Temporarily unavailable', unsupported: 'Unsupported' };
+  const short = (t) => (String(t || '').length > 170 ? `${String(t).slice(0, 167)}...` : String(t || ''));
+
+  function render(d) {
+    box.dataset.state = 'ready';
+    box.replaceChildren(card('USDT', 'settlement', txt('small', '', 'Settlement currency: Buy is paid in USDT on Celo')));
+    const groups = new Map(ORDER.map((k) => [k, []]));
+    for (const c of d.currencies) (groups.get(c.status) || groups.get('unsupported')).push(c);
+    for (const k of ORDER) {
+      const list = groups.get(k).sort((a, b) => a.symbol.localeCompare(b.symbol));
+      if (!list.length) continue;
+      const h = txt('h3', `routes-group ${k}`, `${GROUP_TITLE[k]} (${list.length})`);
+      h.dataset.group = k;
+      box.append(h);
+      for (const c of list) {
+        const lines = [txt('small', `badge-line ${c.status}`, BADGE[c.status] || c.statusLabel)];
+        if (c.status === 'live' || c.status === 'simulated') {
+          lines.push(txt('small', 'min-swap', `Smallest swap ${c.minSell} ${c.symbol}${c.minUsdt ? ` (about ${c.minUsdt} USDT)` : ''}`));
+        } else {
+          lines.push(txt('small', 'reason', short(c.reason || c.statusDetail)));
+        }
+        box.append(card(c.symbol, c.status, ...lines));
+      }
     }
-    const order = { live: 0, simulated: 1, temporarily_unavailable: 2, unsupported: 3 };
-    for (const c of [...d.currencies].sort((x, y) => order[x.status] - order[y.status] || x.symbol.localeCompare(y.symbol))) {
-      const el = c.status === 'temporarily_unavailable' ? card(c.symbol, c.statusLabel, c.reason || c.statusDetail) : card(c.symbol, c.statusLabel);
-      el.dataset.symbol = c.symbol;
-      el.dataset.status = c.status;
-      box.append(el);
+    if (meta) {
+      const when = d.checkedAt ? String(d.checkedAt).replace('T', ' ').slice(0, 19) : '';
+      const off = d.officialList && Array.isArray(d.officialList.symbols) ? ` Textile's official Celo list: ${d.officialList.symbols.join(', ')} (${d.officialList.source}).` : '';
+      meta.textContent = `Checked live${when ? ` at ${when} UTC` : ''}.${off}`;
     }
-  } catch {
-    if (loading) loading.remove();
-    box.append(card('Other currencies', 'Status could not be read from this server right now.'));
   }
+
+  let timer;
+  async function load() {
+    clearTimeout(timer);
+    if (!box.querySelector('#routes-note') && !box.querySelector('[data-symbol]:not([data-status="settlement"])')) {
+      box.dataset.state = 'loading';
+    }
+    try {
+      const r = await fetch('/api/market/buy/currencies', { signal: AbortSignal.timeout(25000) });
+      let d;
+      try { d = await r.json(); } catch { d = undefined; }
+      if (!r.ok || !d) { note('error', 'Route status could not be loaded', `The server answered ${r.status}. Nothing is shown as supported until it can be read.`, true); return; }
+      if (!d.ok) { note('error', 'Route status could not be loaded', short(d.message || 'The server refused the request.'), true); return; }
+      if (!d.enabled) { note('disabled', 'Other currencies are not switched on', d.note || 'Paying with another currency is not enabled on this server. Only USDT works.', false); return; }
+      if (d.error) { note('error', 'Route status could not be read just now', short(d.error), true); return; }
+      if (!Array.isArray(d.currencies) || d.currencies.length === 0) { note('empty', 'No currencies to show', 'The server returned no currency routes. Nothing is shown as supported.', true); return; }
+      render(d);
+      timer = setTimeout(load, 60000); // refresh by itself: a route can become Live or drop out at any time
+    } catch (e) {
+      note('error', 'Route status could not be loaded', `The request failed (${String((e && e.message) || e).slice(0, 80)}). Nothing is shown as supported until it can be read.`, true);
+    }
+  }
+  load();
 })();

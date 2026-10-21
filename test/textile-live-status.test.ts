@@ -14,6 +14,7 @@ import { createTextileRouteProvider } from '../src/textileroutes.ts';
 const USDT = '0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e' as const;
 const A = {
   USDC: '0xcebA9300f2b948710d2653dD7B07f33A8B32118C', cNGN: '0xF6829D7393dAe24509eb1E52eE8e572e2E271a4f', wCOP: '0x8a1D45e102e886510e891d2Ec656a708991e2D76', wARS: '0x0DC4F92879B7670e5f4e4e6e3c801D229129D90D',
+  wBRL: '0xD76f5Faf6888e24D9F04Bf92a0c8B921FE4390e0', IDRX: '0x18Bc5bcC660cf2B9cE3cd51a404aFe1a0cBD3C22',
 } as const;
 type Pair = { sellToken: `0x${string}`; buyToken: `0x${string}`; minSellAmount: bigint; maxSellAmount: bigint; levels: Array<{ sellAmount: bigint; buyAmount: bigint }> };
 const pair = (sym: keyof typeof A, o: { levels?: boolean; min?: bigint } = {}): Pair => {
@@ -180,4 +181,113 @@ test('no user-facing status asks for a test run, and CELO (the gas token) is sti
   for (const c of list) assert.doesNotMatch(`${c.statusLabel} ${c.statusDetail} ${c.reason ?? ''}`, /needs? (a )?(live )?test|test run|first real conversion/i, c.symbol);
   const celo = list.find((c) => c.symbol === 'CELO');
   assert.ok(!celo || celo.available === false);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// "wBRL cannot be used for pricing right now (Unsupported): this asset is not listed by the provider."
+// Root cause: when Textile could not be reached while the routes were read, the registry swallowed the error and reported EVERY asset as "not
+// listed by the provider" (Unsupported). An outage is temporary and says nothing about what Textile lists.
+import { getLadder } from '../src/textile.ts';
+
+const dead = async () => { throw Object.assign(new Error('getaddrinfo EAI_AGAIN api.textilecredit.com'), { code: 'EAI_AGAIN' }); };
+function outage() {
+  const provider = createTextileRouteProvider({ getLadder: dead as never, preview: dead as never });
+  const db = openDb(':memory:');
+  seedConversionAssets(db);
+  return createBuyConvert({
+    db, registry: new RouteRegistry(db, [provider]), provider, buyerSwap: { converterFor: () => { throw new Error('unused'); }, prepare: async () => { throw new Error('unused'); } },
+    reader: { blockNumber: async () => 0n, receipt: async () => null }, usdt: USDT, reactor: TEXTILE_REACTOR, chainId: 42220, minConfirmations: 1, maxUsdtAtomic: 2_000_000n,
+    officialCorridors: official(['cNGN', 'USDC', 'wARS', 'wBRL', 'IDRX'], Object.values(A)), now: () => 1_000_000,
+  });
+}
+
+test('root cause of the wBRL message: a Textile outage is Temporarily unavailable, never Unsupported / not listed by the provider', async () => {
+  const bc = outage();
+  const list = await bc.currencies();
+  for (const sym of ['cNGN', 'wARS', 'wBRL', 'USDC', 'IDRX']) {
+    const c = list.find((x) => x.symbol === sym)!;
+    assert.equal(c.status, 'temporarily_unavailable', sym);
+    assert.match(c.reason!, /Textile could not be reached/, sym);
+    assert.doesNotMatch(`${c.reason} ${c.statusDetail}`, /not listed by the provider/, sym);
+    assert.equal(c.available, false);
+  }
+});
+
+test('seller pricing during an outage is a TEMPORARY error (try again), not "cannot be used"', async () => {
+  const bc = outage();
+  await assert.rejects(bc.normalizePrice({ symbol: 'wBRL', amountAtomic: 10n ** 18n }), (e: any) => e.code === 'PRICE_UNAVAILABLE' && /cannot be converted reliably right now/.test(e.message) && /Try again shortly/.test(e.message) && !/Unsupported/.test(e.message));
+});
+
+test('an official Textile corridor missing from the price ladder at this moment is Temporarily unavailable; a non-official one stays Unsupported', async () => {
+  const t = textile();
+  t.state.pairs = [pair('cNGN', { min: 1_360_000_000n })]; // wBRL and wCOP have no ladder entry right now
+  const bc = convert(t, { officialCorridors: official(['cNGN', 'wBRL', 'USDC'], [A.cNGN, '0xD76f5Faf6888e24D9F04Bf92a0c8B921FE4390e0']) });
+  const wbrl = await status(bc, 'wBRL');
+  assert.equal(wbrl.status, 'temporarily_unavailable');
+  assert.match(wbrl.reason!, /official Textile corridor on Celo/);
+  assert.doesNotMatch(wbrl.reason!, /not listed by the provider/);
+  assert.equal((await status(bc, 'wCOP')).status, 'unsupported');
+  await assert.rejects(bc.normalizePrice({ symbol: 'wBRL', amountAtomic: 10n ** 18n }), (e: any) => e.code === 'PRICE_UNAVAILABLE');
+});
+
+test('a short outage does not hide every route: the last good ladder is used for 15 minutes, then an outage is reported as an outage', async () => {
+  let clock = 1_000_000;
+  let down = false;
+  const pairs = [pair('cNGN', { min: 1_360_000_000n }), pair('USDC', { min: 998_881n })];
+  const provider = createTextileRouteProvider({
+    now: () => clock,
+    getLadder: (async () => { if (down) throw new Error('EAI_AGAIN'); return { asOf: 'x', pairs }; }) as never,
+    preview: (async (a: { sellAmount: bigint }) => { if (down) throw new Error('EAI_AGAIN'); return { kind: 'preview', sellAmount: a.sellAmount, buyAmount: 998_000n, feeAmount: 1n, takerPays: a.sellAmount, rateRay: '1', availableSellAmount: undefined, requestId: 'r', rateRemaining: undefined }; }) as never,
+  });
+  const db = openDb(':memory:');
+  seedConversionAssets(db);
+  const reg = new RouteRegistry(db, [provider]);
+  assert.equal((await reg.find('funding', 'cNGN'))!.available, true);
+  down = true;
+  clock += 60_000;
+  const r = (await reg.find('funding', 'cNGN'))!;
+  assert.equal(r.available, true, 'known from the last good ladder; the buyer-facing list still needs a live price');
+  assert.notEqual(r.unavailableReason, 'not_on_ladder');
+  clock += 16 * 60_000;
+  const gone = (await reg.find('funding', 'cNGN'))!;
+  assert.equal(gone.available, false);
+  assert.equal(gone.unavailableReason, 'provider_error');
+});
+
+test('Textile reads are retried on transient failures (DNS blip, reset, 429 and 5xx) and a definite answer is not', async () => {
+  const realFetch = globalThis.fetch;
+  try {
+    let calls = 0;
+    globalThis.fetch = (async () => { calls++; if (calls < 3) throw new TypeError('fetch failed'); return new Response(JSON.stringify({ data: { chainId: 42220, asOf: 'now', pairs: [] } }), { status: 200 }); }) as never;
+    const l = await getLadder(42220);
+    assert.equal(calls, 3);
+    assert.deepEqual(l.pairs, []);
+    calls = 0;
+    globalThis.fetch = (async () => { calls++; return new Response('{}', { status: 404 }); }) as never;
+    await assert.rejects(getLadder(42220), /HTTP 404/);
+    assert.equal(calls, 1, 'a 404 is final: no retry');
+    calls = 0;
+    globalThis.fetch = (async () => { calls++; return new Response('{}', { status: 503 }); }) as never;
+    await assert.rejects(getLadder(42220), /HTTP 503/);
+    assert.equal(calls, 3);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('conversion list, seller pricing list and settlement are different things: pricing needs a usable rate, so it follows the conversion list; settlement is always USDT', async () => {
+  const t = textile();
+  t.state.pairs = [pair('cNGN', { min: 1_360_000_000n }), pair('wBRL', { min: 5n * 10n ** 18n }), pair('wARS', { min: 1_600n * 10n ** 18n }), pair('USDC', { min: 998_881n }), pair('IDRX', { min: 1_790_000n })];
+  const bc = convert(t);
+  const pricing = (await bc.pricingCurrencies()).filter((c) => c.selectable).map((c) => c.symbol).sort();
+  const conversion = (await bc.currencies()).filter((c) => c.available).map((c) => c.symbol).sort();
+  assert.deepEqual(pricing, ['IDRX', 'USDC', 'cNGN', 'wARS', 'wBRL'], 'every confirmed corridor can be used to price an API');
+  assert.deepEqual(pricing, conversion);
+  for (const [sym, amt] of [['cNGN', 50_000_000n], ['wBRL', 10n ** 18n], ['wARS', 100n * 10n ** 18n], ['USDC', 1_000_000n], ['IDRX', 100_000n]] as const) {
+    const n = await bc.normalizePrice({ symbol: sym, amountAtomic: amt });
+    assert.equal(n.currency, sym);
+    assert.ok(n.usdtAtomic > 0n, sym);
+    assert.equal(n.status, 'live');
+  }
+  assert.ok(!conversion.includes('USDT'), 'USDT is the settlement currency, not a conversion source');
 });

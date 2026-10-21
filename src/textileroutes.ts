@@ -32,8 +32,23 @@ export function createTextileRouteProvider(deps: TextileRouteDeps = {}): Convers
     return a ? { chainId, address: a.address, symbol: a.symbol, decimals: a.decimals } : undefined;
   };
 
+  // The last ladder that was read successfully. If Textile cannot be reached for a moment, routes are judged from it for a short time; the buyer-facing
+  // list still verifies each route with a LIVE price, so a stale ladder can never make a dead route look Live, and a blip never hides every route.
+  let lastGood: { at: number; value: { asOf: string | undefined; pairs: LadderPair[] } } | undefined;
+  const LAST_GOOD_MS = 15 * 60_000;
+  async function readLadder() {
+    try {
+      const value = await ladder(chainId);
+      lastGood = { at: now(), value };
+      return value;
+    } catch (e) {
+      if (lastGood && now() - lastGood.at < LAST_GOOD_MS) return lastGood.value;
+      throw e;
+    }
+  }
+
   async function discover(direction: Direction): Promise<{ asOf: string; routes: LiveRoute[] }> {
-    const l = await ladder(chainId);
+    const l = await readLadder();
     const asOf = l.asOf ?? new Date(now()).toISOString();
     const routes: LiveRoute[] = [];
     for (const p of l.pairs) {

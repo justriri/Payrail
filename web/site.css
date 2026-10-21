@@ -261,3 +261,25 @@ main.workspace .cards .more { grid-column: 1 / -1; text-align: center; padding: 
 #payout-destination { overflow-wrap: anywhere; word-break: break-all; }
 label.check { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0; }
 label.check input { margin-top: 4px; }
+
+/* landing: currency routes (Live / Temporarily unavailable / Unsupported) */
+.assets { align-items: stretch; }
+.assets .routes-group { grid-column: 1 / -1; margin: 10px 0 0; font-size: 14px; letter-spacing: .02em; }
+.assets .routes-group.live { color: var(--ok, #067647); }
+.assets .routes-group.temporarily_unavailable { color: var(--warn, #b54708); }
+.assets .routes-group.unsupported { color: var(--muted); }
+.assets .asset small { display: block; overflow-wrap: anywhere; }
+.assets .asset .badge-line { font-weight: 600; }
+.assets .asset[data-status="live"] { border-color: var(--ok, #067647); }
+.assets .asset[data-status="temporarily_unavailable"] { border-style: dashed; }
+.assets .asset[data-status="unsupported"] { opacity: .8; }
+.assets .routes-note { grid-column: 1 / -1; }
+.assets .routes-note.error { border-color: var(--bad, #b42318); }
+.assets .routes-note button { margin-top: 8px; }
+#routes-meta { margin: 4px 0 8px; overflow-wrap: anywhere; }
+.assets > * { min-width: 0; }
+.assets .asset { overflow-wrap: anywhere; box-sizing: border-box; }
+@media (max-width: 520px) { .assets { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+/* the landing page does not load style.css (the border-box reset), so .wrap (width:100% plus 24px padding each side) was wider than any screen
+   narrower than 1168px: every landing section overflowed by the padding. Below that width .wrap now includes its padding. Wider screens are unchanged. */
+@media (max-width: 1168px) { .wrap { box-sizing: border-box; } }

@@ -579,9 +579,21 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
       if (!rt.live || !rt.buyConvert) {
         return ok({ enabled: false, currencies: [], note: 'Paying with another currency is not enabled on this server. Only USDT on Celo can be used.' });
       }
-      const list = await rt.buyConvert.currencies();
+      let list;
+      try {
+        list = await rt.buyConvert.currencies();
+      } catch (e) {
+        // never hide the section: say that the status could not be read
+        return ok({ enabled: true, error: `The route status could not be read just now (${(e as Error).message.slice(0, 120)}). Try again shortly.`, currencies: [], checkedAt: new Date(now()).toISOString() });
+      }
       return ok({
         enabled: true,
+        checkedAt: new Date(now()).toISOString(),
+        rules: {
+          conversion: 'Currencies Textile converts into USDT on Celo (a live price now, and an official Textile Celo corridor). A buyer converts them in their own wallet.',
+          pricing: 'Sellers may price an API in any currency that is selectable for conversion, because the price is turned into USDT with a Textile rate. A route that is only temporarily unavailable cannot be priced right now, and says so.',
+          settlement: 'Buyers are always billed and sellers are always paid in USDT on Celo.',
+        },
         settlement: { symbol: 'USDT', note: 'Buy AI is paid in USDT on Celo. Textile Protocol converts your currency into USDT in your own wallet first; it does not pay Buy.' },
         conversionLimit: rt.buyConvert.config().maxUsdt,
         officialList: await rt.buyConvert.official(),

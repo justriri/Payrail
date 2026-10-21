@@ -150,7 +150,7 @@ export function createBuyConvert(d: BuyConvertDeps) {
    * Currencies the buyer may pay with: only routes that are live on Textile's ladder AND enabled by the operator AND whose smallest allowed
    * swap (Textile's corridor minimum) fits the per-conversion limit. Each states how it is known. A short cache keeps the page quick.
    */
-  let cache: { at: number; value: Awaited<ReturnType<typeof buildCurrencies>> } | undefined;
+  let cache: { at: number; ttl: number; value: Awaited<ReturnType<typeof buildCurrencies>> } | undefined;
   async function buildCurrencies() {
     const rs = (await d.registry.routes('funding')).filter((r) => !r.passthrough);
     return Promise.all(rs.map(async (r) => {
@@ -158,7 +158,15 @@ export function createBuyConvert(d: BuyConvertDeps) {
       let reason: string | null = r.usable ? null : r.reason;
       let minUsdt: string | null = null;
       const gate = r.enabled && r.available ? await documentationGate(r.from.symbol, r.from.address) : undefined;
-      if (gate) {
+      if (r.unavailableReason === 'provider_error') {
+        // Textile could not be reached while the routes were read: temporary, and NOT the same as "not listed"
+        status = 'temporarily_unavailable';
+        reason = 'Textile could not be reached just now, so this route cannot be checked. It is checked again automatically.';
+      } else if (r.unavailableReason === 'not_on_ladder' && !r.available && (await documentationGate(r.from.symbol, r.from.address)) === undefined) {
+        // an OFFICIAL Textile Celo corridor whose price ladder has no entry at this moment: a temporary gap, not an unsupported currency
+        status = 'temporarily_unavailable';
+        reason = `${r.from.symbol} is an official Textile corridor on Celo, but Textile's price ladder has no entry for it right now. It is checked again automatically.`;
+      } else if (gate) {
         status = 'unsupported';
         reason = gate;
       } else if (!r.enabled) {
@@ -212,9 +220,10 @@ export function createBuyConvert(d: BuyConvertDeps) {
     }));
   }
   async function currencies() {
-    if (cache && now() - cache.at < 30_000) return cache.value;
+    if (cache && now() - cache.at < cache.ttl) return cache.value;
     const value = await buildCurrencies();
-    cache = { at: now(), value };
+    // a list with temporary problems is re-read soon; a settled one is kept for 30 s
+    cache = { at: now(), value, ttl: value.some((c) => c.status === 'temporarily_unavailable') ? 5_000 : 30_000 };
     return value;
   }
 
@@ -360,7 +369,11 @@ export function createBuyConvert(d: BuyConvertDeps) {
     const list = await currencies();
     const c = list.find((x) => x.symbol.toLowerCase() === a.symbol.toLowerCase());
     if (!c) throw new BuyConvertError('UNSUPPORTED_CURRENCY', `${a.symbol} cannot be used for pricing: Textile has no conversion route between it and USDT.`);
-    if (!c.available) throw new BuyConvertError('UNSUPPORTED_CURRENCY', `${c.symbol} cannot be used for pricing right now (${c.statusLabel}): ${c.reason ?? c.statusDetail}`);
+    if (!c.available) {
+      // a temporary problem (no makers, Textile unreachable) is not the same as an unsupported currency: the seller is told to try again
+      if (c.status === 'temporarily_unavailable') throw new BuyConvertError('PRICE_UNAVAILABLE', `${c.symbol} cannot be converted reliably right now (${c.statusLabel}): ${c.reason ?? c.statusDetail} Try again shortly, or price in USDT.`);
+      throw new BuyConvertError('UNSUPPORTED_CURRENCY', `${c.symbol} cannot be used for pricing (${c.statusLabel}): ${c.reason ?? c.statusDetail}`);
+    }
     const route = await d.registry.find('funding', c.symbol);
     if (!route) throw new BuyConvertError('UNSUPPORTED_CURRENCY', `${c.symbol} cannot be used for pricing.`);
     const probe = a.amountAtomic < route.minInputAtomic ? route.minInputAtomic : a.amountAtomic > route.maxInputAtomic ? route.maxInputAtomic : a.amountAtomic;

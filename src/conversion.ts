@@ -164,11 +164,13 @@ export class RouteRegistry {
       evidence: evidenceFor(direction, 'USDT', { providerSimulated: false }),
     });
     const seen = new Set<string>();
+    let providerFailed = false;
     for (const p of this.providers) {
       let rs: Route[] = [];
       try {
         rs = await p.discoverRoutes(direction);
       } catch {
+        providerFailed = true; // the provider could not be asked: that says nothing about which assets it lists
         continue;
       }
       for (const r of rs) {
@@ -194,9 +196,12 @@ export class RouteRegistry {
       if (seen.has(key) || a.symbol === 'USDT') continue;
       out.push({
         provider: 'none', direction, from: direction === 'funding' ? a : USDT_CELO, to: direction === 'funding' ? USDT_CELO : a,
-        available: false, unavailableReason: 'not_on_ladder', minInputAtomic: 0n, maxInputAtomic: 0n, discoveredAt: Date.now(),
-        enabled: false, usable: false, reason: REASON_TEXT.not_on_ladder,
-        evidence: { level: 'none', basis: 'No provider lists this asset: there is no evidence of a route.', executableLive: false },
+        available: false, unavailableReason: providerFailed ? 'provider_error' : 'not_on_ladder', minInputAtomic: 0n, maxInputAtomic: 0n, discoveredAt: Date.now(),
+        enabled: providerFailed ? (direction === 'funding' ? a.fundingEnabled : a.payoutEnabled) : false, usable: false,
+        reason: providerFailed ? REASON_TEXT.provider_error : REASON_TEXT.not_on_ladder,
+        evidence: providerFailed
+          ? { level: 'none', basis: 'The provider could not be reached just now, so nothing is known about this route right now.', executableLive: false }
+          : { level: 'none', basis: 'No provider lists this asset: there is no evidence of a route.', executableLive: false },
       });
     }
     return out;

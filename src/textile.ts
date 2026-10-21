@@ -62,11 +62,23 @@ async function post(path: string, body: unknown, timeoutMs = 75_000) {
   return { json, requestId, rateRemaining };
 }
 
-async function get(path: string, timeoutMs = 30_000) {
-  const res = await fetch(TEXTILE_API + path, { signal: AbortSignal.timeout(timeoutMs) });
-  const json: unknown = await res.json().catch(() => undefined);
-  if (!res.ok) throw new TextileError(`HTTP ${res.status}`, { httpStatus: res.status, code: 'http_error' });
-  return json;
+/** Read-only GET. A transient failure (DNS hiccup, reset, timeout, HTTP 429/5xx) is retried a couple of times: a one-off blip must not look like "Textile lists nothing". */
+async function get(path: string, timeoutMs = 20_000, attempts = 3) {
+  let last: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await fetch(TEXTILE_API + path, { signal: AbortSignal.timeout(timeoutMs) });
+      const json: unknown = await res.json().catch(() => undefined);
+      if (res.ok) return json;
+      last = new TextileError(`HTTP ${res.status}`, { httpStatus: res.status, code: 'http_error' });
+      if (res.status !== 429 && res.status < 500) throw last; // a definite answer (404, 400...) is not retried
+    } catch (e) {
+      if (e instanceof TextileError && e.httpStatus > 0 && e.httpStatus !== 429 && e.httpStatus < 500) throw e;
+      last = e;
+    }
+    if (i < attempts - 1) await new Promise((r) => setTimeout(r, 400 * (i + 1) ** 2));
+  }
+  throw last;
 }
 
 function unwrap(json: unknown): Json {

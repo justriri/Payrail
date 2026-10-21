@@ -245,7 +245,7 @@ test('currency status is honest: Live (Textile is quoting and Payrail can execut
   assert.equal(st('IDRX')!.status, 'temporarily_unavailable');
   assert.match(st('IDRX')!.reason!, /above this server's limit/);
   assert.equal(st('CELO')!.status, 'unsupported');
-  assert.equal(st('wMXN')!.status, 'unsupported');
+  assert.equal(st('wMXN')!.status, 'temporarily_unavailable', 'operator-allowed, but absent from the ladder right now: a temporary gap');
   assert.equal(st('G$')!.status, 'unsupported');
   assert.ok(!list.some((c) => c.symbol === 'CWT'));
   for (const sym of ['cNGN', 'wARS', 'wBRL', 'USDC', 'USAT']) assert.equal(st(sym)!.textileLive, true, `${sym}: a live price exists`);
