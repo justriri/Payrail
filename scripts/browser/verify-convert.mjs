@@ -70,7 +70,7 @@ await b.goto(`${h.BASE}/`, 2200);
 const land = await b.ev(`JSON.stringify([...document.querySelectorAll('#asset-cards .asset')].map(c => ({ sym: c.dataset.symbol || '', status: c.dataset.status || '', text: c.innerText })))`).then(JSON.parse);
 const landOf = (x) => land.find((c) => c.sym === x);
 check('landing: no currency says "Not enabled yet"; the cards come from the server', !/Not enabled yet/i.test(await b.text('#currencies')) && ['cNGN', 'wARS', 'wBRL', 'USDC', 'IDRX'].every((x) => landOf(x)), land.map((c) => `${c.sym}:${c.status}`).join(' '));
-check('landing: each currency shows its real status (Simulated here; Live in production), never a test-run message', ['cNGN', 'wARS', 'wBRL', 'USDC', 'IDRX'].every((x) => /Simulated/.test(landOf(x).text)) && /Unsupported/.test(landOf('CELO').text) && !/needs? (a )?(live )?test|test run/i.test(land.map((c) => c.text).join(' ')), land.map((c) => c.text.replace(/\s+/g, ' ')).join(' | '));
+check('landing: only the five official currencies, each with its status (SIMULATED here, LIVE in production), never a test-run message', ['cNGN', 'wARS', 'wBRL', 'USDC', 'IDRX'].every((x) => /SIMULATED/.test(landOf(x).text)) && !land.some((c) => ['USAT', 'wCOP', 'WETH', 'wMXN', 'CELO', 'G$'].includes(c.sym)) && !/needs? (a )?(live )?test|test run/i.test(land.map((c) => c.text).join(' ')), land.map((c) => c.text.replace(/\s+/g, ' ')).join(' | '));
 check('landing: nothing claims a route is verified when it is not', !/Available/.test(landOf('wARS').text) && !/Available/.test(landOf('cNGN').text));
 await b.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
 await b.goto(`${h.BASE}/`, 2200);

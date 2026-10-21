@@ -29,7 +29,7 @@ check('landing: product preview is shown and labelled as a preview', /preview/i.
 check('landing: how it works, benefits and currencies sections', (await vis('#how')) && (await vis('#benefits')) && (await vis('#currencies')));
 await b.sleep(1200);
 t = await b.text('body');
-check('landing: USDT is the settlement currency; with conversion switched off the page says so instead of listing currencies as enabled', /USDT\s+Settlement currency/.test(t) && !/Not enabled yet/.test(t) && /not enabled on this server|Only USDT on Celo/.test(t) && /Status is shown exactly as it is/.test(t), (await b.text('#asset-cards')).replace(/\s+/g, ' '));
+check('landing: USDT is the settlement currency; with conversion switched off the page says so instead of listing currencies as enabled', /USDT\s+Settlement currency/.test(t) && !/Not enabled yet/.test(t) && /not enabled on this server|Only USDT on Celo/.test(t) && /Supported currencies are the ones on/.test(t), (await b.text('#asset-cards')).replace(/\s+/g, ' '));
 check('landing: the real network and token are stated from the server', /Real funds: USDT on Celo mainnet \(chain 42220\)/.test(await b.text('#mode-note')));
 check('landing: no demo / test-credit / simulation language anywhere', (await noDemo()) === '', await noDemo());
 check('landing: the "hackathon project" sentence is gone (page text and raw markup), the footer legal note remains and is accurate about payouts', !/hackathon project/i.test(await b.text('body')) && !/hackathon project/i.test(await b.ev('document.documentElement.outerHTML')) && /Payments are real/.test(await b.text('.legal')) && !/Seller payouts are not enabled/i.test(await b.text('.legal')) && /operator approves and sends/.test(await b.text('.legal')), await b.text('.legal'));
