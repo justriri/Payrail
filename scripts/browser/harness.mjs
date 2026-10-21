@@ -14,6 +14,7 @@ import { generateMasterKey } from '../../src/vault.ts';
 import { createWebServer } from '../../src/webapi.ts';
 import { createBuyPay } from '../../src/buypay.ts';
 import { createBuyConvert } from '../../src/buyconvert.ts';
+import { createCheckout } from '../../src/checkout.ts';
 import { RouteRegistry, seedConversionAssets } from '../../src/conversion.ts';
 import { TEXTILE_REACTOR } from '../../src/config.ts';
 import { createSimProvider } from '../../src/dev/simconversion.ts';
@@ -90,6 +91,8 @@ export async function startHarness({ seedLegacyDemoRows = true, capAtomic = 1_00
       payout: { payableAssets: ['USDT'], minAtomic: 10_000n, maxAtomic: capAtomic },
     },
   };
+  // purchases of seller-listed APIs: the production checkout over the same ledger, funding and (optional) simulated Textile conversion
+  market.checkout = createCheckout({ db, keys: [mk], funding: market.live.funding, execute: market.execute, ...(buyConvert ? { convert: buyConvert } : {}), usdtBalance: async (w) => usdtBalances.get(String(w).toLowerCase()) ?? 10_000_000n });
   const { server, token } = createWebServer(createSimulatedRuntime({ scenario: 'ok', delayMs: 5 }), { token: 'harness', market });
   await new Promise((r) => server.listen(0, '127.0.0.1', () => r()));
   const BASE = `http://127.0.0.1:${server.address().port}`;

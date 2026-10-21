@@ -37,7 +37,7 @@ export const SIM_ASSETS: SimAsset[] = [
   { ref: A('wCOP', '0x8a1D45e102e886510e891d2Ec656a708991e2D76', 18), perUsdt: 3181, funding: { available: true, maxUsd: 95_000 }, payout: { available: true, maxUsd: 5_000 }, feeBps: 10 },
   { ref: A('CELO', '0x471EcE3750Da237f93B8E339c536989b8978a438', 18), perUsdt: 11.4, funding: { available: true, maxUsd: 69_000 }, payout: { available: true, maxUsd: 33 }, feeBps: 10 },
   { ref: A('WETH', '0xD221812de1BD094f35587EE8E174B07B6167D9Af', 18), perUsdt: 0.00041, funding: { available: true, maxUsd: 4_000 }, payout: { available: true, maxUsd: 55 }, feeBps: 10 },
-  { ref: A('IDRX', '0x18Bc5bcC660cf2B9cE3cd51a404aFe1a0cBD3C22', 2), perUsdt: 1789, funding: { available: true, maxUsd: 100_000 }, payout: { available: false, maxUsd: 2, reason: 'no_valid_quote' }, feeBps: 10 },
+  { ref: A('IDRX', '0x18Bc5bcC660cf2B9cE3cd51a404aFe1a0cBD3C22', 2), perUsdt: 17900, funding: { available: true, maxUsd: 100_000 }, payout: { available: false, maxUsd: 2, reason: 'no_valid_quote' }, feeBps: 10 },
   { ref: A('wMXN', '0x337E7456B420bD3481e7FA61fA9850343d610d34', 18), perUsdt: 18.5, funding: { available: true, maxUsd: 200 }, payout: { available: false, maxUsd: 0, reason: 'no_makers_online' }, feeBps: 10 },
   { ref: A('G$', '0x62B8B11039FcfE5aB0C56E502b1C372A3d2a9c7A', 18), perUsdt: 3181, funding: { available: false, maxUsd: 0, reason: 'no_levels' }, payout: { available: false, maxUsd: 0, reason: 'no_levels' }, feeBps: 10 },
 ];

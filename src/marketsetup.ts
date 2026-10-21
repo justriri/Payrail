@@ -22,6 +22,7 @@ import { masterKeyFrom } from './vault.ts';
 import { EXPECTED_PAY_TO } from './buy.ts';
 import { createBuyPay } from './buypay.ts';
 import { createBuyConvert } from './buyconvert.ts';
+import { createCheckout } from './checkout.ts';
 import type { SpendingPolicy } from './policy.ts';
 import type { VerifyDeps } from './verify.ts';
 import { isAddress } from 'viem';
@@ -174,12 +175,20 @@ export async function setupMarket(d: SetupDeps): Promise<MarketRuntime | undefin
     d.log(`BUY CONVERSION ENABLED (not yet run on mainnet): buyers convert cNGN etc. to USDT with Textile in their own wallet (up to ${maxUsd} USDT per conversion), then pay Buy. Platform fee: none added here.`);
   }
 
+  // seller-listed API purchases: server-authoritative checkout over the EXISTING deposit-and-ledger settlement (adds no new payment path)
+  const execute = { call: { limiter: limiter(), fetchOptions: { timeoutMs: 8_000 } } };
+  const checkout = createCheckout({
+    db, keys: [vaultKey], funding: live.funding, execute,
+    ...(buyConvert ? { convert: buyConvert } : {}), ...(d.readUsdtBalance ? { usdtBalance: d.readUsdtBalance } : {}),
+  });
+
   const market: MarketRuntime = {
     db,
     keys: [vaultKey],
     activeKey: vaultKey,
+    checkout,
     // seller APIs and DNS/well-known proofs go over the REAL internet through the SSRF-safe egress gateway
-    execute: { call: { limiter: limiter(), fetchOptions: { timeoutMs: 8_000 } } },
+    execute,
     testCall: { limiter: limiter(), fetchOptions: { timeoutMs: 8_000 } },
     domain: {},
     ...(d.buyCatalog ? { buyCatalog: d.buyCatalog } : {}),

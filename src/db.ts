@@ -590,6 +590,42 @@ ALTER TABLE listings ADD COLUMN price_quoted_at TEXT;
 ALTER TABLE listings ADD COLUMN price_source TEXT;
 `;
 
+/**
+ * Version 15: checkout of SELLER-LISTED APIs. One row per purchase attempt: the authoritative price frozen from the listing, the request input,
+ * the conversion and deposit transactions that funded it, and the execution (ledger) that settled it. Events are append-only.
+ */
+const V15 = `
+CREATE TABLE listing_checkouts (
+  id TEXT PRIMARY KEY,
+  buyer_id TEXT NOT NULL REFERENCES accounts(id),
+  wallet TEXT NOT NULL,
+  listing_id TEXT NOT NULL REFERENCES listings(id),
+  seller_id TEXT NOT NULL,
+  price_atomic TEXT NOT NULL,
+  fee_bps INTEGER NOT NULL,
+  listed_json TEXT,
+  input_json TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('QUOTED','RUNNING','CHARGED','NOT_CHARGED','UNRESOLVED','EXPIRED')),
+  conversion_id TEXT,
+  deposit_txs TEXT NOT NULL DEFAULT '[]',
+  execution_id TEXT,
+  failure TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+) STRICT;
+CREATE INDEX listing_checkouts_buyer ON listing_checkouts (buyer_id, created_at);
+CREATE TABLE listing_checkout_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  checkout_id TEXT NOT NULL REFERENCES listing_checkouts(id),
+  at TEXT NOT NULL,
+  state TEXT NOT NULL,
+  note TEXT NOT NULL
+) STRICT;
+CREATE TRIGGER listing_checkout_events_no_update BEFORE UPDATE ON listing_checkout_events BEGIN SELECT RAISE(ABORT, 'checkout events are append-only'); END;
+CREATE TRIGGER listing_checkout_events_no_delete BEFORE DELETE ON listing_checkout_events BEGIN SELECT RAISE(ABORT, 'checkout events are append-only'); END;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'accounts, listings, contracts, ledger, executions, audit', sql: V1 },
   { version: 2, name: 'encrypted seller credentials', sql: V2 },
@@ -605,6 +641,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 12, name: 'direct Buy AI purchases paid by the buyer wallet (orders and events)', sql: V12 },
   { version: 13, name: 'buyer-wallet currency conversions that fund Buy AI purchases', sql: V13 },
   { version: 14, name: 'listing prices in other currencies (original price kept, USDT price normalised from a Textile quote)', sql: V14 },
+  { version: 15, name: 'checkout of seller-listed APIs (authoritative price, funding transactions, execution link)', sql: V15 },
 ];
 
 /** Open (creating the file and folder if needed) and bring the schema up to date. ':memory:' for tests. */

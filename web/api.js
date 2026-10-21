@@ -225,6 +225,7 @@ function render(d, cfg) {
       note(t) { li.lastChild.textContent = t; },
     };
   }
+  let checkout = null; // the server-side checkout of this attempt: its price, balance plan and funding transactions are authoritative
   const lower = (x) => String(x).toLowerCase();
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const eth = () => window.ethereum;
@@ -280,7 +281,9 @@ function render(d, cfg) {
 
   async function awaitCredit(hash, st) {
     for (let i = 0; i < 40; i++) {
-      const r = await api('/funding/confirm', { body: { txHash: hash }, bearer: buyerToken });
+      const r = checkout
+        ? await api(`/checkout/${checkout.id}/deposit`, { body: { txHash: hash }, bearer: buyerToken })
+        : await api('/funding/confirm', { body: { txHash: hash }, bearer: buyerToken });
       if (r.ok) { store.set('payrail.topup', null); return true; }
       if (!T().isPendingCode(r.code)) { st.fail(`NOT CREDITED: ${r.message || 'verification failed'} (${r.code}). Nothing was credited.`); return false; }
       st.note(`Waiting for on-chain confirmations… (${r.message || 'pending'})`);
@@ -297,39 +300,161 @@ function render(d, cfg) {
     return false;
   }
 
-  /** returns true when the balance covers the price and the request may run */
+  // ---- not enough USDT in the wallet: convert a supported currency with Textile (the buyer's wallet signs every step), then top up
+  const convertPanel = el('div', { id: 'convert-panel', hidden: '' });
+  buyBox.insertBefore(convertPanel, out);
+  function chooseConversion(co) {
+    return new Promise(async (resolve) => {
+      clear(convertPanel);
+      convertPanel.hidden = false;
+      const finish = (v) => { convertPanel.hidden = true; clear(convertPanel); resolve(v); };
+      const p = co.plan;
+      convertPanel.append(
+        el('p', { class: 'notice', id: 'shortfall', text: `This API costs ${co.price.usdt} USDT. Your wallet holds ${p.walletUsdt} USDT and your Payrail balance is ${p.ledgerAvailable} USDT, so you are ${p.walletShort} USDT short. Nothing has been charged.` }));
+      const cur = await api('/buy/currencies');
+      if (!cur.ok || !cur.enabled) {
+        convertPanel.append(el('p', { class: 'muted', id: 'no-convert', text: 'Paying with another currency is not enabled on this server. Add USDT on Celo to your wallet and press Pay again.' }), el('button', { type: 'button', class: 'secondary', text: 'Close', onclick: () => finish(false) }));
+        return;
+      }
+      const order = { available: 0, needs_live_test: 1, temporarily_unavailable: 2, unsupported: 3 };
+      const sorted = [...cur.currencies].sort((x, y) => order[x.status] - order[y.status] || x.symbol.localeCompare(y.symbol));
+      const usable = sorted.filter((c) => c.available);
+      convertPanel.append(el('h3', { text: 'Pay with another currency' }), el('p', { class: 'muted', text: 'Textile converts it to USDT in your own wallet; then the USDT you owe is sent to Payrail. Every currency below shows its real status.' }),
+        el('ul', { class: 'curlist', id: 'currency-status' }, ...sorted.map((c) => el('li', { class: 'cur', 'data-symbol': c.symbol, 'data-status': c.status },
+          el('div', { class: 'cur-top' }, el('strong', { text: c.symbol }), ' ', el('span', { class: `badge ${c.status === 'available' ? 'ok' : c.status === 'unsupported' ? 'bad' : 'warn'}`, text: c.statusLabel })),
+          el('p', { class: 'muted', text: c.statusDetail }), c.available ? el('p', { class: 'muted', text: `Smallest swap ${c.minSell} ${c.symbol}${c.minUsdt ? ` (about ${c.minUsdt} USDT)` : ''}.` }) : null))));
+      if (!usable.length) { convertPanel.append(el('p', { class: 'muted', text: 'No currency can be converted right now. Add USDT to your wallet and press Pay again.' }), el('button', { type: 'button', class: 'secondary', text: 'Close', onclick: () => finish(false) })); return; }
+      const sel = el('select', { id: 'pay-currency', 'aria-label': 'Pay with' }, el('option', { value: '', text: 'Choose a currency' }), ...usable.map((c) => el('option', { value: c.symbol, text: `${c.symbol} (${c.statusLabel})` })));
+      const box = el('div', { id: 'estimate-box' });
+      const estBtn = el('button', { type: 'button', id: 'estimate-btn', text: 'Show what it will cost' });
+      convertPanel.append(el('label', { for: 'pay-currency', text: 'Pay with' }), sel, el('div', { class: 'row' }, estBtn, el('button', { type: 'button', class: 'secondary', id: 'convert-cancel', text: 'Cancel', onclick: () => finish(false) })), box);
+      estBtn.addEventListener('click', async () => {
+        clear(box);
+        if (!sel.value) { box.append(el('p', { class: 'problem', text: 'Choose a currency first.' })); return; }
+        estBtn.disabled = true;
+        const r = await api(`/checkout/${co.id}/estimate`, { body: { symbol: sel.value }, bearer: buyerToken });
+        estBtn.disabled = false;
+        if (!r.ok) { box.append(el('p', { class: 'problem', id: 'estimate-error', text: fail(r) })); return; }
+        const cv = r.conversion, k = r.checkout;
+        const expires = Date.parse(cv.quoteExpiresAt);
+        const exp = el('p', { class: 'muted', id: 'est-expiry' });
+        const tick = () => { const left = Math.max(0, Math.floor((expires - Date.now()) / 1000)); exp.textContent = left > 0 ? `This estimate is valid for ${Math.floor(left / 60)}m ${left % 60}s. A firm Textile quote is requested when you approve.` : 'This estimate has expired. Press "Show what it will cost" again.'; };
+        tick();
+        const timer = setInterval(tick, 1000);
+        const go = el('button', { type: 'button', id: 'convert-btn', text: `Approve: convert ${cv.sell.amount} ${cv.sell.symbol} to USDT with my wallet` });
+        clear(box);
+        box.append(el('table', { class: 'quote', id: 'estimate-table' },
+          el('tr', {}, el('th', { text: 'Seller-listed API price' }), el('td', { class: 'v', id: 'est-api', text: `${k.priceUsdt} USDT` })),
+          co.price.listed ? el('tr', {}, el('th', { text: "Seller's pricing currency" }), el('td', { class: 'v', text: `${co.price.listed.amount} ${co.price.listed.currency} (converted to USDT at 1 ${co.price.listed.currency} = ${co.price.listed.rate} USDT)` })) : null,
+          el('tr', {}, el('th', { text: 'Your wallet holds / top-up needed' }), el('td', { class: 'v', text: `${k.walletUsdt} USDT / ${k.topUpUsdt} USDT` })),
+          el('tr', {}, el('th', { text: `You will spend (this is more than the API price)` }), el('td', { class: 'v', id: 'est-sell', text: `${cv.sell.amount} ${cv.sell.symbol}` })),
+          el('tr', {}, el('th', { text: 'Smallest swap Textile allows' }), el('td', { class: 'v', id: 'est-min-swap', text: `${r.limits.minSell} ${cv.sell.symbol}` })),
+          el('tr', {}, el('th', { text: 'Rate' }), el('td', { class: 'v', text: cv.rate })),
+          el('tr', {}, el('th', { text: 'Conversion cost (Textile fee, included)' }), el('td', { class: 'v', id: 'est-fee', text: `${cv.conversionFee.amount} ${cv.conversionFee.symbol}` })),
+          el('tr', {}, el('th', { text: 'You receive in USDT' }), el('td', { class: 'v', id: 'est-receive', text: `about ${cv.receive.expected}, never less than ${cv.receive.minimum}` })),
+          el('tr', {}, el('th', { text: 'Then sent to Payrail' }), el('td', { class: 'v', text: `${k.topUpUsdt} USDT` })),
+          el('tr', {}, el('th', { text: 'Stays in your wallet as USDT' }), el('td', { class: 'v', id: 'est-left', text: `at least ${k.usdtLeftAtLeast} USDT (about ${k.usdtLeftExpected} USDT expected)` })),
+          el('tr', {}, el('th', { text: 'Seller / platform' }), el('td', { class: 'v', text: `The ${co.price.feePercent}% platform fee comes out of the seller's share, and only if the response qualifies.` })),
+          el('tr', {}, el('th', { text: 'Quote status' }), el('td', { class: 'v', id: 'est-quote-status', text: 'INDICATIVE only: not a firm quote and not a promise of liquidity.' }))),
+          el('p', { class: 'muted', id: 'est-why', text: 'Textile converts at least about 1 USD at a time, so the conversion is larger than the API costs. The USDT you do not spend stays in your own wallet. The swap is refused if it would give you less than the minimum shown.' }),
+          exp, el('div', { class: 'row' }, go));
+        go.addEventListener('click', async () => {
+          go.disabled = true;
+          const ok = await runConversion(co, cv);
+          clearInterval(timer);
+          if (ok) finish(true); else go.disabled = false;
+        });
+      });
+    });
+  }
+
+  async function runConversion(co, cv) {
+    const acct = await ensureWallet();
+    if (!acct) return false;
+    const sp = addStep('proof', 'Sign the Textile authorization in your wallet (a signature only: it moves nothing)');
+    const pr = await api('/buy/convert/proof', { body: {}, bearer: buyerToken });
+    if (!pr.ok) { sp.fail(fail(pr)); return false; }
+    let signature;
+    try { signature = await eth().request({ method: 'eth_signTypedData_v4', params: [acct, JSON.stringify(pr.typedData)] }); } catch (e) { sp.fail(`Signature declined: ${e.message || e}. Nothing was sent or converted.`); return false; }
+    sp.done('Authorization signed');
+    const sq = addStep('firm', "Getting Textile's firm price and checking it against what you were shown…");
+    const prep = await api('/buy/convert/prepare', { body: { conversionId: cv.id, nonce: pr.nonce, issuedAt: pr.issuedAt, signature }, bearer: buyerToken });
+    if (!prep.ok) { sq.fail(`${fail(prep)}. Nothing was converted.`); return false; }
+    const pd = prep.prepared;
+    if (pd.kind === 'no_quote') { sq.fail(`Textile has no firm price for this right now: ${pd.reason}. Nothing was converted.`); return false; }
+    if (pd.kind === 'rejected') { sq.fail(`The firm price was rejected by Payrail's checks (${pd.problems.slice(0, 2).join('; ')}). Nothing was converted.`); return false; }
+    sq.done(`Firm price accepted: you receive at least ${cv.receive.minimum} USDT`);
+    let swapHash = null;
+    for (const st of pd.steps) {
+      const sx = addStep(st.kind, st.kind === 'swap' ? `Confirm the conversion transaction in your wallet (${cv.sell.symbol} -> USDT)` : `Confirm the ${cv.sell.symbol} spending approval in your wallet`);
+      let hash;
+      try { hash = await eth().request({ method: 'eth_sendTransaction', params: [{ from: acct, to: st.to, data: st.data, value: '0x0' }] }); } catch (e) { sx.fail(`Transaction declined: ${e.message || e}. ${st.kind === 'swap' ? 'Nothing was converted.' : ''}`); return false; }
+      sx.done(`${st.kind === 'swap' ? 'Conversion' : 'Approval'} sent: ${String(hash).slice(0, 12)}…`);
+      await api('/buy/convert/tx', { body: { conversionId: cv.id, kind: st.kind === 'swap' ? 'swap' : 'approve', txHash: hash }, bearer: buyerToken });
+      if (st.kind === 'swap') swapHash = hash;
+    }
+    if (!swapHash) { addStep('swap', '').fail('No conversion transaction was produced.'); return false; }
+    const vs = addStep('verify', 'Verifying the conversion on-chain (nothing counts until the receipt proves it)…');
+    let last = null;
+    for (let i = 0; i < 60; i++) {
+      const r = await api(`/buy/convert/${cv.id}/recheck`, { body: {}, bearer: buyerToken });
+      if (r.ok) { last = r.conversion; if (['CONFIRMED', 'FAILED', 'REVIEW'].includes(last.state)) break; }
+      await sleep(window.__payrailPollMs || 3000);
+    }
+    if (!last || last.state !== 'CONFIRMED') {
+      vs.fail(last ? (last.state === 'FAILED' ? 'The conversion transaction failed on-chain. No currency was converted.' : last.state === 'REVIEW' ? `The conversion could not be confirmed (${last.failure || 'unexpected result'}). It is NOT treated as done.` : 'Still waiting for confirmation. It is NOT confirmed yet; press Pay again to re-check.') : 'Could not read the result yet. It is NOT confirmed.');
+      return false;
+    }
+    vs.done(`Conversion verified: ${last.receive.received} USDT arrived in your wallet`);
+    const at = await api(`/checkout/${co.id}/attach-conversion`, { body: { conversionId: cv.id }, bearer: buyerToken });
+    if (!at.ok) { addStep('attach', '').fail(fail(at)); return false; }
+    return true;
+  }
+
+  /** returns true when the Payrail balance covers the price and the request may run. The PRICE, BALANCE PLAN and TOP-UP are the server's. */
   async function payWithWallet() {
     clear(stepsBox);
+    checkout = null;
     const acct = await ensureWallet();
     if (!acct) return false;
     if (!(await ensureSignedIn(acct))) return false;
     const f = await api('/funding', { bearer: buyerToken });
     if (!f.ok || !f.enabled) { addStep('config', '').fail('Real-funds deposits are not enabled on this server.'); return false; }
     if (!(await ensureFundingWallet(acct, f))) return false;
-    const me = await api('/me', { bearer: buyerToken });
-    const avail = T().parseUnits6(me.live ? me.live.available : '0');
-    const price = T().parseUnits6(q.buyerPays.display);
-    const cap = T().parseUnits6(f.maxDeposit);
     const planSt = addStep('plan', 'Check your balance');
-    if (avail === null || price === null || cap === null) { planSt.fail('Could not read the balance or price.'); return false; }
-    const plan = T().planTopUp({ priceAtomic: price, availableAtomic: avail, maxDepositAtomic: cap });
-    if (plan.error) { planSt.fail(plan.error); return false; }
-    if (!plan.needed) { planSt.done(`Balance ${T().formatUnits6(avail)} USDT covers the price. No top-up needed.`); return true; }
-    planSt.done(`Balance ${T().formatUnits6(avail)} USDT; top-up of ${T().formatUnits6(plan.amountAtomic)} USDT needed`);
-    const send = addStep('send', `Send ${T().formatUnits6(plan.amountAtomic)} USDT from your wallet (confirm in your wallet)`);
+    const cs = await api('/checkout/start', { body: { listingId: l.id, input: checkInput(input.value, rules).value || {} }, bearer: buyerToken });
+    if (!cs.ok) { planSt.fail(`${fail(cs)}. Nothing was sent.`); return false; }
+    checkout = cs.checkout;
+    let p = checkout.plan;
+    // if the seller changed the price since this page loaded, say so before anything else
+    if (checkout.price.usdt !== q.buyerPays.display) { addStep('price', '').note(`The current price is ${checkout.price.usdt} USDT (the page showed ${q.buyerPays.display} USDT). The current price applies.`); }
+    if (p.next === 'blocked_over_limit') { planSt.fail(`This API needs a top-up of ${p.topUp} USDT, above the per-deposit limit of ${p.maxDeposit} USDT. Nothing was sent.`); return false; }
+    if (p.next === 'run') { planSt.done(`Balance ${p.ledgerAvailable} USDT covers the price. No top-up needed.`); return true; }
+    planSt.done(`Balance ${p.ledgerAvailable} USDT; top-up of ${p.topUp} USDT needed`);
+    if (p.walletShort !== null && p.walletShort !== '0') {
+      // the wallet cannot cover the top-up: offer a Textile conversion of a supported currency (never silently)
+      const converted = await chooseConversion(checkout);
+      if (!converted) { addStep('short', '').fail(`Your wallet holds ${p.walletUsdt} USDT, ${p.walletShort} USDT less than the ${p.topUp} USDT needed. Nothing was charged.`); return false; }
+      const again = await api(`/checkout/${checkout.id}`, { bearer: buyerToken });
+      if (!again.ok) { addStep('plan2', '').fail(fail(again)); return false; }
+      checkout = again.checkout;
+      p = checkout.plan;
+      if (p.walletShort !== '0' && p.walletShort !== null) { addStep('plan2', '').fail(`Your wallet still holds less than the ${p.topUp} USDT needed (${p.walletShort} USDT short). Nothing was charged.`); return false; }
+    }
+    const send = addStep('send', `Send ${p.topUp} USDT from your wallet (confirm in your wallet)`);
     let hash;
     try {
-      hash = await eth().request({ method: 'eth_sendTransaction', params: [{ from: acct, to: f.token, data: T().transferCalldata(f.depositAddress, plan.amountAtomic), value: '0x0' }] });
+      hash = await eth().request({ method: 'eth_sendTransaction', params: [{ from: acct, to: f.token, data: T().transferCalldata(f.depositAddress, BigInt(p.topUpAtomic)), value: '0x0' }] });
     } catch (e) { send.fail(`Transaction was not sent: ${String(e.message || e).replace(/\.$/, '')}. Nothing was charged.`); return false; }
-    store.set('payrail.topup', JSON.stringify({ hash, at: Date.now() }));
+    store.set('payrail.topup', JSON.stringify({ hash, at: Date.now(), checkout: checkout.id }));
     send.done(`Transfer sent (${String(hash).slice(0, 10)}…)`);
     const conf = addStep('confirm', 'Waiting for on-chain confirmations');
     if (!(await awaitCredit(hash, conf))) return false;
     // credit exactly what was verified on-chain; if that is less than the price, stop instead of running the request
-    const me2 = await api('/me', { bearer: buyerToken });
-    const now = T().parseUnits6(me2.live ? me2.live.available : '0');
-    if (now === null || now < price) {
-      conf.fail(`Verified and credited ${T().formatUnits6(now === null ? 0n : now)} USDT, which is less than the price (${T().formatUnits6(price)} USDT). The API was not run and nothing was charged. Top up again to continue.`);
+    const cur2 = await api(`/checkout/${checkout.id}`, { bearer: buyerToken });
+    const now = cur2.ok ? BigInt(cur2.checkout.plan.ledgerAvailableAtomic) : null;
+    if (now === null || now < BigInt(checkout.price.atomic)) {
+      conf.fail(`Verified and credited ${T().formatUnits6(now === null ? 0n : now)} USDT, which is less than the price (${checkout.price.usdt} USDT). The API was not run and nothing was charged. Top up again to continue.`);
       return false;
     }
     conf.done('Verified on-chain and credited');
@@ -338,7 +463,15 @@ function render(d, cfg) {
 
   async function runRequest(inputValue) {
     msg.textContent = 'Running…';
-    const r0 = await api('/execute', { body: { listingId: l.id, input: inputValue, idempotencyKey: newKey() }, bearer: buyerToken });
+    let r0;
+    if (checkout && !devApi) {
+      // the server re-checks the listing price and the verified balance, then runs the request ONCE for this checkout
+      const e = await api(`/checkout/${checkout.id}/execute`, { body: {}, bearer: buyerToken });
+      if (e.ok && !e.result) { r0 = { ok: false, code: 'RECONCILING', message: `The purchase is ${e.checkout.state}. Nothing more was run or charged. ${e.checkout.note || 'Open the receipt below.'}` }; }
+      else r0 = e.ok ? { ok: true, result: e.result } : e;
+    } else {
+      r0 = await api('/execute', { body: { listingId: l.id, input: inputValue, idempotencyKey: newKey() }, bearer: buyerToken });
+    }
     msg.textContent = '';
     clear(out);
     if (!r0.ok) { out.append(el('div', { class: 'problem', text: fail(r0) })); refreshBalance(); return; }
@@ -355,6 +488,22 @@ function render(d, cfg) {
     out.append(rec);
     out.append(el('p', { class: 'notice', text: 'Qualified means the response matched the agreed structure, types and freshness. It does not prove the data is true.' }));
     await showReceipt(rec, r.executionId);
+    if (checkout && !devApi) {
+      // the purchase record ties the authoritative price, the funding transactions and the settlement together
+      const cd = await api(`/checkout/${checkout.id}`, { bearer: buyerToken });
+      if (cd.ok) {
+        const c = cd.checkout;
+        rec.append(el('h4', { text: 'Purchase record' }), table([
+          ['Checkout', c.id], ['Status', `${c.state}${c.paid ? ' (payment captured in the ledger)' : ' (nothing captured)'}`],
+          ['Authoritative price (read by the server)', `${c.price.usdt} USDT`],
+          ...(c.price.listed ? [["Seller's pricing currency", `${c.price.listed.amount} ${c.price.listed.currency} (rate 1 ${c.price.listed.currency} = ${c.price.listed.rate} USDT, quoted ${String(c.price.listed.quotedAt).replace('T', ' ').slice(0, 19)} UTC)`]] : []),
+          ['Seller', c.listing.seller],
+          ...(c.conversion ? [['Currency conversion (Textile)', `sold ${c.conversion.sell.amount} ${c.conversion.sell.symbol}, received ${c.conversion.receive.received} USDT; tx ${c.conversion.swapTx}`]] : []),
+          ...c.depositTxs.map((h, i) => [`USDT top-up transaction${c.depositTxs.length > 1 ? ` ${i + 1}` : ''}`, h]),
+          ['Platform fee', r.charged ? `${(Number(r.feeAtomic) / 1e6).toString()} USDT, booked in the Payrail ledger from the seller's share (the USDT is held at the Payrail deposit address; paying it out is a separate operator step)` : 'none: nothing was charged'],
+        ]));
+      }
+    }
     refreshBalance();
   }
 
