@@ -16,17 +16,19 @@ const until = async (fn, ms = 15000) => { const t0 = Date.now(); while (Date.now
 // a page-load hook so the route request can be controlled per test (mode kept in sessionStorage; 'real' = untouched)
 await b.send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
   const real = window.fetch.bind(window);
-  const FIX = { ok: true, enabled: true, checkedAt: '2026-10-21T12:00:00.000Z', officialList: { symbols: ['cNGN','USDC','wARS','wBRL','IDRX'], source: 'official-page' }, currencies: [
-    { symbol: 'cNGN', status: 'live', statusLabel: 'Live', minSell: '1360', minUsdt: '0.998', reason: null, statusDetail: 'live' },
-    { symbol: 'wBRL', status: 'live', statusLabel: 'Live', minSell: '5.03', minUsdt: '0.9995', reason: null, statusDetail: 'live' },
-    { symbol: 'USDC', status: 'temporarily_unavailable', statusLabel: 'Temporarily unavailable', minSell: null, minUsdt: null, reason: 'Textile has no market makers online for USDC -> USDT right now.', statusDetail: '' },
-    { symbol: 'USAT', status: 'unsupported', statusLabel: 'Unsupported', minSell: null, minUsdt: null, reason: 'not in the official Textile list', statusDetail: '' },
-  ] };
+  const live = (symbol, extra = {}) => ({ symbol, status: 'live', statusLabel: 'Live', reason: null, statusDetail: 'live', thinLiquidity: false, liquidityNote: null, ...extra });
+  const OFFICIAL = ['cNGN', 'wARS', 'wBRL', 'USDC', 'IDRX'];
+  const LANDING = [live('cNGN'), live('wARS'), live('wBRL'), live('USDC', { thinLiquidity: true, liquidityNote: 'Thin liquidity: only about 1.12 USDT can be converted at once right now, so a large amount may not fill.' }), live('IDRX')];
+  const NOT_OFFICIAL = ['USAT', 'wCOP', 'WETH', 'wMXN', 'CELO', 'G$'].map((symbol) => ({ symbol, status: 'unsupported', statusLabel: 'Unsupported', reason: 'not in the official Textile list', statusDetail: '' }));
+  const FIX = { ok: true, enabled: true, checkedAt: '2026-10-21T12:00:00.000Z', officialList: { symbols: OFFICIAL, source: 'official-page' }, landing: LANDING, currencies: [...LANDING, ...NOT_OFFICIAL] };
+  const FIX_DOWN = { ...FIX, landing: LANDING.map((c) => (c.symbol === 'USDC' ? { ...c, status: 'temporarily_unavailable', statusLabel: 'Temporarily unavailable', reason: 'Textile has no market makers online for USDC -> USDT right now.', thinLiquidity: false } : c)) };
   window.fetch = (u, i) => {
     const mode = sessionStorage.getItem('routes-mode') || 'real';
     if (String(u).includes('/api/market/buy/currencies') && mode !== 'real') {
       const json = (o, status = 200) => Promise.resolve(new Response(JSON.stringify(o), { status, headers: { 'content-type': 'application/json' } }));
       if (mode === 'fixture') return json(FIX);
+      if (mode === 'usdcdown') return json(FIX_DOWN);
+      if (mode === 'legacy') { const { landing, ...old } = FIX; return json(old); }
       if (mode === 'empty') return json({ ok: true, enabled: true, currencies: [] });
       if (mode === 'disabled') return json({ ok: true, enabled: false, currencies: [], note: 'Paying with another currency is not enabled on this server. Only USDT on Celo can be used.' });
       if (mode === 'servererror') return json({ ok: true, enabled: true, error: 'The route status could not be read just now (Textile unreachable).', currencies: [] });
@@ -46,22 +48,37 @@ const cards = () => b.ev(`JSON.stringify([...document.querySelectorAll('#asset-c
 await mode('real');
 await until(async () => (await state()) === 'ready');
 let cs = await cards();
-check('real response: the section is visible with every currency the server knows (nothing hidden)', (await state()) === 'ready' && ['cNGN', 'wARS', 'wBRL', 'USDC', 'IDRX'].every((x) => cs.some((c) => c.sym === x)) && cs.some((c) => c.sym === 'USAT'), cs.map((c) => `${c.sym}:${c.status}`).join(' '));
-check('real response: unsupported currencies (USAT, CELO, G$...) are shown as Unsupported with a reason; simulated routes are labelled Simulated, never Live', cs.filter((c) => ['USAT', 'wCOP', 'WETH', 'wMXN', 'CELO'].includes(c.sym)).every((c) => c.status === 'unsupported' && /Unsupported/.test(c.text)) && cs.filter((c) => ['cNGN', 'wARS', 'wBRL', 'USDC', 'IDRX'].includes(c.sym)).every((c) => c.status === 'simulated' && /Simulated/.test(c.text)) && !cs.some((c) => c.status === 'live'), cs.map((c) => `${c.sym}:${c.status}`).join(' '));
-check('real response: a usable currency shows only its status line (no swap, test or verification wording)', cs.filter((c) => c.status === 'simulated').every((c) => c.text === `${c.sym} Simulated`), cs.find((c) => c.status === 'simulated')?.text);
-check('real response: the page says it was checked live and names the official list', /Checked live at \d{4}-/.test(await b.text('#routes-meta')), await b.text('#routes-meta'));
+const FIVE = ['cNGN', 'wARS', 'wBRL', 'USDC', 'IDRX'];
+const NOT_FIVE = ['USAT', 'wCOP', 'WETH', 'wMXN', 'CELO', 'G$'];
+check('real response: exactly the five official currencies are shown (plus the USDT settlement card)', cs.filter((c) => c.sym !== 'USDT').map((c) => c.sym).sort().join() === [...FIVE].sort().join(), cs.map((c) => `${c.sym}:${c.status}`).join(' '));
+check('real response: no unsupported currency appears in the section', !cs.some((c) => NOT_FIVE.includes(c.sym)) && !(await b.ev(`!!document.querySelector('#asset-cards .routes-group')`)), cs.map((c) => c.sym).join(' '));
+check('real response: each of the five shows its status (SIMULATED here because this harness runs a simulated Textile; LIVE in production)', FIVE.every((x) => new RegExp(`^${x} SIMULATED`).test(cs.find((c) => c.sym === x).text)), cs.map((c) => c.text).join(' | '));
+check('real response: the page says it was checked live', /Textile's official Celo corridors, checked live at \d{4}-/.test(await b.text('#routes-meta')), await b.text('#routes-meta'));
 await b.shot('landing-routes-real');
 
-// ---- a response with every status: grouping, badges, min swap, reasons
+// ---- success with the production labels: LIVE under each of the five, USDC marked thin, nothing else
 await mode('fixture');
 await until(async () => (await state()) === 'ready');
 cs = await cards();
-const groups = await b.ev(`JSON.stringify([...document.querySelectorAll('#asset-cards .routes-group')].map(g => g.dataset.group + ':' + g.textContent))`).then(JSON.parse);
-check('success: Live, Temporarily unavailable and Unsupported are separate, labelled groups', groups.join('|') === 'live:Live (2)|temporarily_unavailable:Temporarily unavailable (1)|unsupported:Unsupported (1)', groups.join('|'));
-check('success: a Live card says only Live; temporary and unsupported cards say why', cs.find((c) => c.sym === 'cNGN').text === 'cNGN Live' && cs.find((c) => c.sym === 'wBRL').text === 'wBRL Live' && /no market makers online/.test(cs.find((c) => c.sym === 'USDC').text) && /not in the official Textile list/.test(cs.find((c) => c.sym === 'USAT').text) && !/test|verif|Smallest swap/i.test(cs.filter((c) => c.status === 'live').map((c) => c.text).join(' ')));
-check('success: a route is only Live when the server says Live (USDC stays Temporarily unavailable here)', cs.find((c) => c.sym === 'USDC').status === 'temporarily_unavailable' && cs.filter((c) => c.status === 'live').map((c) => c.sym).join() === 'cNGN,wBRL');
-check('success: USDT is always shown as the settlement currency', cs.some((c) => c.sym === 'USDT' && /Settlement currency/.test(c.text)));
+check('success: the five currencies are shown and nothing else (no unsupported currency, no group headings)', cs.filter((c) => c.sym !== 'USDT').map((c) => c.sym).join() === FIVE.join() && !cs.some((c) => NOT_FIVE.includes(c.sym)) && !(await b.ev(`!!document.querySelector('#asset-cards .routes-group')`)), cs.map((c) => c.sym).join(' '));
+check('success: LIVE is shown underneath each of the five', FIVE.every((x) => /^\S+ LIVE/.test(cs.find((c) => c.sym === x).text) && cs.find((c) => c.sym === x).status === 'live'), cs.map((c) => c.text).join(' | '));
+check('success: USDC is still LIVE and is clearly marked as thin liquidity; the others carry no such note', /^USDC LIVE Thin liquidity: only about 1\.12 USDT/.test(cs.find((c) => c.sym === 'USDC').text) && FIVE.filter((x) => x !== 'USDC').every((x) => cs.find((c) => c.sym === x).text === `${x} LIVE`), cs.find((c) => c.sym === 'USDC').text);
+check('success: USDT is shown as the settlement currency', cs.some((c) => c.sym === 'USDT' && /Settlement currency/.test(c.text)));
+const vis = await b.ev(`(() => { const s = document.getElementById('currencies'); const r = s.getBoundingClientRect(); const cards = [...s.querySelectorAll('.asset')].map((c) => c.getBoundingClientRect()); return JSON.stringify({ sectionVisible: r.height > 100 && getComputedStyle(s).display !== 'none', cardsVisible: cards.every((c) => c.width > 100 && c.height > 30), live: getComputedStyle(s.querySelector('.badge-line.live')).backgroundColor }); })()`).then(JSON.parse);
+check('success: the section is visible and styled (LIVE badge has its green background)', vis.sectionVisible && vis.cardsVisible && vis.live !== 'rgba(0, 0, 0, 0)' && vis.live !== 'rgb(238, 242, 246)', JSON.stringify(vis));
 await b.shot('landing-routes-fixture');
+
+// ---- honesty: a currency that is NOT live right now is never labelled LIVE
+await mode('usdcdown');
+await until(async () => (await state()) === 'ready');
+cs = await cards();
+check('honest: when USDC has no market makers it says so (TEMPORARILY UNAVAILABLE with the reason), the other four stay LIVE', /^USDC TEMPORARILY UNAVAILABLE/.test(cs.find((c) => c.sym === 'USDC').text) && !/LIVE/.test(cs.find((c) => c.sym === 'USDC').text) && /no market makers/.test(cs.find((c) => c.sym === 'USDC').text) && ['cNGN', 'wARS', 'wBRL', 'IDRX'].every((x) => /LIVE/.test(cs.find((c) => c.sym === x).text)), cs.find((c) => c.sym === 'USDC').text);
+
+// ---- an older server that sends no `landing` list: the page still shows only the official five
+await mode('legacy');
+await until(async () => (await state()) === 'ready');
+cs = await cards();
+check('fallback: without a landing list the page filters to the official five itself; unsupported currencies stay out', cs.filter((c) => c.sym !== 'USDT').map((c) => c.sym).sort().join() === [...FIVE].sort().join() && !cs.some((c) => NOT_FIVE.includes(c.sym)), cs.map((c) => c.sym).join(' '));
 
 // ---- the other states are explicit, never an empty hole
 await mode('empty');

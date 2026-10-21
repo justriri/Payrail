@@ -283,3 +283,12 @@ label.check input { margin-top: 4px; }
 /* the landing page does not load style.css (the border-box reset), so .wrap (width:100% plus 24px padding each side) was wider than any screen
    narrower than 1168px: every landing section overflowed by the padding. Below that width .wrap now includes its padding. Wider screens are unchanged. */
 @media (max-width: 1168px) { .wrap { box-sizing: border-box; } }
+
+/* landing: supported currencies */
+.assets .asset { display: flex; flex-direction: column; gap: 2px; padding: 14px 16px; }
+.assets .asset b { font-size: 17px; }
+.assets .asset .badge-line { align-self: flex-start; margin-top: 6px; padding: 2px 10px; border-radius: 999px; font-size: 12px; letter-spacing: .08em; background: #eef2f6; color: var(--ink-2); }
+.assets .asset .badge-line.live { background: #d1fadf; color: #05603a; }
+.assets .asset .badge-line.temporarily_unavailable { background: #fef0c7; color: #93370d; }
+.assets .asset .badge-line.unsupported { background: #f2f4f7; color: var(--muted); }
+.assets .asset .thin-note { margin-top: 6px; color: #93370d; font-size: 12.5px; line-height: 1.35; }

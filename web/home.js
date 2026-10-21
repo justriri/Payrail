@@ -52,25 +52,19 @@
   function render(d) {
     box.dataset.state = 'ready';
     box.replaceChildren(card('USDT', 'settlement', txt('small', '', 'Settlement currency: Buy is paid in USDT on Celo')));
-    const groups = new Map(ORDER.map((k) => [k, []]));
-    for (const c of d.currencies) (groups.get(c.status) || groups.get('unsupported')).push(c);
-    for (const k of ORDER) {
-      const list = groups.get(k).sort((a, b) => a.symbol.localeCompare(b.symbol));
-      if (!list.length) continue;
-      const h = txt('h3', `routes-group ${k}`, `${GROUP_TITLE[k]} (${list.length})`);
-      h.dataset.group = k;
-      box.append(h);
-      for (const c of list) {
-        const lines = [txt('small', `badge-line ${c.status}`, BADGE[c.status] || c.statusLabel)];
-        // a Live currency shows just "Live": no test or verification wording, no extra detail. Only a currency that cannot be used says why.
-        if (c.status !== 'live' && c.status !== 'simulated') lines.push(txt('small', 'reason', short(c.reason || c.statusDetail)));
-        box.append(card(c.symbol, c.status, ...lines));
-      }
+    // ONLY the currencies on Textile's official Celo list, in its order (the server decides which; if an older server sends no such list, filter here)
+    const official = d.officialList && Array.isArray(d.officialList.symbols) ? d.officialList.symbols : null;
+    const list = Array.isArray(d.landing) ? d.landing : d.currencies.filter((c) => !official || official.includes(c.symbol));
+    for (const c of list) {
+      const live = c.status === 'live' || c.status === 'simulated';
+      const lines = [txt('small', `badge-line ${c.status}`, live ? (c.status === 'live' ? 'LIVE' : 'SIMULATED') : String(c.statusLabel || c.status).toUpperCase())];
+      if (live && c.thinLiquidity) lines.push(txt('small', 'thin-note', c.liquidityNote || 'Thin liquidity: a large amount may not fill.'));
+      if (!live) lines.push(txt('small', 'reason', short(c.reason || c.statusDetail)));
+      box.append(card(c.symbol, c.status, ...lines));
     }
     if (meta) {
       const when = d.checkedAt ? String(d.checkedAt).replace('T', ' ').slice(0, 19) : '';
-      const off = d.officialList && Array.isArray(d.officialList.symbols) ? ` Textile's official Celo list: ${d.officialList.symbols.join(', ')} (${d.officialList.source}).` : '';
-      meta.textContent = `Checked live${when ? ` at ${when} UTC` : ''}.${off}`;
+      meta.textContent = `Textile's official Celo corridors, checked live${when ? ` at ${when} UTC` : ''}.`;
     }
   }
 
@@ -88,7 +82,7 @@
       if (!d.ok) { note('error', 'Route status could not be loaded', short(d.message || 'The server refused the request.'), true); return; }
       if (!d.enabled) { note('disabled', 'Other currencies are not switched on', d.note || 'Paying with another currency is not enabled on this server. Only USDT works.', false); return; }
       if (d.error) { note('error', 'Route status could not be read just now', short(d.error), true); return; }
-      if (!Array.isArray(d.currencies) || d.currencies.length === 0) { note('empty', 'No currencies to show', 'The server returned no currency routes. Nothing is shown as supported.', true); return; }
+      if (!Array.isArray(d.currencies) || d.currencies.length === 0 || (Array.isArray(d.landing) && d.landing.length === 0)) { note('empty', 'No currencies to show', 'The server returned no currency routes. Nothing is shown as supported.', true); return; }
       render(d);
       timer = setTimeout(load, 60000); // refresh by itself: a route can become Live or drop out at any time
     } catch (e) {

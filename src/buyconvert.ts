@@ -226,6 +226,8 @@ export function createBuyConvert(d: BuyConvertDeps) {
         minSell: selectable ? formatUnits(r.minInputAtomic, r.from.decimals) : null,
         maxSell: selectable ? formatUnits(r.maxInputAtomic, r.from.decimals) : null,
         minUsdt,
+        /** about how much USDT worth Textile can convert right now (the price at the smallest swap, scaled to the ladder's depth); null when unknown */
+        depthUsdt: selectable && minUsdt !== null && r.minInputAtomic > 0n ? Math.round((Number(formatUnits(r.maxInputAtomic, r.from.decimals)) * Number(minUsdt)) / Number(formatUnits(r.minInputAtomic, r.from.decimals)) * 100) / 100 : null,
         route: `${r.from.symbol} -> USDT on Textile (Celo)`,
         /** the general Textile integration label, SEPARATE from the verification status above: true only when a real (non-simulated) Textile ladder shows makers right now */
         textileLive: on && r.available && !d.provider.simulated,
@@ -237,6 +239,30 @@ export function createBuyConvert(d: BuyConvertDeps) {
       };
     }));
   }
+  /** below this much USDT of depth a route is called thin: a purchase through it may not fill */
+  const THIN_DEPTH_USDT = 1000;
+  /**
+   * The currencies the landing page shows: exactly the ones on Textile's OFFICIAL Celo list (that Payrail has a token for), in the official order,
+   * with their real status. Currencies Textile quotes but does not list officially are not part of this list at all.
+   */
+  async function landing() {
+    const o = d.officialCorridors ? await d.officialCorridors() : { symbols: DOCUMENTED_ON_CELO, addresses: new Set<string>() };
+    const all = await currencies();
+    const out = [];
+    for (const sym of o.symbols) {
+      const c = all.find((x) => x.symbol === sym);
+      if (!c) continue;
+      const thin = c.status === 'live' && c.depthUsdt !== null && c.depthUsdt < THIN_DEPTH_USDT;
+      out.push({
+        symbol: c.symbol, status: c.status, statusLabel: c.statusLabel, reason: c.available ? null : c.reason,
+        thinLiquidity: thin,
+        liquidityNote: thin ? `Thin liquidity: only about ${c.depthUsdt} USDT can be converted at once right now, so a large amount may not fill.` : null,
+        minSell: c.minSell, minUsdt: c.minUsdt, depthUsdt: c.depthUsdt,
+      });
+    }
+    return out;
+  }
+
   async function currencies() {
     if (cache && now() - cache.at < cache.ttl) return cache.value;
     const value = await buildCurrencies();
@@ -427,6 +453,7 @@ export function createBuyConvert(d: BuyConvertDeps) {
   }
 
   return {
+    landing,
     official: async () => { const o = d.officialCorridors ? await d.officialCorridors() : undefined; return o ? { symbols: [...o.symbols], source: o.source, fetchedAt: o.fetchedAt } : { symbols: [...DOCUMENTED_ON_CELO].filter((x) => x !== 'USDT'), source: 'built-in-snapshot', fetchedAt: null }; },
     normalizePrice, pricingCurrencies,
     currencies, estimate, prepare, recordTx, verify,

@@ -597,6 +597,8 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
         settlement: { symbol: 'USDT', note: 'Buy AI is paid in USDT on Celo. Textile Protocol converts your currency into USDT in your own wallet first; it does not pay Buy.' },
         conversionLimit: rt.buyConvert.config().maxUsdt,
         officialList: await rt.buyConvert.official(),
+        // the landing page shows ONLY the official Textile corridors, in the official order, with their real status
+        landing: await rt.buyConvert.landing(),
         currencies: list,
       });
     }

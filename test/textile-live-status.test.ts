@@ -327,3 +327,46 @@ test('an explicit operator opt-out (PAYRAIL_BUY_CONVERT_DISABLED) still switches
   assert.equal(w.status, 'unsupported');
   assert.equal(w.available, false);
 });
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// The landing list: only Textile's OFFICIAL Celo corridors, in official order, with their real status; USDC's thin depth is flagged without changing LIVE.
+test('landing(): exactly the official corridors, none of the quoted-but-unofficial currencies; all LIVE when Textile quotes them', async () => {
+  const t = textile();
+  t.state.pairs = [pair('cNGN', { min: 1_360_000_000n }), pair('wARS', { min: 1_600n * 10n ** 18n }), pair('wBRL', { min: 5n * 10n ** 18n }), pair('USDC', { min: 998_881n }), pair('IDRX', { min: 1_790_000n }),
+    pair('wCOP', { min: 3_100n * 10n ** 18n })]; // quoted by Textile but not official
+  const bc = convert(t, { officialCorridors: official(['cNGN', 'wARS', 'wBRL', 'USDC', 'IDRX'], Object.values(A)) });
+  const l = await bc.landing();
+  assert.deepEqual(l.map((c) => c.symbol), ['cNGN', 'wARS', 'wBRL', 'USDC', 'IDRX'], 'official order, five currencies, no wCOP');
+  assert.ok(l.every((c) => c.status === 'live' && c.statusLabel === 'Live'));
+  assert.ok(!l.some((c) => ['USAT', 'wCOP', 'WETH', 'wMXN', 'CELO', 'G$', 'USDT'].includes(c.symbol)));
+});
+
+const deep = (sym: keyof typeof A, min: bigint): Pair => ({ ...pair(sym, { min }), levels: [{ sellAmount: min, buyAmount: 999_000n }, { sellAmount: min * 100_000n, buyAmount: 99_900_000_000n }], maxSellAmount: min * 100_000n });
+test('landing(): USDC with thin depth stays LIVE and carries a thin-liquidity note; deep routes carry none', async () => {
+  const t = textile();
+  // USDC ladder: smallest swap ~1 USDC, deepest level only 1.12 USDC; the others are deep
+  t.state.pairs = [
+    { ...pair('USDC', { min: 998_881n }), maxSellAmount: 1_125_000n, levels: [{ sellAmount: 998_881n, buyAmount: 998_000n }, { sellAmount: 1_125_000n, buyAmount: 1_123_000n }] },
+    deep('cNGN', 1_360_000_000n), deep('wARS', 1_600n * 10n ** 18n), deep('wBRL', 5n * 10n ** 18n), deep('IDRX', 1_790_000n),
+  ];
+  const bc = convert(t);
+  const l = await bc.landing();
+  const usdc = l.find((c) => c.symbol === 'USDC')!;
+  assert.equal(usdc.status, 'live');
+  assert.equal(usdc.statusLabel, 'Live');
+  assert.equal(usdc.thinLiquidity, true);
+  assert.match(usdc.liquidityNote!, /Thin liquidity: only about 1\.\d+ USDT/);
+  for (const c of l.filter((x) => x.symbol !== 'USDC')) { assert.equal(c.thinLiquidity, false, c.symbol); assert.equal(c.liquidityNote, null); }
+});
+
+test('landing(): a currency that is not live is never reported LIVE, and it stays in the list with its real status', async () => {
+  const t = textile();
+  t.state.pairs = [pair('cNGN', { min: 1_360_000_000n }), pair('USDC', { levels: false, min: 998_881n })];
+  t.state.preview.set(A.USDC.toLowerCase(), 'no_makers_online');
+  const l = await convert(t).landing();
+  const usdc = l.find((c) => c.symbol === 'USDC')!;
+  assert.equal(usdc.status, 'temporarily_unavailable');
+  assert.equal(usdc.thinLiquidity, false);
+  assert.match(usdc.reason!, /no market makers/);
+  assert.equal(l.find((c) => c.symbol === 'cNGN')!.status, 'live');
+});
