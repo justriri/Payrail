@@ -63,7 +63,7 @@ test('real-funds mode refuses to start when anything is missing, unsafe or on th
   await refuses({ readChainId: async () => { throw new Error('connection refused'); } }, /could not read the chain id/);
 });
 
-test('the production runtime is real-funds only: no demo, sandbox, simulation, testnet escrow, conversion or payouts unless explicitly enabled', async () => {
+test('the production runtime is real-funds only: no demo, sandbox, simulation, testnet escrow, conversion unless explicitly enabled; seller payouts are requestable but sent only by an operator', async () => {
   const d = deps();
   const rt = (await setupMarket(d))!;
   assert.ok(rt.live);
@@ -72,10 +72,10 @@ test('the production runtime is real-funds only: no demo, sandbox, simulation, t
   assert.equal(rt.live.funding.depositAddress, DEP);
   assert.equal(rt.live.funding.maxDepositAtomic, 1_000_000n);
   assert.equal(rt.live.funding.minConfirmations, 20);
-  assert.equal(rt.live.payoutRequestsEnabled, false, 'payout requests are off');
+  assert.equal(rt.live.payoutRequestsEnabled, true, 'sellers can request payouts; an operator approves and sends them');
   for (const k of ['dev', 'sandbox', 'escrow', 'funding', 'conversion', 'buySimulated']) assert.equal((rt as unknown as Record<string, unknown>)[k], undefined, `${k} is not set`);
   assert.deepEqual(rt.domain, {}, 'real DNS and well-known checks, no sandbox resolver');
-  assert.match(d.logs.join('\n'), /REAL-FUNDS MARKETPLACE: USDT on Celo mainnet.*Seller payouts: DISABLED.*Conversion: DISABLED/);
+  assert.match(d.logs.join('\n'), /REAL-FUNDS MARKETPLACE: USDT on Celo mainnet.*Seller payouts: .*Conversion: DISABLED/);
 
   // through the real router
   const cfg = (await call(rt, 'GET', '/config')).body as any;
@@ -84,7 +84,7 @@ test('the production runtime is real-funds only: no demo, sandbox, simulation, t
   assert.equal(cfg.network.chainId, 42220);
   assert.equal(cfg.network.token.symbol, 'USDT');
   assert.equal(cfg.features.conversion, false);
-  assert.equal(cfg.features.payouts, false);
+  assert.equal(cfg.features.payouts, true);
   assert.equal(((await call(rt, 'POST', '/buyer')).body as any).code, 'NOT_AVAILABLE');
   assert.equal(((await call(rt, 'POST', '/credits', { amount: '1' }, 'x')).body as any).code, 'NOT_AVAILABLE');
   assert.equal(((await call(rt, 'POST', '/seller/sandbox/login')).body as any).code, 'SANDBOX_DISABLED');
@@ -112,7 +112,7 @@ test('buyer-signed conversion is switched on only by its own flag, and is never 
   assert.equal(rt.conversion.depositAddress, DEP);
   assert.match(d.logs.join('\n'), /never run on mainnet yet/);
   assert.equal(((await call(rt, 'GET', '/config')).body as any).features.conversion, true);
-  assert.equal(rt.live?.payoutRequestsEnabled, false, 'enabling conversion does not enable payouts');
+  assert.equal(rt.live?.payoutRequestsEnabled, true, 'payout requests are on whether or not conversion is');
 });
 
 // the databases stay open until the process exits (Windows cannot delete open files): remove them best-effort

@@ -23,6 +23,8 @@ import { EXPECTED_PAY_TO } from './buy.ts';
 import { createBuyPay } from './buypay.ts';
 import { createBuyConvert } from './buyconvert.ts';
 import { createCheckout } from './checkout.ts';
+import { createOfficialCorridors } from './textiledocs.ts';
+import type { OfficialCorridors } from './textiledocs.ts';
 import type { SpendingPolicy } from './policy.ts';
 import type { VerifyDeps } from './verify.ts';
 import { isAddress } from 'viem';
@@ -51,6 +53,8 @@ export interface SetupDeps {
   buyPolicy?: SpendingPolicy;
   /** tests only: the fetch used for the gateway (production leaves it undefined = the global fetch) */
   buyFetch?: typeof fetch;
+  /** Textile's official Celo corridor list; production leaves this undefined and it is read from Textile's address book */
+  officialCorridors?: () => Promise<OfficialCorridors>;
   /** tests only: replace the live Textile provider and the buyer-signed swap runtime used for PAYRAIL_BUY_CONVERSION */
   buyConvertOverride?: { provider: ConversionProvider; buyerSwap: BuyerSwapRuntime };
   /** tests only: do not wait between settlement checks */
@@ -91,11 +95,13 @@ export async function setupMarket(d: SetupDeps): Promise<MarketRuntime | undefin
   const vaultKey = masterKeyFrom(env.PAYRAIL_VAULT_KEY_ID ?? 'k1', env.PAYRAIL_VAULT_KEY);
   const reader = d.makeReader();
   const cap = BigInt(Math.round(capUsd * 1_000_000));
+  const payoutSource = env.PAYRAIL_PAYOUT_SOURCE && /^0x[0-9a-fA-F]{40}$/.test(env.PAYRAIL_PAYOUT_SOURCE) ? env.PAYRAIL_PAYOUT_SOURCE : undefined;
   const live: NonNullable<MarketRuntime['live']> = {
     funding: { chainId: 42220, token: usdt.address, asset: 'USDT', depositAddress, minConfirmations: confirmations, maxDepositAtomic: cap, reader },
     payout: { payableAssets: ['USDT'], minAtomic: 1_000_000n, maxAtomic: cap },
-    // seller payouts stay refused over HTTP until the secure payout architecture is built and reviewed
-    payoutRequestsEnabled: false,
+    // sellers may REQUEST payouts: a request only reserves their earnings. Nothing is sent by this server; an operator approves and sends (scripts/payouts.ts)
+    payoutRequestsEnabled: true,
+    ...(payoutSource ? { payoutVerify: { reader, token: usdt.address, sourceAddress: payoutSource, minConfirmations: confirmations } } : {}),
   };
   try {
     assertProductionDatabase(dbPath); // read-only checks; a development or test-credit database is refused before anything is written
@@ -169,6 +175,7 @@ export async function setupMarket(d: SetupDeps): Promise<MarketRuntime | undefin
       db, registry: new RouteRegistry(db, [textile]), provider: textile,
       buyerSwap: d.buyConvertOverride?.buyerSwap ?? createBuyerSwapRuntime({ firmQuote, getAllowance: d.readAllowance, provider: textile, chainId: 42220, tag: d.attributionTag }),
       reader, usdt: usdt.address, reactor: TEXTILE_REACTOR, chainId: 42220, minConfirmations: confirmations, maxUsdtAtomic: BigInt(Math.round(maxUsd * 1_000_000)),
+      officialCorridors: d.officialCorridors ?? createOfficialCorridors(),
       allowUndocumented: new Set((env.PAYRAIL_BUY_CONVERT_UNDOCUMENTED ?? '').split(',').map((x) => x.trim()).filter(Boolean)),
       ...(d.readTokenBalance ? { tokenBalance: d.readTokenBalance } : {}), ...(d.readNativeBalance ? { nativeBalance: d.readNativeBalance } : {}),
     });
@@ -197,7 +204,7 @@ export async function setupMarket(d: SetupDeps): Promise<MarketRuntime | undefin
     ...(buyConvert ? { buyConvert } : {}),
     ...(conversion ? { conversion } : {}),
   };
-  d.log(`REAL-FUNDS MARKETPLACE: USDT on Celo mainnet. Deposits to ${depositAddress} are credited after ${confirmations} confirmations (cap ${cap / 1_000_000n} USDT each). Seller payouts: DISABLED. Conversion: ${conversion ? 'buyer-signed (unverified on mainnet)' : 'DISABLED'}. Database: ${dbPath}.`);
+  d.log(`REAL-FUNDS MARKETPLACE: USDT on Celo mainnet. Deposits to ${depositAddress} are credited after ${confirmations} confirmations (cap ${cap / 1_000_000n} USDT each). Seller payouts: requests ON, each one is approved and sent by an operator (${payoutSource ? 'confirmed on-chain automatically, read-only' : 'set PAYRAIL_PAYOUT_SOURCE to confirm them automatically'}). Conversion: ${conversion ? 'buyer-signed (unverified on mainnet)' : 'DISABLED'}. Database: ${dbPath}.`);
   return market;
 }
 

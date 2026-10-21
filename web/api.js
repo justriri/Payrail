@@ -316,12 +316,12 @@ function render(d, cfg) {
         convertPanel.append(el('p', { class: 'muted', id: 'no-convert', text: 'Paying with another currency is not enabled on this server. Add USDT on Celo to your wallet and press Pay again.' }), el('button', { type: 'button', class: 'secondary', text: 'Close', onclick: () => finish(false) }));
         return;
       }
-      const order = { available: 0, needs_live_test: 1, temporarily_unavailable: 2, unsupported: 3 };
+      const order = { live: 0, simulated: 1, temporarily_unavailable: 2, unsupported: 3 };
       const sorted = [...cur.currencies].sort((x, y) => order[x.status] - order[y.status] || x.symbol.localeCompare(y.symbol));
       const usable = sorted.filter((c) => c.available);
       convertPanel.append(el('h3', { text: 'Pay with another currency' }), el('p', { class: 'muted', text: 'Textile converts it to USDT in your own wallet; then the USDT you owe is sent to Payrail. Every currency below shows its real status.' }),
         el('ul', { class: 'curlist', id: 'currency-status' }, ...sorted.map((c) => el('li', { class: 'cur', 'data-symbol': c.symbol, 'data-status': c.status },
-          el('div', { class: 'cur-top' }, el('strong', { text: c.symbol }), ' ', el('span', { class: `badge ${c.status === 'available' ? 'ok' : c.status === 'unsupported' ? 'bad' : 'warn'}`, text: c.statusLabel })),
+          el('div', { class: 'cur-top' }, el('strong', { text: c.symbol }), ' ', el('span', { class: `badge ${c.status === 'live' ? 'ok' : c.status === 'unsupported' ? 'bad' : 'warn'}`, text: c.statusLabel })),
           el('p', { class: 'muted', text: c.statusDetail }), c.available ? el('p', { class: 'muted', text: `Smallest swap ${c.minSell} ${c.symbol}${c.minUsdt ? ` (about ${c.minUsdt} USDT)` : ''}.` }) : null))));
       if (!usable.length) { convertPanel.append(el('p', { class: 'muted', text: 'No currency can be converted right now. Add USDT to your wallet and press Pay again.' }), el('button', { type: 'button', class: 'secondary', text: 'Close', onclick: () => finish(false) })); return; }
       const sel = el('select', { id: 'pay-currency', 'aria-label': 'Pay with' }, el('option', { value: '', text: 'Choose a currency' }), ...usable.map((c) => el('option', { value: c.symbol, text: `${c.symbol} (${c.statusLabel})` })));

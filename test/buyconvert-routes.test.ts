@@ -93,6 +93,7 @@ async function world(extraEnv: Record<string, string> = {}) {
     buyFetch: fake.fetchImpl,
     buySettleDelayMs: 0,
     buyConvertOverride: { provider, buyerSwap },
+    officialCorridors: async () => ({ symbols: new Set(['cNGN', 'USDC', 'wARS', 'wBRL', 'IDRX']), addresses: new Set<string>(), source: 'built-in-snapshot' as const, fetchedAt: '2026-10-17T00:00:00.000Z' }),
     log: () => undefined,
   }))!;
   return { market, fake, provider, balances, tokenBalances, celoBalances };
@@ -192,7 +193,7 @@ test('unsupported or disabled currencies are refused with a reason: CWT, G$, CEL
 
 // ---------------------------------------------------------------------------------------------------------------- honest status per currency
 
-test('currency status is honest: Available only for a route executed on mainnet, Needs live test for live-quoted, Temporarily unavailable, Unsupported', async () => {
+test('currency status is honest: Live (Textile is quoting and Payrail can execute it), Temporarily unavailable, Unsupported', async () => {
   const USDT_ADDR = USDT as `0x${string}`;
   const lv = (sell: bigint, buy: bigint) => [{ sellAmount: sell, buyAmount: buy }];
   const pair = (sym: string, levels: Array<{ sellAmount: bigint; buyAmount: bigint }>) => ({
@@ -226,13 +227,17 @@ test('currency status is honest: Available only for a route executed on mainnet,
   });
   const list = await bc.currencies();
   const st = (sym: string) => list.find((c) => c.symbol === sym);
-  assert.equal(st('cNGN')!.status, 'available', 'only cNGN has an executed mainnet route');
-  for (const sym of ['wARS', 'wBRL', 'USDC', 'USAT']) {
-    assert.equal(st(sym)!.status, 'needs_live_test', sym);
-    assert.equal(st(sym)!.available, true, 'selectable, but labelled for what it is');
-    assert.equal(st(sym)!.evidence.executedByPayrailOnMainnet, false);
-    assert.match(st(sym)!.statusDetail, /not been executed on mainnet/);
+  // every route Textile is quoting and Payrail can execute is simply "Live"; there is no "needs test" state
+  for (const sym of ['cNGN', 'wARS', 'wBRL', 'USDC', 'USAT']) {
+    assert.equal(st(sym)!.status, 'live', sym);
+    assert.equal(st(sym)!.statusLabel, 'Live', sym);
+    assert.equal(st(sym)!.available, true);
+    assert.doesNotMatch(st(sym)!.statusDetail, /test/i, `${sym}: no test-run wording`);
   }
+  // Live does not claim a mainnet transaction: only the route Payrail really executed says so (diagnostic evidence is kept)
+  assert.match(st('cNGN')!.statusDetail, /completed a mainnet conversion/);
+  assert.equal(st('cNGN')!.evidence.executedByPayrailOnMainnet, true);
+  for (const sym of ['wARS', 'wBRL', 'USDC', 'USAT']) { assert.doesNotMatch(st(sym)!.statusDetail, /mainnet/); assert.equal(st(sym)!.evidence.executedByPayrailOnMainnet, false); }
   assert.equal(st('wCOP')!.status, 'temporarily_unavailable');
   assert.equal(st('wCOP')!.available, false);
   assert.equal(st('WETH')!.status, 'temporarily_unavailable');
@@ -243,12 +248,8 @@ test('currency status is honest: Available only for a route executed on mainnet,
   assert.equal(st('wMXN')!.status, 'unsupported');
   assert.equal(st('G$')!.status, 'unsupported');
   assert.ok(!list.some((c) => c.symbol === 'CWT'));
-  assert.equal(st('cNGN')!.statusLabel, 'Available');
-  // the general "Textile: Live" label is separate from the verification status: Live never implies verified
   for (const sym of ['cNGN', 'wARS', 'wBRL', 'USDC', 'USAT']) assert.equal(st(sym)!.textileLive, true, `${sym}: a live price exists`);
-  assert.equal(st('wARS')!.status, 'needs_live_test');
   for (const sym of ['wCOP', 'CELO', 'wMXN', 'G$']) assert.equal(st(sym)!.textileLive, false, sym);
-  assert.equal(st('wARS')!.statusLabel, 'Needs live test');
   // USDC and USAT say honestly that Buy also offers them directly but Payrail's flow is USDT-only
   assert.match(st('USDC')!.directNote!, /only supports USDT/);
   assert.match(st('USAT')!.directNote!, /only supports USDT/);

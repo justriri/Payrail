@@ -8,6 +8,7 @@ import { RouteRegistry, seedConversionAssets } from '../src/conversion.ts';
 import { TEXTILE_REACTOR } from '../src/config.ts';
 import { openDb } from '../src/db.ts';
 import { createTextileRouteProvider } from '../src/textileroutes.ts';
+import { createOfficialCorridors } from '../src/textiledocs.ts';
 
 const i = process.argv.indexOf('--max-usd');
 const maxUsd = i > 0 ? Number(process.argv[i + 1]) : 2;
@@ -18,6 +19,7 @@ const bc = createBuyConvert({
   db, registry: new RouteRegistry(db, [provider]), provider, buyerSwap: { converterFor: () => { throw new Error('unused'); }, prepare: async () => { throw new Error('unused'); } },
   reader: { blockNumber: async () => 0n, receipt: async () => null }, usdt: '0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e', reactor: TEXTILE_REACTOR, chainId: 42220, minConfirmations: 1,
   maxUsdtAtomic: BigInt(Math.round(maxUsd * 1e6)),
+  officialCorridors: createOfficialCorridors(),
 });
 const list = await bc.currencies();
 console.log(`Textile live check at ${new Date().toISOString()} (per-conversion limit ${maxUsd} USDT)`);

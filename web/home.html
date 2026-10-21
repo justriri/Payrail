@@ -107,7 +107,7 @@
         <div class="asset"><b>USDT</b><small>Settlement currency: Buy is paid in USDT on Celo</small></div>
         <div class="asset" id="asset-loading"><b>Other currencies</b><small>Loading each currency's real status from this server…</small></div>
       </div>
-      <p class="callout"><strong>Status is shown exactly as it is.</strong> "Available" means Payrail has executed that route on mainnet. "Needs live test" means it is implemented and Textile has a live price, but it has not been executed on mainnet yet. An indicative quote is not proof of liquidity. Unsupported or unavailable currencies cannot be selected.</p>
+      <p class="callout"><strong>Status is shown exactly as it is.</strong> "Live" means Textile is quoting that route on Celo right now and it can be used; it does not mean Payrail has already completed a mainnet transaction for every currency. "Temporarily unavailable" means Textile has no market makers or no price at the moment: it turns Live again by itself when they return. Currencies that are not on Textile's official Celo list are Unsupported and cannot be selected.</p>
     </div>
   </section>
 
@@ -120,7 +120,7 @@
       <div><h4>Product</h4><a href="/market.html#/buyer/explore">Explore APIs</a><a href="/market.html#/buyer/funding">Wallet and funding</a><a href="/index.html">Pay a service with your wallet</a></div>
       <div><h4>Sellers</h4><a href="/market.html#/seller/new">Create an API</a><a href="/market.html#/seller/earnings">Earnings</a><a href="/market.html#/seller/payout-settings">Payout settings</a></div>
       <div><h4>Company</h4><a href="#how">How it works</a><a href="#currencies">Supported currencies</a><a href="/market.html#/buyer">Open the app</a></div>
-      <div class="legal">Payrail is a hackathon project. Payments are real. Funds pass through the Payrail deposit address and ledger until spent. Seller payouts are not enabled yet. Currency conversion is run by Textile in your own wallet; its status per currency is shown above.</div>
+      <div class="legal">Payments are real. Funds pass through the Payrail deposit address and ledger until spent. Sellers request payouts in the app; an operator approves and sends each one, and it is marked paid only after the transfer is verified on-chain. Currency conversion is run by Textile in your own wallet; its status per currency is shown above.</div>
     </div>
   </footer>
   <script src="/home.js"></script>

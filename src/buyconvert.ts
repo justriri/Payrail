@@ -22,6 +22,7 @@ import type { Db } from './db.ts';
 import type { BuyerSwapRuntime, PrepareResult } from './buyerswap.ts';
 import { USDT_CELO } from './conversion.ts';
 import { DOCUMENTED_ON_CELO } from './routeevidence.ts';
+import type { OfficialCorridors } from './textiledocs.ts';
 import type { ConversionProvider, RouteRegistry } from './conversion.ts';
 import type { ChainReader } from './funding.ts';
 import { verifyConversion } from './marketfunding.ts';
@@ -37,10 +38,11 @@ export class BuyConvertError extends Error {
   }
 }
 
-export type CurrencyStatus = 'available' | 'needs_live_test' | 'temporarily_unavailable' | 'unsupported';
+/** live = Textile is quoting the route on Celo right now and it can be executed through Payrail; simulated = a development/test provider (never in production) */
+export type CurrencyStatus = 'live' | 'simulated' | 'temporarily_unavailable' | 'unsupported';
 const STATUS_LABEL: Record<CurrencyStatus, string> = {
-  available: 'Available',
-  needs_live_test: 'Needs live test',
+  live: 'Live',
+  simulated: 'Simulated',
   temporarily_unavailable: 'Temporarily unavailable',
   unsupported: 'Unsupported',
 };
@@ -64,6 +66,8 @@ export interface BuyConvertDeps {
    * names them (PAYRAIL_BUY_CONVERT_UNDOCUMENTED). This is enforced in code, so a stale allow-list row in the database cannot switch one on.
    */
   allowUndocumented?: ReadonlySet<string>;
+  /** Textile's OFFICIAL Celo corridor list (read from its address book). Absent = the built-in snapshot. */
+  officialCorridors?: () => Promise<OfficialCorridors>;
   /** read-only balance of an ERC-20 for a wallet; when present, a conversion the wallet cannot fund is refused before anything is signed */
   tokenBalance?: (token: Address, wallet: Address) => Promise<bigint>;
   /** read-only native CELO balance of a wallet (gas); only used to warn */
@@ -153,7 +157,7 @@ export function createBuyConvert(d: BuyConvertDeps) {
       let status: CurrencyStatus;
       let reason: string | null = r.usable ? null : r.reason;
       let minUsdt: string | null = null;
-      const gate = r.enabled && r.available ? documentationGate(r.from.symbol) : undefined;
+      const gate = r.enabled && r.available ? await documentationGate(r.from.symbol, r.from.address) : undefined;
       if (gate) {
         status = 'unsupported';
         reason = gate;
@@ -163,7 +167,7 @@ export function createBuyConvert(d: BuyConvertDeps) {
         // Textile lists the pair but has no makers / quote right now (or could not be reached)
         status = r.unavailableReason === 'not_on_ladder' || r.unavailableReason === 'chain_unsupported' ? 'unsupported' : 'temporarily_unavailable';
       } else {
-        status = r.evidence.level === 'live-executed' ? 'available' : 'needs_live_test';
+        status = d.provider.simulated ? 'simulated' : 'live';
         // what the smallest swap Textile allows is worth in USDT (an indicative price; reserves nothing)
         try {
           const q = await d.provider.quote({ direction: 'funding', from: r.from, to: USDT_CELO, inputAtomic: r.minInputAtomic });
@@ -174,18 +178,21 @@ export function createBuyConvert(d: BuyConvertDeps) {
           }
         } catch (e) {
           status = 'temporarily_unavailable';
-          reason = `Textile gave no price for ${r.from.symbol} -> USDT just now (${(e as Error).message.slice(0, 80)})`;
+          const msg = (e as Error).message;
+          reason = /no_makers_online/.test(msg)
+            ? `Textile has no market makers online for ${r.from.symbol} -> USDT right now. It becomes Live again by itself when they return.`
+            : `Textile gave no price for ${r.from.symbol} -> USDT just now (${msg.slice(0, 80)})`;
         }
       }
-      const selectable = status === 'available' || status === 'needs_live_test';
+      const selectable = status === 'live' || status === 'simulated';
       return {
         symbol: r.from.symbol, address: r.from.address, decimals: r.from.decimals,
         status,
         statusLabel: STATUS_LABEL[status],
-        statusDetail: status === 'available'
-          ? 'Textile has completed this route on Celo mainnet for Payrail before. This buyer-wallet flow is still being proven with real wallets.'
-          : status === 'needs_live_test'
-            ? 'Implemented, and Textile shows a live price, but this route has not been executed on mainnet by Payrail yet. The first real conversion is the test.'
+        statusDetail: status === 'live'
+          ? `Textile is quoting ${r.from.symbol} -> USDT on Celo right now. Your wallet signs every step.${r.evidence.level === 'live-executed' ? ' Payrail has completed a mainnet conversion on this route.' : ''}`
+          : status === 'simulated'
+            ? 'SIMULATED route (development only): nothing here is real.'
             : status === 'temporarily_unavailable' ? (reason ?? 'The route cannot be verified right now.') : (reason ?? 'No compatible Textile route exists for this currency.'),
         /** true when a buyer may start a conversion with it */
         available: selectable,
@@ -212,10 +219,13 @@ export function createBuyConvert(d: BuyConvertDeps) {
   }
 
   /** why a route may not be used although the registry says it is live and enabled (undefined = fine) */
-  const documentationGate = (symbol: string): string | undefined =>
-    DOCUMENTED_ON_CELO.has(symbol) || d.allowUndocumented?.has(symbol)
-      ? undefined
-      : `Textile's live API quotes ${symbol} -> USDT, but Textile's official address book does not list it as a Celo corridor, so Payrail does not offer it. It can be enabled by the operator once Textile documents it.`;
+  const documentationGate = async (symbol: string, address: string): Promise<string | undefined> => {
+    if (d.allowUndocumented?.has(symbol)) return undefined;
+    const o = d.officialCorridors ? await d.officialCorridors() : { symbols: DOCUMENTED_ON_CELO, addresses: new Set<string>() };
+    // the symbol must be an official Celo corridor AND the token contract Payrail uses must appear on the official page (when it could be read)
+    if (o.symbols.has(symbol) && (o.addresses.size === 0 || o.addresses.has(address.toLowerCase()))) return undefined;
+    return `Textile's live API quotes ${symbol} -> USDT, but Textile's official address book does not list it as a Celo corridor, so Payrail does not offer it. It is enabled automatically once Textile documents it.`;
+  };
 
   const balanceOf = async (token: Address, wallet: Address): Promise<bigint | undefined> => {
     if (!d.tokenBalance) return undefined;
@@ -230,7 +240,7 @@ export function createBuyConvert(d: BuyConvertDeps) {
     if (!route) throw new BuyConvertError('UNSUPPORTED_CURRENCY', `${a.symbol} cannot be used: Textile has no conversion route from it to USDT, so the currency is not offered.`);
     if (route.passthrough) throw new BuyConvertError('BAD_INPUT', 'USDT needs no conversion');
     if (!route.usable) throw new BuyConvertError('UNSUPPORTED_CURRENCY', `${route.from.symbol} cannot be used right now: ${route.reason ?? 'unavailable'}.`);
-    const gated = documentationGate(route.from.symbol);
+    const gated = await documentationGate(route.from.symbol, route.from.address);
     if (gated) throw new BuyConvertError('UNSUPPORTED_CURRENCY', gated);
     // pick the smallest sell amount that is at least the corridor minimum AND whose guaranteed (minimum) USDT covers the API price
     let sell = route.minInputAtomic;
@@ -375,7 +385,6 @@ export function createBuyConvert(d: BuyConvertDeps) {
         'This is an INDICATIVE rate from Textile, not a firm quote and not a promise of liquidity. The USDT price is fixed from it when you save or re-check the listing; buyers are billed that USDT amount.',
         `Textile only converts about ${c.minUsdt ?? '1'} USDT or more at a time, so a buyer paying with ${c.symbol} converts more than a small API costs and keeps the unused USDT.`,
         'If the rate moves, re-check the price: a price derived from a quote older than an hour cannot be published.',
-        ...(c.status === 'needs_live_test' ? [`The ${c.symbol} -> USDT route has not been executed on mainnet by Payrail yet (it is implemented and shows a live price).`] : []),
       ],
     };
   }
@@ -387,6 +396,7 @@ export function createBuyConvert(d: BuyConvertDeps) {
   }
 
   return {
+    official: async () => { const o = d.officialCorridors ? await d.officialCorridors() : undefined; return o ? { symbols: [...o.symbols], source: o.source, fetchedAt: o.fetchedAt } : { symbols: [...DOCUMENTED_ON_CELO].filter((x) => x !== 'USDT'), source: 'built-in-snapshot', fetchedAt: null }; },
     normalizePrice, pricingCurrencies,
     currencies, estimate, prepare, recordTx, verify,
     get: (buyerId: string, id: string) => view(owned(buyerId, id)),

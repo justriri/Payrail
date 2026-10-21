@@ -47,16 +47,31 @@ export function createTextileRouteProvider(deps: TextileRouteDeps = {}): Convers
       const from = direction === 'funding' ? other : USDT_CELO;
       const to = direction === 'funding' ? USDT_CELO : other;
       const lv = p.levels;
-      const available = lv.length > 0;
+      let available = lv.length > 0;
+      let reason: 'no_levels' | 'no_makers_online' = 'no_levels';
+      let minIn = available ? lv[0]!.sellAmount : 0n;
+      let maxIn = available ? lv[lv.length - 1]!.sellAmount : 0n;
+      if (!available && p.minSellAmount > 0n && direction === 'funding') {
+        // An empty ladder entry is not proof that nothing can be bought: ask Textile for a price at the pair's own minimum. A usable
+        // price means the route works (the ladder is only a summary); a refusal gives the real reason (for example no_makers_online).
+        try {
+          const probe = await prev({ chainId, sellToken: p.sellToken, buyToken: p.buyToken, sellAmount: p.minSellAmount });
+          if (probe.kind === 'preview' && probe.buyAmount > 0n) {
+            available = true;
+            minIn = p.minSellAmount;
+            maxIn = probe.availableSellAmount ?? p.minSellAmount;
+          } else if (probe.kind === 'no_quote' && probe.reason === 'no_makers_online') reason = 'no_makers_online';
+        } catch { /* the probe could not be made: stay unavailable with the ladder's own reason */ }
+      }
       routes.push({
         provider: 'textile-rfq (live ladder, read-only)',
         direction,
         from,
         to,
         available,
-        ...(available ? {} : { unavailableReason: 'no_levels' as const }),
-        minInputAtomic: available ? lv[0]!.sellAmount : 0n,
-        maxInputAtomic: available ? lv[lv.length - 1]!.sellAmount : 0n,
+        ...(available ? {} : { unavailableReason: reason }),
+        minInputAtomic: available ? minIn : p.minSellAmount,
+        maxInputAtomic: available ? maxIn : 0n,
         discoveredAt: now(),
         asOf,
       });

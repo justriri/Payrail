@@ -31,11 +31,11 @@ import { CheckoutError } from './checkout.ts';
 import type { Checkout } from './checkout.ts';
 import type { BuyConvert } from './buyconvert.ts';
 import type { FundingConfig } from './funding.ts';
-import { PayoutError, cancelPayout, payoutsOf, requestPayout } from './payouts.ts';
+import { PayoutError, cancelPayout, payoutSummary, payoutsOf, reconcileSentPayouts, requestPayout } from './payouts.ts';
 import { publishReadiness, updateListingDetails } from './seller.ts';
 import { buyerStatement, quoteFor, receiptFor, sellerStatement } from './billing.ts';
 import { agentExecutionIds, agentUsage } from './agents.ts';
-import type { PayoutPolicy } from './payouts.ts';
+import type { PayoutPolicy, PayoutVerifyConfig } from './payouts.ts';
 import { EscrowError, executeEscrowRequest } from './escrow.ts';
 import { FundingOpError, approveFunding, fundingEvents, fundingView, getFundingOp, listFundingOps, recordClientTx, requestFundingQuote, verifyAndCredit } from './marketfunding.ts';
 import type { FundingConfig as ConversionFundingConfig } from './marketfunding.ts';
@@ -90,8 +90,10 @@ export interface MarketRuntime {
   live?: {
     funding: FundingConfig;
     payout: PayoutPolicy;
-    /** seller payout REQUESTS over HTTP stay refused unless this is explicitly true (the secure payout architecture is not reviewed yet) */
+    /** seller payout REQUESTS over HTTP are refused unless this is true. A request only reserves earnings; an operator approves and sends it. */
     payoutRequestsEnabled?: boolean;
+    /** read-only on-chain confirmation of payouts the operator sent (needs PAYRAIL_PAYOUT_SOURCE); never sends anything */
+    payoutVerify?: PayoutVerifyConfig;
   };
   /** alternative settlement through the on-chain escrow contract (testnet-verified only) */
   escrow?: {
@@ -431,7 +433,7 @@ function mapError(e: unknown): MarketResponse {
   if (!known) return { status: 500, body: { ok: false, code: 'INTERNAL_ERROR', message: 'Something went wrong on our side.' } };
   const status: Record<string, number> = {
     SESSION_INVALID: 401, NOT_OWNER: 403, NOT_FOUND: 404, INSUFFICIENT_CREDITS: 402, IDEMPOTENCY_CONFLICT: 409, WRONG_STATE: 409, HOST_CLAIMED: 409,
-    LISTING_NOT_PUBLISHED: 409, CONTRACT_NOT_APPROVED: 409, RATE_LIMITED: 429, DOMAIN_PROOF_FAILED: 422, DNS_UNAVAILABLE: 503, ENDPOINT_UNREACHABLE: 502, BAD_SIGNATURE: 422, WRONG_NETWORK: 422, NONCE_INVALID: 401, SERVICE_UNAVAILABLE: 409, INVALID_INPUT: 422, NO_USDT_OFFER: 409, PRICE_ABOVE_LIMIT: 422, CHALLENGE_REJECTED: 409, GATEWAY_UNREACHABLE: 502, INSUFFICIENT_USDT: 409, UNSUPPORTED_CURRENCY: 422, INSUFFICIENT_FUNDS: 409, LISTING_UNAVAILABLE: 409, NOT_REAL_LISTING: 422, PRICE_CHANGED: 409, EXPIRED: 409, OVER_DEPOSIT_LIMIT: 422, INSUFFICIENT_BALANCE: 402, CONVERSION_NOT_CONFIRMED: 409, CONVERSION_DISABLED: 409, NOT_NEEDED: 409, ABOVE_LIMIT: 422, NO_QUOTE: 409, TX_ALREADY_USED: 409, QUOTE_STALE: 409,
+    LISTING_NOT_PUBLISHED: 409, CONTRACT_NOT_APPROVED: 409, RATE_LIMITED: 429, DOMAIN_PROOF_FAILED: 422, DNS_UNAVAILABLE: 503, NOT_CONFIRMED: 422, WRONG_DESTINATION: 422, KEY_REUSED: 409, ENDPOINT_UNREACHABLE: 502, BAD_SIGNATURE: 422, WRONG_NETWORK: 422, NONCE_INVALID: 401, SERVICE_UNAVAILABLE: 409, INVALID_INPUT: 422, NO_USDT_OFFER: 409, PRICE_ABOVE_LIMIT: 422, CHALLENGE_REJECTED: 409, GATEWAY_UNREACHABLE: 502, INSUFFICIENT_USDT: 409, UNSUPPORTED_CURRENCY: 422, INSUFFICIENT_FUNDS: 409, LISTING_UNAVAILABLE: 409, NOT_REAL_LISTING: 422, PRICE_CHANGED: 409, EXPIRED: 409, OVER_DEPOSIT_LIMIT: 422, INSUFFICIENT_BALANCE: 402, CONVERSION_NOT_CONFIRMED: 409, CONVERSION_DISABLED: 409, NOT_NEEDED: 409, ABOVE_LIMIT: 422, NO_QUOTE: 409, TX_ALREADY_USED: 409, QUOTE_STALE: 409,
     WALLET_TAKEN: 409, NO_FUNDING_WALLET: 409, TX_NOT_FOUND: 404, TX_REVERTED: 422, NOT_ENOUGH_CONFIRMATIONS: 409, NO_MATCHING_TRANSFER: 422, OVER_LIMIT: 422, READ_FAILED: 502,
     KEY_INVALID: 401, LISTING_NOT_ALLOWED: 403, ROUTE_UNAVAILABLE: 409, ADDRESS_REQUIRED: 409, ADDRESS_TAKEN: 409, BELOW_FLOOR: 422, ABOVE_DEPTH: 422, NOT_ENABLED: 409, PER_REQUEST_CAP: 403, DAILY_CAP: 403, INSUFFICIENT_EARNINGS: 409, NO_WALLET: 409, TEST_ASSET: 422, NO_SELLER_WALLET: 409, HOLD_FAILED: 502,
     BAD_AMOUNT: 400, BELOW_MINIMUM: 422, ABOVE_MAXIMUM: 422, DAILY_LIMIT: 429, TOO_MANY_OPEN: 409, QUOTE_UNAVAILABLE: 502, QUOTE_EXPIRED: 409, DIGEST_MISMATCH: 409, SIGNING_UNAVAILABLE: 409, NOT_ALLOWED: 403,
@@ -582,6 +584,7 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
         enabled: true,
         settlement: { symbol: 'USDT', note: 'Buy AI is paid in USDT on Celo. Textile Protocol converts your currency into USDT in your own wallet first; it does not pay Buy.' },
         conversionLimit: rt.buyConvert.config().maxUsdt,
+        officialList: await rt.buyConvert.official(),
         currencies: list,
       });
     }
@@ -774,22 +777,62 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
     const r = await confirmDeposit(db, liveOnly(), id, str(body.txHash, 'txHash', 80), now);
     return ok({ credited: r.credited.map((c) => ({ amount: formatAtomic(c.amountAtomic), logIndex: c.logIndex, alreadyCredited: !c.created })), confirmations: r.confirmations });
   }
+  // ---- seller payouts. A request only RESERVES earnings; an operator approves and sends the transfer from the payout wallet (the web server holds no
+  // key and sends nothing), and a payout is only "paid" once the chain shows the transfer. See scripts/payouts.ts.
+  const payoutView = (p: ReturnType<typeof payoutsOf>[number]) => ({
+    id: p.id, amount: formatAtomic(p.amountAtomic), asset: p.asset, destination: p.destination, state: p.state,
+    label: ({ requested: 'Requested: waiting for operator approval', approved: 'Approved: waiting to be sent', sent: 'Sent: waiting for on-chain confirmation (NOT paid yet)', confirmed: 'Paid: confirmed on-chain', cancelled: 'Cancelled: returned to your available balance', failed: 'Failed: the transfer did not happen; returned to your available balance' } as Record<string, string>)[p.state] ?? p.state,
+    paid: p.state === 'confirmed',
+    txHash: p.txHash, txUrl: p.txHash ? `https://celoscan.io/tx/${p.txHash}` : null,
+    requestedAt: p.requestedAt, approvedAt: p.approvedAt, sentAt: p.sentAt, settledAt: p.settledAt, note: p.note,
+    cancellable: p.state === 'requested',
+  });
+  const summaryView = (sellerId: string) => {
+    const x = payoutSummary(db, sellerId, LIVE_ASSET);
+    return {
+      asset: x.asset, earned: formatAtomic(x.earned), platformFees: formatAtomic(x.platformFees), held: formatAtomic(x.held), pending: formatAtomic(x.pending),
+      available: formatAtomic(x.available), availableAtomic: x.available.toString(), paidOut: formatAtomic(x.paidOut), consistent: x.consistent, openPayouts: x.openPayouts, maxOpenPayouts: x.maxOpenPayouts,
+      meaning: {
+        earned: 'your share of every response that qualified (the 3% platform fee is not in it)',
+        platformFees: 'booked by Payrail on those responses; never paid to you',
+        held: 'your share of requests whose outcome is still unknown: not earned yet',
+        pending: 'reserved by payouts that are requested, approved or sent but not yet confirmed',
+        available: 'what you can request right now',
+        paidOut: 'payouts confirmed on-chain',
+      },
+    };
+  };
   if (method === 'GET' && path === '/seller/payouts') {
     const id = seller();
-    return ok({ enabled: Boolean(rt.live), payouts: payoutsOf(db, id).map((p) => ({ id: p.id, amount: formatAtomic(p.amountAtomic), asset: p.asset, destination: p.destination, state: p.state, txHash: p.txHash, requestedAt: p.requestedAt, note: p.note })) });
+    if (rt.live?.payoutVerify) await reconcileSentPayouts(db, rt.live.payoutVerify, id, now); // read-only: settles what the chain already shows
+    const w = queryOne(db, 'SELECT wallet_address FROM accounts WHERE id = ?', id);
+    return ok({
+      enabled: Boolean(rt.live),
+      requestsEnabled: Boolean(rt.live?.payoutRequestsEnabled),
+      destination: w && w.wallet_address ? String(w.wallet_address) : null,
+      limits: rt.live ? { min: formatAtomic(rt.live.payout.minAtomic), max: formatAtomic(rt.live.payout.maxAtomic) } : null,
+      summary: rt.live ? summaryView(id) : null,
+      autoConfirm: Boolean(rt.live?.payoutVerify),
+      how: 'You confirm the amount and your verified wallet address here. Payrail reserves that amount so it cannot be spent or requested twice. An operator then approves it and sends the USDT from the payout wallet. It is marked Paid only after the transfer is verified on-chain; until then it is shown as pending.',
+      payouts: payoutsOf(db, id).map(payoutView),
+    });
   }
   if (method === 'POST' && path === '/seller/payouts') {
     const id = seller();
     if (!rt.live) throw new ApiError(409, 'LIVE_DISABLED', 'payouts are not enabled; earnings here are test credits and cannot be paid out');
-    if (!rt.live.payoutRequestsEnabled) throw new ApiError(409, 'PAYOUTS_DISABLED', 'seller payouts are disabled for live use until the secure payout architecture is implemented and reviewed. Earnings stay in your balance.');
-    const p = requestPayout(db, id, { asset: LIVE_ASSET, amountAtomic: parseAtomic(body.amount) }, rt.live.payout, now);
-    return ok({ payout: { id: p.id, state: p.state, destination: p.destination, amount: formatAtomic(p.amountAtomic) }, note: 'Waiting for operator approval. Funds are reserved and cannot be spent twice.' }, 201);
+    if (!rt.live.payoutRequestsEnabled) throw new ApiError(409, 'PAYOUTS_DISABLED', 'seller payout requests are switched off on this server.');
+    // explicit seller confirmation: the amount, the exact destination and a one-time key must all be present
+    if (body.confirm !== true) throw new ApiError(422, 'NOT_CONFIRMED', 'confirm the payout: tick the confirmation and check the destination address');
+    const p = requestPayout(db, id, { asset: LIVE_ASSET, amountAtomic: parseAtomic(body.amount), confirmedDestination: str(body.confirmDestination, 'confirmDestination', 60), requestKey: str(body.requestKey, 'requestKey', 100) }, rt.live.payout, now);
+    return ok({ payout: payoutView(p), summary: summaryView(id), note: 'Reserved. An operator must approve and send it; it is not paid until the transfer is verified on-chain.' }, 201);
   }
   if (method === 'POST' && (m = path.match(/^\/seller\/payouts\/([\w-]{1,80})\/cancel$/))) {
     const id = seller();
     const cur = payoutsOf(db, id).find((p) => p.id === m![1]);
     if (!cur) throw new ApiError(404, 'NOT_FOUND', 'no such payout');
-    return ok({ payout: { id: cur.id, state: cancelPayout(db, cur.id, id, now).state } });
+    // once an operator has approved it a payout may already be on its way: only a merely requested payout can be cancelled by the seller
+    if (cur.state !== 'requested') throw new ApiError(409, 'WRONG_STATE', `a ${cur.state} payout cannot be cancelled here; contact the operator`);
+    return ok({ payout: payoutView(cancelPayout(db, cur.id, id, now)), summary: summaryView(id) });
   }
 
   // ---- agents (owner side)

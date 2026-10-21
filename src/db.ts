@@ -626,6 +626,15 @@ CREATE TRIGGER listing_checkout_events_no_update BEFORE UPDATE ON listing_checko
 CREATE TRIGGER listing_checkout_events_no_delete BEFORE DELETE ON listing_checkout_events BEGIN SELECT RAISE(ABORT, 'checkout events are append-only'); END;
 `;
 
+/**
+ * Version 16: payout requests are idempotent per seller. The page sends one key per confirmed request; repeating it (a double click, a retry after a
+ * timeout) returns the same payout and never reserves earnings twice. Additive: existing payouts keep a NULL key.
+ */
+const V16 = `
+ALTER TABLE payouts ADD COLUMN request_key TEXT;
+CREATE UNIQUE INDEX payouts_request_key ON payouts (seller_id, request_key) WHERE request_key IS NOT NULL;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'accounts, listings, contracts, ledger, executions, audit', sql: V1 },
   { version: 2, name: 'encrypted seller credentials', sql: V2 },
@@ -642,6 +651,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 13, name: 'buyer-wallet currency conversions that fund Buy AI purchases', sql: V13 },
   { version: 14, name: 'listing prices in other currencies (original price kept, USDT price normalised from a Textile quote)', sql: V14 },
   { version: 15, name: 'checkout of seller-listed APIs (authoritative price, funding transactions, execution link)', sql: V15 },
+  { version: 16, name: 'idempotent seller payout requests (request key)', sql: V16 },
 ];
 
 /** Open (creating the file and folder if needed) and bring the schema up to date. ':memory:' for tests. */

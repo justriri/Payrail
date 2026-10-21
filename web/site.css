@@ -253,3 +253,11 @@ main.workspace .cards .more { grid-column: 1 / -1; text-align: center; padding: 
   #run-result table td.v, #quote-box table td.v, #estimate-box table td.v { text-align: left; }
 }
 #run-result pre, #api-response { max-width: 100%; box-sizing: border-box; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; overflow-x: hidden; overflow-y: auto; max-height: min(70vh, 640px); }
+
+/* payout center */
+#payout-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+#payout-history { width: 100%; table-layout: fixed; }
+#payout-history td, #payout-history th { overflow-wrap: anywhere; word-break: break-word; vertical-align: top; }
+#payout-destination { overflow-wrap: anywhere; word-break: break-all; }
+label.check { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0; }
+label.check input { margin-top: 4px; }

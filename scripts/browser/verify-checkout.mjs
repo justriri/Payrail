@@ -28,8 +28,9 @@ const sh = await b.text('#shortfall');
 check('with 0 USDT the page states the server-computed shortfall and that nothing was charged', /costs 0\.5 USDT/.test(sh) && /holds 0 USDT/.test(sh) && /0\.5 USDT short/.test(sh) && /Nothing has been charged/.test(sh), sh);
 check('no payment, signature or transaction was requested yet', wallet.sends.length === 0 && wallet.typedSigns.length === 0, `${wallet.sends.length} sends`);
 const cards = await b.ev(`JSON.stringify([...document.querySelectorAll('#currency-status .cur')].map(c => ({ sym: c.dataset.symbol, status: c.dataset.status })))`).then(JSON.parse);
-check('every currency is listed with its true status; USAT/CELO/G$ unsupported; cNGN never "Available" in simulation', cards.some((c) => c.sym === 'cNGN') && cards.filter((c) => ['USAT', 'CELO', 'G$'].includes(c.sym)).every((c) => c.status === 'unsupported') && !cards.some((c) => c.status === 'available'), cards.map((c) => `${c.sym}:${c.status}`).join(' '));
-check('no demo / test language', !DEMO_WORDS.test(await b.text('body')), (((await b.text('body')).match(DEMO_WORDS)) || [])[0]);
+check('every currency is listed with its true status; USAT/CELO/G$ unsupported; a simulated provider is never "Live"', cards.some((c) => c.sym === 'cNGN') && cards.filter((c) => ['USAT', 'CELO', 'G$'].includes(c.sym)).every((c) => c.status === 'unsupported') && !cards.some((c) => c.status === 'live'), cards.map((c) => `${c.sym}:${c.status}`).join(' '));
+const prod = async () => (await b.text('body')).replace(/SIMULATED route \(development only\): nothing here is real\./g, '').replace(/Simulated/g, ''); // the simulated-provider badge exists only because this test runs a simulated Textile; production never shows it
+check('no demo / test language (apart from the simulated-provider badge of this test setup)', !DEMO_WORDS.test(await prod()), (((await prod()).match(DEMO_WORDS)) || [])[0]);
 await b.set('#pay-currency', 'cNGN');
 await b.click('#estimate-btn', 'Show what it will cost');
 await until(async () => (await b.ev(`!!document.querySelector('#estimate-table')`)));

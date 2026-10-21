@@ -89,6 +89,8 @@ export async function startHarness({ seedLegacyDemoRows = true, capAtomic = 1_00
     live: {
       funding: { chainId: 42220, token: USDT, asset: 'USDT', depositAddress: DEP, minConfirmations, maxDepositAtomic: capAtomic, reader },
       payout: { payableAssets: ['USDT'], minAtomic: 10_000n, maxAtomic: capAtomic },
+      payoutRequestsEnabled: true,
+      payoutVerify: { reader, token: USDT, sourceAddress: DEP, minConfirmations },
     },
   };
   // purchases of seller-listed APIs: the production checkout over the same ledger, funding and (optional) simulated Textile conversion
@@ -106,7 +108,8 @@ export async function startHarness({ seedLegacyDemoRows = true, capAtomic = 1_00
   };
 
   // ---- a seller (signed in through the real wallet-signature protocol) who can publish real-USDT listings
-  const sellerKey = privateKeyToAccount(generatePrivateKey());
+  const sellerPk = generatePrivateKey();
+  const sellerKey = privateKeyToAccount(sellerPk);
   const sl = await call('POST', '/seller/login/start', { body: { wallet: sellerKey.address, chainId: 42220 } });
   const sc = await call('POST', '/seller/login/complete', { body: { wallet: sellerKey.address, nonce: sl.nonce, signature: await sellerKey.signMessage({ message: sl.message }) } });
   async function publish(name, price, { description = '' } = {}) {
@@ -216,7 +219,7 @@ export async function startHarness({ seedLegacyDemoRows = true, capAtomic = 1_00
   }
 
   return {
-    BASE, token, db, call, receipts, txt, dns, publish, demoIds, wire, fundedBuyer, sellerKey, sellerToken: sc.token, buyGateway: fakeBuy.gateway, buyChain: fakeBuy, usdtBalances, simTextile,
+    BASE, token, db, call, receipts, txt, dns, publish, hashN: () => ++hashN, demoIds, wire, fundedBuyer, sellerKey, sellerPk, sellerToken: sc.token, buyGateway: fakeBuy.gateway, buyChain: fakeBuy, usdtBalances, simTextile,
     newKey: () => generatePrivateKey(),
     close: () => new Promise((r) => server.close(() => r())),
   };

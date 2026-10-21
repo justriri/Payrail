@@ -93,6 +93,7 @@ async function world(extraEnv: Record<string, string> = {}) {
     buyFetch: fake.fetchImpl,
     buySettleDelayMs: 0,
     buyConvertOverride: { provider, buyerSwap },
+    officialCorridors: async () => ({ symbols: new Set(['cNGN', 'USDC', 'wARS', 'wBRL', 'IDRX']), addresses: new Set<string>(), source: 'built-in-snapshot' as const, fetchedAt: '2026-10-17T00:00:00.000Z' }),
     log: () => undefined,
   }))!;
   return { market, fake, provider, balances, tokenBalances, celoBalances };

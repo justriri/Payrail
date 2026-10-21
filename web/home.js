@@ -38,9 +38,9 @@
       box.append(card('Other currencies', d.note || 'Paying with another currency is not switched on on this server. Only USDT works.'));
       return;
     }
-    const order = { available: 0, needs_live_test: 1, temporarily_unavailable: 2, unsupported: 3 };
+    const order = { live: 0, simulated: 1, temporarily_unavailable: 2, unsupported: 3 };
     for (const c of [...d.currencies].sort((x, y) => order[x.status] - order[y.status] || x.symbol.localeCompare(y.symbol))) {
-      const el = card(c.symbol, c.statusLabel, c.textileLive ? 'Textile: Live' : 'Textile: Not live');
+      const el = c.status === 'temporarily_unavailable' ? card(c.symbol, c.statusLabel, c.reason || c.statusDetail) : card(c.symbol, c.statusLabel);
       el.dataset.symbol = c.symbol;
       el.dataset.status = c.status;
       box.append(el);

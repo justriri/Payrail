@@ -93,6 +93,7 @@ async function world(extraEnv: Record<string, string> = {}) {
     buyFetch: fake.fetchImpl,
     buySettleDelayMs: 0,
     buyConvertOverride: { provider, buyerSwap },
+    officialCorridors: async () => ({ symbols: new Set(['cNGN', 'USDC', 'wARS', 'wBRL', 'IDRX']), addresses: new Set<string>(), source: 'built-in-snapshot' as const, fetchedAt: '2026-10-17T00:00:00.000Z' }),
     log: () => undefined,
   }))!;
   return { market, fake, provider, balances, tokenBalances, celoBalances };
@@ -134,7 +135,8 @@ for (const sym of FOUR) {
       assert.equal(c.address.toLowerCase(), f.address.toLowerCase());
       assert.equal(c.decimals, f.decimals);
       assert.equal(c.route, `${sym} -> USDT on Textile (Celo)`);
-      assert.ok(['needs_live_test', 'available'].includes(c.status));
+      assert.equal(c.status, 'simulated', 'the SIMULATED test provider is never labelled Live');
+      assert.equal(c.statusLabel, 'Simulated');
       assert.equal(c.evidence.executedByPayrailOnMainnet, false, `${sym} must not claim a mainnet execution it never had`);
       const b = await walletBuyer(s);
       const q = await quoteBuy(s, b);

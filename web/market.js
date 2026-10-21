@@ -439,7 +439,7 @@ async function renderSeller() {
     el('div', { class: 'row' },
       el('strong', { text: `Earnings: ${earn.earnings} ${earn.asset}` }), isDev() ? chip('TEST CREDITS (development)') : chip('REAL USDT', 'ok'),
       el('button', { type: 'button', class: 'secondary', text: 'Sign out', onclick: signOutSeller })),
-    el('p', { class: 'muted', text: `${listings.length} API${listings.length === 1 ? '' : 's'} · ${published} published · payouts: disabled until the secure payout flow is reviewed (earnings stay in your USDT balance)` }),
+    el('p', { class: 'muted', text: `${listings.length} API${listings.length === 1 ? '' : 's'} · ${published} published · earnings can be requested as a payout in Payout settings` }),
     el('nav', { class: 'subtabs', 'aria-label': 'Seller sections' },
       el('a', { class: `subtab${route.page === 'overview' ? ' active' : ''}`, href: '#/seller/overview', text: 'Overview' }),
       el('a', { class: `subtab${route.page === 'apis' ? ' active' : ''}`, href: '#/seller', text: `My APIs (${listings.length})` }),
@@ -456,7 +456,7 @@ async function renderSeller() {
   } else if (route.page === 'payouts') {
     const sm = await api('/seller/statement', { bearer: session.seller });
     if (mine !== renderToken) return;
-    box.append(sm.ok ? payoutHistoryPage(sm.statement) : el('p', { class: 'problem', text: fail(sm) }));
+    box.append(payoutHistoryPage());
   } else if (route.page === 'payout-settings') {
     box.append(payoutSettingsPage());
   } else if (route.page === 'earnings') {
@@ -474,13 +474,70 @@ async function renderSeller() {
 // ---- Earnings & payouts (derived from persisted executions, ledger and payouts)
 function payoutSettingsPage() {
   const wrap = el('div', { id: 'payout-settings' });
-  wrap.append(el('h3', { text: 'Payout settings' }),
-    el('p', { class: 'notice', id: 'payouts-disabled', text: 'Payouts are not enabled yet. Your earnings accrue in your Payrail USDT balance and are recorded in the ledger. Paying them out needs a secure payout design (a bounded signer, verified destination addresses and human approval) that has not been built or reviewed.' }),
-    el('ul', {},
-      el('li', { text: 'Choosing a payout currency (USDT or another asset) is unavailable until payouts are enabled.' }),
-      el('li', { text: 'Converting earnings into other currencies is unavailable: no conversion route has been verified end to end on mainnet.' }),
-      el('li', { text: 'Nothing is ever marked paid until the delivery transaction has been verified on-chain.' })));
+  const body = el('div', {});
+  wrap.append(el('h3', { text: 'Payout settings' }), body);
+  if (isDev()) { body.append(el('p', { class: 'notice', text: 'Payouts do not exist in the development environment: its earnings are test credits and cannot be withdrawn.' })); return wrap; }
+  body.append(el('p', { class: 'muted', text: 'Loading your payout details…' }));
+  api('/seller/payouts', { bearer: session.seller }).then((d) => { clear(body); drawPayouts(body, d); });
   return wrap;
+}
+
+const STATE_CLASS = { confirmed: 'ok', cancelled: 'bad', failed: 'bad', requested: 'warn', approved: 'warn', sent: 'warn' };
+function drawPayouts(body, d) {
+  if (!d.ok) { body.append(el('p', { class: 'problem', text: fail(d) })); return; }
+  if (!d.enabled || !d.summary) { body.append(el('p', { class: 'notice', id: 'payouts-off', text: 'Payouts are only available in real-funds mode.' })); return; }
+  const sm = d.summary;
+  const stat = (label, value, hint) => el('div', { class: 'stat', title: hint }, el('small', { text: label }), el('b', { text: value }), el('span', { text: sm.asset }));
+  body.append(
+    el('div', { class: 'stats', id: 'payout-summary' },
+      stat('Earned', sm.earned, sm.meaning.earned), stat('Held (outcome unknown)', sm.held, sm.meaning.held), stat('Pending payouts', sm.pending, sm.meaning.pending),
+      stat('Available to pay out', sm.available, sm.meaning.available), stat('Paid out', sm.paidOut, sm.meaning.paidOut)),
+    el('p', { class: 'muted', id: 'payout-fee-note', text: `Earned is your share only: ${sm.platformFees} ${sm.asset} was booked as the 3% platform fee on those responses and is never paid to you.` }),
+    sm.consistent ? null : el('p', { class: 'problem', id: 'payout-inconsistent', text: 'These figures do not add up (earned should equal available + pending + paid out). Do not request a payout; contact the operator.' }),
+    el('p', { class: 'notice', id: 'payout-how', text: d.how }));
+  // ---- the request form: nothing is requested until the seller confirms the amount AND the destination
+  const amount = el('input', { id: 'payout-amount', inputmode: 'decimal', placeholder: `up to ${sm.available}`, 'aria-label': 'Payout amount (USDT)' });
+  const all = el('button', { type: 'button', class: 'secondary', id: 'payout-all', text: 'Use all available', onclick: () => { amount.value = sm.available; amount.dispatchEvent(new Event('input')); } });
+  const confirmBox = el('input', { type: 'checkbox', id: 'payout-confirm' });
+  const msg = el('div', { id: 'payout-msg' });
+  const go = el('button', { type: 'button', id: 'payout-request', text: 'Request payout', disabled: '' });
+  const refresh = () => { go.disabled = !(confirmBox.checked && Number(amount.value) > 0 && d.requestsEnabled && d.destination); };
+  amount.addEventListener('input', refresh); confirmBox.addEventListener('change', refresh);
+  let pendingKey = null; // one key per confirmed request: a double click or a retry returns the same payout
+  go.addEventListener('click', async () => {
+    go.disabled = true;
+    clear(msg);
+    const text = String(amount.value).trim();
+    if (!/^\d+(\.\d{1,6})?$/.test(text) || Number(text) <= 0) { msg.append(el('p', { class: 'problem', text: 'Missing or invalid amount: enter a positive USDT amount with up to 6 decimals.' })); refresh(); return; }
+    if (!pendingKey || pendingKey.amount !== text) pendingKey = { amount: text, key: `ui-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}` };
+    const r = await api('/seller/payouts', { body: { amount: text, confirm: true, confirmDestination: d.destination, requestKey: pendingKey.key }, bearer: session.seller });
+    if (!r.ok) { msg.append(el('p', { class: 'problem', id: 'payout-error', text: `${fail(r)}. Nothing was reserved unless a payout is listed below.` })); refresh(); return; }
+    pendingKey = null;
+    flash(msg, `Requested ${r.payout.amount} ${r.payout.asset}. ${r.note}`, false);
+    api('/seller/payouts', { bearer: session.seller }).then((x) => { clear(body); drawPayouts(body, x); });
+  });
+  body.append(el('h4', { text: 'Request a payout' }),
+    el('p', { class: 'muted', text: d.limits ? `Minimum ${d.limits.min} ${sm.asset}, maximum ${d.limits.max} ${sm.asset} per payout while the system is new. You can have ${sm.maxOpenPayouts} open payouts at a time (you have ${sm.openPayouts}).` : '' }),
+    el('p', {}, el('strong', { text: 'Destination (your verified wallet, the one you signed in with): ' }), el('code', { id: 'payout-destination', text: d.destination || 'none' })),
+    d.requestsEnabled ? null : el('p', { class: 'problem', text: 'Payout requests are switched off on this server right now.' }),
+    el('div', { class: 'row' }, amount, all),
+    el('label', { class: 'check' }, confirmBox, ` I confirm: send this amount of USDT on Celo to ${d.destination || 'my wallet'}. I understand it is reserved now and paid only after an operator sends it and the transfer is verified on-chain.`),
+    el('div', { class: 'row' }, go), msg);
+  // ---- history
+  body.append(el('h4', { text: 'Payout history' }));
+  if (!d.payouts.length) { body.append(el('p', { class: 'muted', id: 'no-payouts', text: 'No payouts yet.' })); return; }
+  body.append(el('table', { id: 'payout-history' }, el('tr', {}, ...['Requested', 'Amount', 'Status', 'Transaction', ''].map((h) => el('th', { text: h }))),
+    ...d.payouts.map((p) => el('tr', { 'data-payout': p.id, 'data-state': p.state },
+      el('td', { text: p.requestedAt.slice(0, 19).replace('T', ' ') }),
+      el('td', { text: `${p.amount} ${p.asset}` }),
+      el('td', {}, el('span', { class: `badge ${STATE_CLASS[p.state] || ''}`, text: p.label })),
+      el('td', {}, p.txHash ? el('a', { href: p.txUrl, target: '_blank', rel: 'noopener noreferrer', text: p.txHash }) : el('span', { class: 'muted', text: p.state === 'confirmed' ? 'delivered' : 'not sent yet' })),
+      el('td', {}, p.cancellable ? el('button', { type: 'button', class: 'secondary', text: 'Cancel', onclick: async (e) => {
+        e.target.disabled = true;
+        const r = await api(`/seller/payouts/${p.id}/cancel`, { body: {}, bearer: session.seller });
+        if (!r.ok) { flash(msg, fail(r), true); e.target.disabled = false; return; }
+        api('/seller/payouts', { bearer: session.seller }).then((x) => { clear(body); drawPayouts(body, x); });
+      } }) : null)))));
 }
 
 // ---- seller overview: compact summary cards computed from the same statement the Earnings page uses
@@ -503,7 +560,7 @@ function sellerOverviewPage(sm, listings) {
       stat('Total earned', earned), stat('Platform fees (3%)', fees), stat('Available to pay out', available),
       stat('Payouts pending', pending), stat('Payouts completed', completed)),
     el('p', { class: 'muted', text: isDev() ? 'DEVELOPMENT: these are test credits. They are not money and cannot be withdrawn.' : 'Earnings are real USDT credited to your Payrail balance only for responses that met the contract. The 3% platform fee is already deducted.' }));
-  wrap.append(el('p', {}, el('strong', { text: 'Payouts: ' }), 'disabled until the secure payout flow is reviewed · ',
+  wrap.append(el('p', {}, el('strong', { text: 'Payouts: ' }), 'request them in ',
     el('a', { href: '#/seller/payout-settings', text: 'Payout settings' }), ' · ', el('a', { href: '#/seller/payouts', text: 'Payout history' })));
   wrap.append(el('h3', { text: `Your APIs (${listings.length})` }));
   if (!listings.length) wrap.append(el('p', { class: 'muted', text: 'No APIs yet.' }), el('a', { class: 'btn', href: '#/seller/new', text: 'Create your first API' }));
@@ -518,18 +575,12 @@ function sellerOverviewPage(sm, listings) {
 }
 
 // ---- payout history: every payout with its real lifecycle state; nothing is "complete" until delivery was verified
-function payoutHistoryPage(sm) {
-  const wrap = el('div', {});
-  if (!sm.payouts.length) {
-    wrap.append(el('p', { class: 'muted', id: 'no-payouts', text: 'No payouts. Seller payouts are disabled until the secure payout flow is reviewed; your earnings stay in your USDT balance.' }));
-  } else {
-    wrap.append(el('table', {}, el('tr', {}, ...['Requested', 'Amount', 'State', 'Transaction'].map((h) => el('th', { text: h }))),
-      ...sm.payouts.map((p) => el('tr', {},
-        el('td', { text: p.requestedAt.slice(0, 19).replace('T', ' ') }),
-        el('td', { text: `${p.amount.display} ${p.asset}` }),
-        el('td', {}, chip(p.state === 'confirmed' ? 'completed' : p.state === 'failed' || p.state === 'cancelled' ? 'failed' : 'pending', p.state === 'confirmed' ? 'ok' : p.state === 'failed' || p.state === 'cancelled' ? 'bad' : 'warn')),
-        el('td', { text: p.txHash || (p.state === 'confirmed' ? 'delivered' : 'not sent yet') })))));
-  }
+function payoutHistoryPage() {
+  const wrap = el('div', { id: 'payout-history-page' });
+  const body = el('div', {});
+  wrap.append(body);
+  if (isDev()) { body.append(el('p', { class: 'notice', text: 'Payouts do not exist in the development environment.' })); return wrap; }
+  api('/seller/payouts', { bearer: session.seller }).then((d) => { clear(body); drawPayouts(body, d); });
   return wrap;
 }
 
@@ -551,9 +602,9 @@ function earningsPage(sm) {
     wrap.append(el('p', { text: `${l.asset}: available to pay out ${l.available.display} · payout pending ${l.pendingPayout.display}` }));
   }
   for (const t of sm.payoutTotals) wrap.append(el('p', { text: `${t.asset} payouts: pending ${t.pending.display} · completed ${t.completed.display}` }));
-  wrap.append(el('p', { class: 'muted', text: 'Payouts are disabled until the secure payout flow is reviewed. Nothing here can be withdrawn yet.' }));
+  wrap.append(el('p', { class: 'muted', text: 'Request a payout in Payout settings. A payout is only marked paid after the transfer is verified on-chain.' }));
   wrap.append(el('h3', { text: 'Payouts' }));
-  if (!sm.payouts.length) wrap.append(el('p', { class: 'muted', text: 'No payouts. Payouts are disabled until the secure payout flow is reviewed.' }));
+  if (!sm.payouts.length) wrap.append(el('p', { class: 'muted', text: 'No payouts yet.' }));
   else wrap.append(el('ul', {}, ...sm.payouts.map((p) => el('li', { text: `${p.requestedAt.slice(0, 19).replace('T', ' ')}  ${p.amount.display} ${p.asset}  ${p.state}${p.txHash ? '  tx ' + p.txHash : ''}` }))));
   wrap.append(el('h3', { text: 'Recent sales' }));
   if (!sm.recentSales.length) wrap.append(el('p', { class: 'muted', text: 'No qualifying sales yet.' }));

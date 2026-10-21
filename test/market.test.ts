@@ -400,16 +400,16 @@ test('real-funds mode over HTTP (fake chain): register wallet, confirm a deposit
     const sme = await h.call('GET', '/me', { bearer: st });
     assert.equal(sme.body.live.earnings, '0.485');
     // live payout requests are refused by default; the operator must opt in explicitly
-    const refused = await h.call('POST', '/seller/payouts', { bearer: st, body: { amount: '0.4' } });
+    const refused = await h.call('POST', '/seller/payouts', { bearer: st, body: { amount: '0.4', confirm: true, confirmDestination: sw.address, requestKey: 'req-market-test-1' } });
     assert.equal(refused.status, 409);
     assert.equal(refused.body.code, 'PAYOUTS_DISABLED');
     assert.equal((await h.call('GET', '/me', { bearer: st })).body.live.earnings, '0.485', 'nothing was reserved');
     liveCfg.payoutRequestsEnabled = true;
-    const pay = await h.call('POST', '/seller/payouts', { bearer: st, body: { amount: '0.4' } });
+    const pay = await h.call('POST', '/seller/payouts', { bearer: st, body: { amount: '0.4', confirm: true, confirmDestination: sw.address, requestKey: 'req-market-test-2' } });
     assert.equal(pay.status, 201, pay.text);
     assert.equal(pay.body.payout.destination, sw.address.toLowerCase());
     assert.equal((await h.call('GET', '/me', { bearer: st })).body.live.earnings, '0.085');
-    assert.equal((await h.call('POST', '/seller/payouts', { bearer: st, body: { amount: '0.4' } })).body.code, 'INSUFFICIENT_EARNINGS');
+    assert.equal((await h.call('POST', '/seller/payouts', { bearer: st, body: { amount: '0.4', confirm: true, confirmDestination: sw.address, requestKey: 'req-market-test-3' } })).body.code, 'INSUFFICIENT_EARNINGS');
     assert.equal((await h.call('POST', `/seller/payouts/${pay.body.payout.id}/cancel`, { bearer: st })).body.payout.state, 'cancelled');
     assert.equal((await h.call('GET', '/me', { bearer: st })).body.live.earnings, '0.485');
     assert.deepEqual(verifyLedger(h.db), { ok: true, problems: [] });

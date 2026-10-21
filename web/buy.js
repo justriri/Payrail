@@ -210,15 +210,14 @@ function renderBuy(d, cfg) {
       return;
     }
     const usable = cur.currencies.filter((c) => c.available);
-    const order = { available: 0, needs_live_test: 1, temporarily_unavailable: 2, unsupported: 3 };
+    const order = { live: 0, simulated: 1, temporarily_unavailable: 2, unsupported: 3 };
     const sorted = [...cur.currencies].sort((x, y) => order[x.status] - order[y.status] || x.symbol.localeCompare(y.symbol));
-    const BADGE = { available: 'ok', needs_live_test: 'warn', temporarily_unavailable: 'warn', unsupported: 'bad' };
+    const BADGE = { live: 'ok', simulated: 'warn', temporarily_unavailable: 'warn', unsupported: 'bad' };
     // every currency Payrail knows about, with its true status: nothing is hidden and nothing is labelled better than the evidence
     const list = el('ul', { class: 'curlist', id: 'currency-status' }, ...sorted.map((c) => el('li', { class: 'cur', 'data-symbol': c.symbol, 'data-status': c.status },
       el('div', { class: 'cur-top' }, el('strong', { text: c.symbol }), ' ', el('span', { class: `badge ${BADGE[c.status] || ''}`, text: c.statusLabel })),
       el('p', { class: 'muted', text: c.statusDetail }),
       // the general Textile label, kept apart from the verification status shown in the badge above
-      el('p', { class: 'cur-live', 'data-live': c.textileLive ? 'yes' : 'no', text: c.textileLive ? 'Textile: Live' : 'Textile: Not live' }),
       c.available ? el('p', { class: 'muted', text: `Smallest swap ${c.minSell} ${c.symbol}${c.minUsdt ? ` (about ${c.minUsdt} USDT)` : ''}.` }) : null,
       c.directNote ? el('p', { class: 'muted', text: c.directNote }) : null)));
     panel.append(el('h3', { text: 'Pay with another currency' }), el('p', { class: 'muted', text: 'Textile converts it to USDT in your own wallet, then Buy is paid in USDT.' }), list);
