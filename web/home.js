@@ -62,11 +62,8 @@
       box.append(h);
       for (const c of list) {
         const lines = [txt('small', `badge-line ${c.status}`, BADGE[c.status] || c.statusLabel)];
-        if (c.status === 'live' || c.status === 'simulated') {
-          lines.push(txt('small', 'min-swap', `Smallest swap ${c.minSell} ${c.symbol}${c.minUsdt ? ` (about ${c.minUsdt} USDT)` : ''}`));
-        } else {
-          lines.push(txt('small', 'reason', short(c.reason || c.statusDetail)));
-        }
+        // a Live currency shows just "Live": no test or verification wording, no extra detail. Only a currency that cannot be used says why.
+        if (c.status !== 'live' && c.status !== 'simulated') lines.push(txt('small', 'reason', short(c.reason || c.statusDetail)));
         box.append(card(c.symbol, c.status, ...lines));
       }
     }

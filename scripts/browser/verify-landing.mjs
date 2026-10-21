@@ -48,7 +48,7 @@ await until(async () => (await state()) === 'ready');
 let cs = await cards();
 check('real response: the section is visible with every currency the server knows (nothing hidden)', (await state()) === 'ready' && ['cNGN', 'wARS', 'wBRL', 'USDC', 'IDRX'].every((x) => cs.some((c) => c.sym === x)) && cs.some((c) => c.sym === 'USAT'), cs.map((c) => `${c.sym}:${c.status}`).join(' '));
 check('real response: unsupported currencies (USAT, CELO, G$...) are shown as Unsupported with a reason; simulated routes are labelled Simulated, never Live', cs.filter((c) => ['USAT', 'wCOP', 'WETH', 'wMXN', 'CELO'].includes(c.sym)).every((c) => c.status === 'unsupported' && /Unsupported/.test(c.text)) && cs.filter((c) => ['cNGN', 'wARS', 'wBRL', 'USDC', 'IDRX'].includes(c.sym)).every((c) => c.status === 'simulated' && /Simulated/.test(c.text)) && !cs.some((c) => c.status === 'live'), cs.map((c) => `${c.sym}:${c.status}`).join(' '));
-check('real response: selectable routes show their smallest swap', cs.filter((c) => c.status === 'simulated').every((c) => /Smallest swap [\d.,]+ \S+/.test(c.text)), cs.find((c) => c.status === 'simulated')?.text);
+check('real response: a usable currency shows only its status line (no swap, test or verification wording)', cs.filter((c) => c.status === 'simulated').every((c) => c.text === `${c.sym} Simulated`), cs.find((c) => c.status === 'simulated')?.text);
 check('real response: the page says it was checked live and names the official list', /Checked live at \d{4}-/.test(await b.text('#routes-meta')), await b.text('#routes-meta'));
 await b.shot('landing-routes-real');
 
@@ -58,7 +58,7 @@ await until(async () => (await state()) === 'ready');
 cs = await cards();
 const groups = await b.ev(`JSON.stringify([...document.querySelectorAll('#asset-cards .routes-group')].map(g => g.dataset.group + ':' + g.textContent))`).then(JSON.parse);
 check('success: Live, Temporarily unavailable and Unsupported are separate, labelled groups', groups.join('|') === 'live:Live (2)|temporarily_unavailable:Temporarily unavailable (1)|unsupported:Unsupported (1)', groups.join('|'));
-check('success: Live cards show the minimum swap and USDT worth; temporary and unsupported cards show the reason instead', /Live/.test(cs.find((c) => c.sym === 'cNGN').text) && /Smallest swap 1360 cNGN \(about 0\.998 USDT\)/.test(cs.find((c) => c.sym === 'cNGN').text) && /no market makers online/.test(cs.find((c) => c.sym === 'USDC').text) && !/Smallest swap/.test(cs.find((c) => c.sym === 'USDC').text) && /not in the official Textile list/.test(cs.find((c) => c.sym === 'USAT').text));
+check('success: a Live card says only Live; temporary and unsupported cards say why', cs.find((c) => c.sym === 'cNGN').text === 'cNGN Live' && cs.find((c) => c.sym === 'wBRL').text === 'wBRL Live' && /no market makers online/.test(cs.find((c) => c.sym === 'USDC').text) && /not in the official Textile list/.test(cs.find((c) => c.sym === 'USAT').text) && !/test|verif|Smallest swap/i.test(cs.filter((c) => c.status === 'live').map((c) => c.text).join(' ')));
 check('success: a route is only Live when the server says Live (USDC stays Temporarily unavailable here)', cs.find((c) => c.sym === 'USDC').status === 'temporarily_unavailable' && cs.filter((c) => c.status === 'live').map((c) => c.sym).join() === 'cNGN,wBRL');
 check('success: USDT is always shown as the settlement currency', cs.some((c) => c.sym === 'USDT' && /Settlement currency/.test(c.text)));
 await b.shot('landing-routes-fixture');

@@ -47,6 +47,9 @@ const STATUS_LABEL: Record<CurrencyStatus, string> = {
   unsupported: 'Unsupported',
 };
 
+/** never offered as a conversion source */
+const GAS_TOKENS: ReadonlySet<string> = new Set(['CELO']);
+
 export type ConversionState = 'QUOTED' | 'PREPARED' | 'SUBMITTED' | 'CONFIRMED' | 'FAILED' | 'REVIEW' | 'EXPIRED';
 
 export interface BuyConvertDeps {
@@ -66,6 +69,8 @@ export interface BuyConvertDeps {
    * names them (PAYRAIL_BUY_CONVERT_UNDOCUMENTED). This is enforced in code, so a stale allow-list row in the database cannot switch one on.
    */
   allowUndocumented?: ReadonlySet<string>;
+  /** symbols the operator switches OFF explicitly (PAYRAIL_BUY_CONVERT_DISABLED). Nothing else in the stored allow-list can veto an official, live corridor. */
+  disabledSymbols?: ReadonlySet<string>;
   /** Textile's OFFICIAL Celo corridor list (read from its address book). Absent = the built-in snapshot. */
   officialCorridors?: () => Promise<OfficialCorridors>;
   /** read-only balance of an ERC-20 for a wallet; when present, a conversion the wallet cannot fund is refused before anything is signed */
@@ -151,13 +156,26 @@ export function createBuyConvert(d: BuyConvertDeps) {
    * swap (Textile's corridor minimum) fits the per-conversion limit. Each states how it is known. A short cache keeps the page quick.
    */
   let cache: { at: number; ttl: number; value: Awaited<ReturnType<typeof buildCurrencies>> } | undefined;
+  /**
+   * Is this route switched on? An official Textile corridor that is live is ON by default: the stored operator allow-list (conversion_assets) is only a
+   * seed and must not keep a live corridor such as wARS or wBRL off. The only vetoes are the network gas token (a buyer could spend the CELO needed
+   * for gas) and symbols the operator names in PAYRAIL_BUY_CONVERT_DISABLED.
+   */
+  const effectiveEnabled = async (r: { enabled: boolean; from: { symbol: string; address: string } }): Promise<boolean> => {
+    if (GAS_TOKENS.has(r.from.symbol) || d.disabledSymbols?.has(r.from.symbol)) return false;
+    if (r.enabled) return true;
+    return (await documentationGate(r.from.symbol, r.from.address)) === undefined;
+  };
+
   async function buildCurrencies() {
     const rs = (await d.registry.routes('funding')).filter((r) => !r.passthrough);
     return Promise.all(rs.map(async (r) => {
       let status: CurrencyStatus;
-      let reason: string | null = r.usable ? null : r.reason;
+      const on = await effectiveEnabled(r);
+      let reason: string | null = r.available && on ? null : r.reason;
+      if (GAS_TOKENS.has(r.from.symbol)) reason = `${r.from.symbol} is the network gas token: a buyer could spend the ${r.from.symbol} needed to pay gas, so it is not offered as a conversion source.`;
       let minUsdt: string | null = null;
-      const gate = r.enabled && r.available ? await documentationGate(r.from.symbol, r.from.address) : undefined;
+      const gate = on && r.available ? await documentationGate(r.from.symbol, r.from.address) : undefined;
       if (r.unavailableReason === 'provider_error') {
         // Textile could not be reached while the routes were read: temporary, and NOT the same as "not listed"
         status = 'temporarily_unavailable';
@@ -169,7 +187,7 @@ export function createBuyConvert(d: BuyConvertDeps) {
       } else if (gate) {
         status = 'unsupported';
         reason = gate;
-      } else if (!r.enabled) {
+      } else if (!on) {
         status = 'unsupported'; // not offered by this server (not registered, not on Textile's ladder, or switched off by the operator)
       } else if (!r.available) {
         // Textile lists the pair but has no makers / quote right now (or could not be reached)
@@ -210,7 +228,7 @@ export function createBuyConvert(d: BuyConvertDeps) {
         minUsdt,
         route: `${r.from.symbol} -> USDT on Textile (Celo)`,
         /** the general Textile integration label, SEPARATE from the verification status above: true only when a real (non-simulated) Textile ladder shows makers right now */
-        textileLive: r.enabled && r.available && !d.provider.simulated,
+        textileLive: on && r.available && !d.provider.simulated,
         /** Buy's 402 challenge offers USDC and USAT as well; Payrail's flow is pinned to USDT, so these are converted instead (documented, not a verified direct payment) */
         directNote: r.from.symbol === 'USDC' || r.from.symbol === 'USAT'
           ? `Buy's gateway also offers ${r.from.symbol} for its APIs, so converting is not strictly needed; Payrail's payment flow only supports USDT today, so ${r.from.symbol} is converted to USDT first.`
@@ -248,7 +266,7 @@ export function createBuyConvert(d: BuyConvertDeps) {
     const route = await d.registry.find('funding', a.symbol);
     if (!route) throw new BuyConvertError('UNSUPPORTED_CURRENCY', `${a.symbol} cannot be used: Textile has no conversion route from it to USDT, so the currency is not offered.`);
     if (route.passthrough) throw new BuyConvertError('BAD_INPUT', 'USDT needs no conversion');
-    if (!route.usable) throw new BuyConvertError('UNSUPPORTED_CURRENCY', `${route.from.symbol} cannot be used right now: ${route.reason ?? 'unavailable'}.`);
+    if (!(route.available && (await effectiveEnabled(route)))) throw new BuyConvertError('UNSUPPORTED_CURRENCY', `${route.from.symbol} cannot be used right now: ${route.reason ?? 'unavailable'}.`);
     const gated = await documentationGate(route.from.symbol, route.from.address);
     if (gated) throw new BuyConvertError('UNSUPPORTED_CURRENCY', gated);
     // pick the smallest sell amount that is at least the corridor minimum AND whose guaranteed (minimum) USDT covers the API price

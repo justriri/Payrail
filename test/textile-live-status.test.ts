@@ -291,3 +291,39 @@ test('conversion list, seller pricing list and settlement are different things: 
   }
   assert.ok(!conversion.includes('USDT'), 'USDT is the settlement currency, not a conversion source');
 });
+
+test('every official, live Textile corridor is Live on Payrail even if the stored operator allow-list has it switched off (wARS and wBRL here)', async () => {
+  const t = textile();
+  t.state.pairs = [pair('cNGN', { min: 1_360_000_000n }), pair('wARS', { min: 1_600n * 10n ** 18n }), pair('wBRL', { min: 5n * 10n ** 18n }), pair('USDC', { min: 998_881n }), pair('IDRX', { min: 1_790_000n }),
+    { sellToken: '0x471EcE3750Da237f93B8E339c536989b8978a438', buyToken: USDT, minSellAmount: 10n ** 18n, maxSellAmount: 5n * 10n ** 18n, levels: [{ sellAmount: 10n ** 18n, buyAmount: 1_000_000n }] }];
+  const bc = convert(t);
+  bc.db.prepare('UPDATE conversion_assets SET funding_enabled = 0').run(); // an old or hand-edited allow-list that vetoes everything
+  const list = await bc.currencies();
+  for (const sym of ['cNGN', 'wARS', 'wBRL', 'USDC', 'IDRX']) {
+    const c = list.find((x) => x.symbol === sym)!;
+    assert.equal(c.status, 'live', sym);
+    assert.equal(c.available, true, sym);
+    assert.doesNotMatch(`${c.reason} ${c.statusDetail}`, /operator/i, sym);
+  }
+  // the network gas token is the one thing never offered, with an honest reason
+  const celo = list.find((x) => x.symbol === 'CELO')!;
+  assert.equal(celo.status, 'unsupported');
+  assert.match(celo.reason!, /network gas token/);
+  assert.doesNotMatch(celo.reason!, /operator/i);
+  // and an estimate / price works for them
+  const buyerId = createAccount(bc.db, { kind: 'buyer', displayName: 'B' });
+  const e = await bc.estimate({ buyerId, wallet: '0x00000000000000000000000000000000000000a1', symbol: 'wBRL', targetAtomic: 5_000n });
+  assert.equal(e.conversion.sell.symbol, 'wBRL');
+  assert.equal((await bc.normalizePrice({ symbol: 'wARS', amountAtomic: 100n * 10n ** 18n })).status, 'live');
+  await assert.rejects(bc.estimate({ buyerId, wallet: '0x00000000000000000000000000000000000000a1', symbol: 'CELO', targetAtomic: 5_000n }), (e2: any) => e2.code === 'UNSUPPORTED_CURRENCY');
+});
+
+test('an explicit operator opt-out (PAYRAIL_BUY_CONVERT_DISABLED) still switches a currency off, and says so', async () => {
+  const t = textile();
+  t.state.pairs = [pair('cNGN', { min: 1_360_000_000n }), pair('wBRL', { min: 5n * 10n ** 18n })];
+  const bc = convert(t, { disabledSymbols: new Set(['wBRL']) });
+  assert.equal((await status(bc, 'cNGN')).status, 'live');
+  const w = await status(bc, 'wBRL');
+  assert.equal(w.status, 'unsupported');
+  assert.equal(w.available, false);
+});

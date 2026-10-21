@@ -176,6 +176,7 @@ export async function setupMarket(d: SetupDeps): Promise<MarketRuntime | undefin
       buyerSwap: d.buyConvertOverride?.buyerSwap ?? createBuyerSwapRuntime({ firmQuote, getAllowance: d.readAllowance, provider: textile, chainId: 42220, tag: d.attributionTag }),
       reader, usdt: usdt.address, reactor: TEXTILE_REACTOR, chainId: 42220, minConfirmations: confirmations, maxUsdtAtomic: BigInt(Math.round(maxUsd * 1_000_000)),
       officialCorridors: d.officialCorridors ?? createOfficialCorridors(),
+      disabledSymbols: new Set((env.PAYRAIL_BUY_CONVERT_DISABLED ?? '').split(',').map((x) => x.trim()).filter(Boolean)),
       allowUndocumented: new Set((env.PAYRAIL_BUY_CONVERT_UNDOCUMENTED ?? '').split(',').map((x) => x.trim()).filter(Boolean)),
       ...(d.readTokenBalance ? { tokenBalance: d.readTokenBalance } : {}), ...(d.readNativeBalance ? { nativeBalance: d.readNativeBalance } : {}),
     });
