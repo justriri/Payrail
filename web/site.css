@@ -292,3 +292,13 @@ label.check input { margin-top: 4px; }
 .assets .asset .badge-line.temporarily_unavailable { background: #fef0c7; color: #93370d; }
 .assets .asset .badge-line.unsupported { background: #f2f4f7; color: var(--muted); }
 .assets .asset .thin-note { margin-top: 6px; color: #93370d; font-size: 12.5px; line-height: 1.35; }
+
+/* GitHub verification panel */
+#github-panel { margin: 12px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
+#github-panel summary { cursor: pointer; font-weight: 600; }
+#github-panel input { width: 100%; box-sizing: border-box; }
+#github-panel pre { overflow-wrap: anywhere; white-space: pre-wrap; }
+ul.checks { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 6px; }
+ul.checks li { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; overflow-wrap: anywhere; }
+ul.checks li.ok { border-color: var(--ok, #067647); }
+ul.checks li.bad { border-color: var(--bad, #b42318); }

@@ -823,6 +823,20 @@ export function createWebServer(
         return send(res, r.ok ? 200 : 502, r);
       }
 
+      // GitHub OAuth callback: the browser returns from GitHub. The one-time state names the seller; the result goes back to the page as a short code.
+      if (opts.market?.github && url.pathname === '/api/market/github/callback' && method === 'GET') {
+        const back = (q: string) => { res.writeHead(302, { location: `/market.html${q}#/seller`, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' }); res.end(); };
+        const code = url.searchParams.get('code');
+        const state = url.searchParams.get('state');
+        if (url.searchParams.get('error') || !code || !state) return back('?github=denied');
+        try {
+          await opts.market.github.completeConnect(code, state);
+          return back('?github=connected');
+        } catch (e) {
+          return back(`?github=${encodeURIComponent((e as { code?: string }).code === 'BAD_CODE' ? 'expired' : 'error')}`);
+        }
+      }
+
       if (opts.market && url.pathname.startsWith('/api/market/') && method === 'GET') {
         const bearer = /^Bearer (\S{20,200})$/.exec(String(req.headers.authorization ?? ''))?.[1];
         const r = await handleMarket(opts.market, { method: 'GET', path: url.pathname.slice('/api/market'.length), query: url.searchParams, body: {}, bearer });

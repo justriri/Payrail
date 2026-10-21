@@ -28,6 +28,8 @@ import { BuyPayError, formatUsdt } from './buypay.ts';
 import type { BuyPay } from './buypay.ts';
 import { BuyConvertError } from './buyconvert.ts';
 import { CheckoutError } from './checkout.ts';
+import { GitHubError } from './github.ts';
+import type { GitHubVerification } from './githubproof.ts';
 import type { Checkout } from './checkout.ts';
 import type { BuyConvert } from './buyconvert.ts';
 import type { FundingConfig } from './funding.ts';
@@ -73,6 +75,8 @@ export interface MarketRuntime {
   buyConvert?: BuyConvert;
   /** purchases of seller-listed APIs: server-authoritative price, optional Textile conversion, verified deposit, one idempotent execution, one receipt */
   checkout?: Checkout;
+  /** GitHub-based ownership proof (needs the operator's GitHub OAuth App); absent = not configured */
+  github?: GitHubVerification;
   /** true when the Buy catalog comes from the simulator rather than the real gateway */
   buySimulated?: boolean;
   /** enable sandbox sellers (server-derived test wallets, in-process sandbox hosts). Test-credit mode only. */
@@ -328,7 +332,7 @@ function sumGranted(db: Db, buyerId: string): bigint {
 
 // ------------------------------------------------------------------ views
 
-function listingView(db: Db, l: Listing, forOwner: boolean, keyIds: readonly string[] = []) {
+function listingView(db: Db, l: Listing, forOwner: boolean, keyIds: readonly string[] = [], gh?: GitHubVerification) {
   const c = currentContract(db, l.id);
   const base = {
     id: l.id,
@@ -377,6 +381,7 @@ function listingView(db: Db, l: Listing, forOwner: boolean, keyIds: readonly str
     displayStatus,
     public: l.status === 'published',
     visibility: l.status === 'published' ? 'Public: buyers can find and run it in the marketplace' : 'Private: only you can see it',
+    github: gh ? gh.proofOf(l.id) : null,
     ownership: { wallet, domain, domainMethod: ch?.domainMethod ?? null, verified: l.verifiedAt !== null || l.demo },
     contractStatus: approved ? { state: 'approved', version: approved.version } : proposed.length ? { state: 'proposed', version: proposed[proposed.length - 1]!.version } : { state: 'none', version: null },
     publishReadiness: readiness,
@@ -429,11 +434,11 @@ function mapError(e: unknown): MarketResponse {
   if (e instanceof ApiError) return { status: e.status, body: { ok: false, code: e.code, message: e.message, retryable: e.status >= 500 || e.status === 429 } };
   const code = (e as { code?: string }).code ?? 'ERROR';
   const message = (e as Error).message;
-  const known = e instanceof LedgerError || e instanceof SellerError || e instanceof VaultError || e instanceof ContractError || e instanceof GatewayError || e instanceof TesterError || e instanceof FundingError || e instanceof PayoutError || e instanceof AgentError || e instanceof EscrowError || e instanceof FundingOpError || e instanceof PayoutConvError || e instanceof WalletAuthError || e instanceof BuyPayError || e instanceof BuyConvertError || e instanceof CheckoutError;
+  const known = e instanceof LedgerError || e instanceof SellerError || e instanceof VaultError || e instanceof ContractError || e instanceof GatewayError || e instanceof TesterError || e instanceof FundingError || e instanceof PayoutError || e instanceof AgentError || e instanceof EscrowError || e instanceof FundingOpError || e instanceof PayoutConvError || e instanceof WalletAuthError || e instanceof BuyPayError || e instanceof BuyConvertError || e instanceof CheckoutError || e instanceof GitHubError;
   if (!known) return { status: 500, body: { ok: false, code: 'INTERNAL_ERROR', message: 'Something went wrong on our side.' } };
   const status: Record<string, number> = {
     SESSION_INVALID: 401, NOT_OWNER: 403, NOT_FOUND: 404, INSUFFICIENT_CREDITS: 402, IDEMPOTENCY_CONFLICT: 409, WRONG_STATE: 409, HOST_CLAIMED: 409,
-    LISTING_NOT_PUBLISHED: 409, CONTRACT_NOT_APPROVED: 409, RATE_LIMITED: 429, DOMAIN_PROOF_FAILED: 422, DNS_UNAVAILABLE: 503, NOT_CONFIRMED: 422, WRONG_DESTINATION: 422, KEY_REUSED: 409, ENDPOINT_UNREACHABLE: 502, BAD_SIGNATURE: 422, WRONG_NETWORK: 422, NONCE_INVALID: 401, SERVICE_UNAVAILABLE: 409, INVALID_INPUT: 422, NO_USDT_OFFER: 409, PRICE_ABOVE_LIMIT: 422, CHALLENGE_REJECTED: 409, GATEWAY_UNREACHABLE: 502, INSUFFICIENT_USDT: 409, UNSUPPORTED_CURRENCY: 422, INSUFFICIENT_FUNDS: 409, LISTING_UNAVAILABLE: 409, NOT_REAL_LISTING: 422, PRICE_CHANGED: 409, EXPIRED: 409, OVER_DEPOSIT_LIMIT: 422, INSUFFICIENT_BALANCE: 402, CONVERSION_NOT_CONFIRMED: 409, CONVERSION_DISABLED: 409, NOT_NEEDED: 409, ABOVE_LIMIT: 422, NO_QUOTE: 409, TX_ALREADY_USED: 409, QUOTE_STALE: 409,
+    LISTING_NOT_PUBLISHED: 409, CONTRACT_NOT_APPROVED: 409, RATE_LIMITED: 429, DOMAIN_PROOF_FAILED: 422, DNS_UNAVAILABLE: 503, BAD_CODE: 422, TOKEN_REJECTED: 409, BAD_RESPONSE: 502, NOT_CONFIGURED: 409, NOT_CONFIRMED: 422, WRONG_DESTINATION: 422, KEY_REUSED: 409, ENDPOINT_UNREACHABLE: 502, BAD_SIGNATURE: 422, WRONG_NETWORK: 422, NONCE_INVALID: 401, SERVICE_UNAVAILABLE: 409, INVALID_INPUT: 422, NO_USDT_OFFER: 409, PRICE_ABOVE_LIMIT: 422, CHALLENGE_REJECTED: 409, GATEWAY_UNREACHABLE: 502, INSUFFICIENT_USDT: 409, UNSUPPORTED_CURRENCY: 422, INSUFFICIENT_FUNDS: 409, LISTING_UNAVAILABLE: 409, NOT_REAL_LISTING: 422, PRICE_CHANGED: 409, EXPIRED: 409, OVER_DEPOSIT_LIMIT: 422, INSUFFICIENT_BALANCE: 402, CONVERSION_NOT_CONFIRMED: 409, CONVERSION_DISABLED: 409, NOT_NEEDED: 409, ABOVE_LIMIT: 422, NO_QUOTE: 409, TX_ALREADY_USED: 409, QUOTE_STALE: 409,
     WALLET_TAKEN: 409, NO_FUNDING_WALLET: 409, TX_NOT_FOUND: 404, TX_REVERTED: 422, NOT_ENOUGH_CONFIRMATIONS: 409, NO_MATCHING_TRANSFER: 422, OVER_LIMIT: 422, READ_FAILED: 502,
     KEY_INVALID: 401, LISTING_NOT_ALLOWED: 403, ROUTE_UNAVAILABLE: 409, ADDRESS_REQUIRED: 409, ADDRESS_TAKEN: 409, BELOW_FLOOR: 422, ABOVE_DEPTH: 422, NOT_ENABLED: 409, PER_REQUEST_CAP: 403, DAILY_CAP: 403, INSUFFICIENT_EARNINGS: 409, NO_WALLET: 409, TEST_ASSET: 422, NO_SELLER_WALLET: 409, HOLD_FAILED: 502,
     BAD_AMOUNT: 400, BELOW_MINIMUM: 422, ABOVE_MAXIMUM: 422, DAILY_LIMIT: 429, TOO_MANY_OPEN: 409, QUOTE_UNAVAILABLE: 502, QUOTE_EXPIRED: 409, DIGEST_MISMATCH: 409, SIGNING_UNAVAILABLE: 409, NOT_ALLOWED: 403,
@@ -1395,10 +1400,26 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
     return ok({ currency: n.currency, amount: fmtUnits(n.amountAtomic, n.decimals), usdtAtomic: p.priceAtomic.toString(), usdt: formatAtomic(p.priceAtomic), rate: n.rate, quotedAt: n.quotedAt, source: n.source, limitations: p.limitations ?? [] });
   }
 
+  // ---- GitHub connection (seller). The OAuth callback itself is handled in webapi.ts: it has no bearer, the one-time state identifies the seller.
+  if (path === '/github/status' && method === 'GET') {
+    const id = seller();
+    return ok(rt.github ? rt.github.status(id) : { configured: false, connected: false, login: null, note: 'GitHub verification is not set up on this server. Use the DNS record or the well-known file.' });
+  }
+  if (path === '/github/connect' && method === 'POST') {
+    const id = seller();
+    if (!rt.github) throw new ApiError(409, 'NOT_CONFIGURED', 'GitHub verification is not set up on this server. Use the DNS record or the well-known file.');
+    return ok(rt.github.startConnect(id));
+  }
+  if (path === '/github/disconnect' && method === 'POST') {
+    const id = seller();
+    if (rt.github) rt.github.disconnect(id);
+    return ok({ connected: false });
+  }
+
   // ---- seller
   if (method === 'GET' && path === '/seller/listings') {
     const id = seller();
-    return ok({ listings: listingsOf(db, id).map((l) => listingView(db, l, true, rt.keys.map((k) => k.id))) });
+    return ok({ listings: listingsOf(db, id).map((l) => listingView(db, l, true, rt.keys.map((k) => k.id), rt.github)) });
   }
   if (method === 'POST' && path === '/seller/listings') {
     const id = seller();
@@ -1412,7 +1433,7 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
       { name: str(body.name, 'name', 80), description: typeof body.description === 'string' ? body.description : '', endpointUrl: str(body.endpointUrl, 'endpointUrl', 500), method: meth, priceAtomic: priced.priceAtomic, ...(priced.listed ? { listed: priced.listed } : {}), asset: rt.live ? liveOnly().asset : body.live === true ? liveOnly().asset : TEST_ASSET },
       now,
     );
-    return ok({ listing: listingView(db, r.listing, true, rt.keys.map((k) => k.id)) }, 201);
+    return ok({ listing: listingView(db, r.listing, true, rt.keys.map((k) => k.id), rt.github) }, 201);
   }
   if ((m = path.match(/^\/seller\/listing\/([\w-]{1,80})(?:\/([a-z-]+))?$/))) {
     const id = seller();
@@ -1420,7 +1441,7 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
     const action = m[2];
     const l = getListing(db, lid);
     if (!l || l.sellerId !== id) throw new ApiError(404, 'NOT_FOUND', 'no such listing');
-    const view = () => ok({ listing: listingView(db, getListing(db, lid)!, true, rt.keys.map((k) => k.id)) });
+    const view = () => ok({ listing: listingView(db, getListing(db, lid)!, true, rt.keys.map((k) => k.id), rt.github) });
     if (method === 'GET' && !action) return view();
     if (method === 'POST') {
       switch (action) {
@@ -1439,6 +1460,17 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
           }
           await submitWalletProof(db, id, lid, signature, now);
           return view();
+        }
+        case 'github-start': {
+          if (!rt.github) throw new ApiError(409, 'NOT_CONFIGURED', 'GitHub verification is not set up on this server. Use the DNS record or the well-known file.');
+          const g = await rt.github.start(id, lid, str(body.repoUrl, 'repoUrl', 300));
+          return ok({ ...g, listing: listingView(db, getListing(db, lid)!, true, rt.keys.map((k) => k.id), rt.github) });
+        }
+        case 'github-check': {
+          if (!rt.github) throw new ApiError(409, 'NOT_CONFIGURED', 'GitHub verification is not set up on this server. Use the DNS record or the well-known file.');
+          const g = await rt.github.check(id, lid);
+          // `verified` (not `ok`: that name belongs to the response envelope) says whether ALL checks passed
+          return ok({ verified: g.ok, checks: g.checks, repo: g.repo, listing: listingView(db, getListing(db, lid)!, true, rt.keys.map((k) => k.id), rt.github) }, 200);
         }
         case 'domain-proof': {
           const meth = body.method === 'well_known' ? 'well_known' : body.method === 'dns_txt' ? 'dns_txt' : undefined;

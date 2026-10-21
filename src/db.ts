@@ -635,6 +635,57 @@ ALTER TABLE payouts ADD COLUMN request_key TEXT;
 CREATE UNIQUE INDEX payouts_request_key ON payouts (seller_id, request_key) WHERE request_key IS NOT NULL;
 `;
 
+/**
+ * Version 17: GitHub-based ownership proof (an alternative to the DNS TXT record and the well-known file).
+ *  - ownership_challenges may now record domain_method 'github' (table rebuilt because of its CHECK constraint; rows are copied unchanged)
+ *  - github_connections: the seller's GitHub identity and their access token SEALED with the vault master key (never returned by any route)
+ *  - github_oauth_states: one-time, expiring, account-bound OAuth states (only a hash is stored)
+ *  - listing_github_proofs: which repository (numeric id) and GitHub user a listing was verified with, and what was checked
+ */
+const V17 = `
+CREATE TABLE ownership_challenges_new (
+  listing_id TEXT PRIMARY KEY REFERENCES listings(id),
+  token TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  wallet_signature TEXT,
+  wallet_verified_at TEXT,
+  domain_method TEXT CHECK (domain_method IN ('dns_txt','well_known','github')),
+  domain_verified_at TEXT
+) STRICT;
+INSERT INTO ownership_challenges_new (listing_id, token, created_at, wallet_signature, wallet_verified_at, domain_method, domain_verified_at)
+  SELECT listing_id, token, created_at, wallet_signature, wallet_verified_at, domain_method, domain_verified_at FROM ownership_challenges;
+DROP TABLE ownership_challenges;
+ALTER TABLE ownership_challenges_new RENAME TO ownership_challenges;
+CREATE TABLE github_connections (
+  account_id TEXT PRIMARY KEY REFERENCES accounts(id),
+  github_user_id INTEGER NOT NULL,
+  login TEXT NOT NULL,
+  token_sealed TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+) STRICT;
+CREATE TABLE github_oauth_states (
+  state_hash TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id),
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  used_at TEXT
+) STRICT;
+CREATE TABLE listing_github_proofs (
+  listing_id TEXT PRIMARY KEY REFERENCES listings(id),
+  repo_id INTEGER NOT NULL,
+  repo_full_name TEXT NOT NULL,
+  default_branch TEXT NOT NULL,
+  github_user_id INTEGER NOT NULL,
+  github_login TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  verified_at TEXT,
+  file_sha TEXT,
+  endpoint_status INTEGER,
+  last_checks_json TEXT
+) STRICT;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'accounts, listings, contracts, ledger, executions, audit', sql: V1 },
   { version: 2, name: 'encrypted seller credentials', sql: V2 },
@@ -652,6 +703,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 14, name: 'listing prices in other currencies (original price kept, USDT price normalised from a Textile quote)', sql: V14 },
   { version: 15, name: 'checkout of seller-listed APIs (authoritative price, funding transactions, execution link)', sql: V15 },
   { version: 16, name: 'idempotent seller payout requests (request key)', sql: V16 },
+  { version: 17, name: 'GitHub-based ownership proof (connections, OAuth states, listing proofs, domain_method github)', sql: V17, rebuild: true },
 ];
 
 /** Open (creating the file and folder if needed) and bring the schema up to date. ':memory:' for tests. */

@@ -222,7 +222,7 @@ export interface Challenge {
   wellKnown: { url: string; content: string };
   walletVerified: boolean;
   domainVerified: boolean;
-  domainMethod: 'dns_txt' | 'well_known' | null;
+  domainMethod: 'dns_txt' | 'well_known' | 'github' | null;
 }
 export function walletMessage(listingId: string, host: string, token: string, w: string): string {
   return `Payrail listing ownership\nListing: ${listingId}\nHost: ${host}\nToken: ${token}\nWallet: ${w}`;
@@ -319,11 +319,21 @@ export async function checkDomainProof(
     }
   }
   if (!found) throw new SellerError('DOMAIN_PROOF_FAILED', `${method === 'dns_txt' ? `The TXT record at ${ch.dnsRecord.name}` : `The file at ${ch.wellKnown.url}`} does not contain the expected value. ${HOW_TO_PROVE(ch)}`);
+  return recordDomainProof(db, actorId, listingId, method, now);
+}
+
+/**
+ * Record that the host proof for a listing has been established (by DNS, by the well-known file, or by the GitHub flow, which checks the same
+ * file on the deployed host AND the repository). The one-seller-per-verified-host rule applies to every method.
+ */
+export function recordDomainProof(db: Db, actorId: string, listingId: string, method: 'dns_txt' | 'well_known' | 'github', now: Clock = Date.now, detail?: Record<string, unknown>): Challenge {
+  const l = owned(db, listingId, actorId);
+  if (!['draft', 'verified'].includes(l.status)) throw new SellerError('WRONG_STATE', `listing is ${l.status}`);
   // another seller who already verified this host keeps it until they release it
   const clash = queryOne(db, "SELECT id FROM listings WHERE host = ? AND seller_id <> ? AND status IN ('verified','published')", l.host, actorId);
   if (clash) throw new SellerError('HOST_CLAIMED', 'this host is already verified by another seller');
   db.prepare('UPDATE ownership_challenges SET domain_method = ?, domain_verified_at = ? WHERE listing_id = ?').run(method, iso(now), listingId);
-  audit(db, actorId, 'listing.domain_proof', listingId, { method }, new Date(now()));
+  audit(db, actorId, 'listing.domain_proof', listingId, { method, ...(detail ?? {}) }, new Date(now()));
   return finalize(db, listingId, actorId, now);
 }
 

@@ -15,6 +15,7 @@ import { createWebServer } from '../../src/webapi.ts';
 import { createBuyPay } from '../../src/buypay.ts';
 import { createBuyConvert } from '../../src/buyconvert.ts';
 import { createCheckout } from '../../src/checkout.ts';
+import { createGitHubVerification } from '../../src/githubproof.ts';
 import { RouteRegistry, seedConversionAssets } from '../../src/conversion.ts';
 import { TEXTILE_REACTOR } from '../../src/config.ts';
 import { createSimProvider } from '../../src/dev/simconversion.ts';
@@ -49,7 +50,12 @@ export async function startHarness({ seedLegacyDemoRows = true, capAtomic = 1_00
   const txt = new Map();
   const dns = { mode: 'ok' }; // 'refused' makes the fake DNS service unreachable (a temporary failure, not a failed proof)
   const resolver = async () => [{ address: '93.184.216.34', family: 4 }];
+  // the deployed seller host's proof file (GitHub verification): undefined = the host does not serve one
+  const hostProof = { value: undefined };
   const transport = async (r) => {
+    if (r.path === '/.well-known/payrail-verification.txt') {
+      return hostProof.value === undefined ? { status: 404, headers: { 'content-type': 'application/json' }, body: Buffer.from('{}') } : { status: 200, headers: { 'content-type': 'text/plain' }, body: Buffer.from(hostProof.value) };
+    }
     const ok = r.headers['x-api-key'] === SELLER_SECRET;
     const scenario = /[?&]scenario=([a-z0-9]+)/.exec(r.path)?.[1];
     const asOf = scenario === 'stale' ? new Date(Date.now() - 3_600_000).toISOString() : new Date().toISOString();
@@ -75,8 +81,24 @@ export async function startHarness({ seedLegacyDemoRows = true, capAtomic = 1_00
   const buyConvert = withBuy && withConversion
     ? createBuyConvert({ db, registry: new RouteRegistry(db, [simTextile]), provider: simTextile, buyerSwap: buyerSwapStub, reader: simTextile.reader, usdt: USDT, reactor: TEXTILE_REACTOR, chainId: 42220, minConfirmations: 3, maxUsdtAtomic: 5_000_000n })
     : undefined;
+  // a FAKE GitHub: users by authorization code, repositories with per-user write access and files
+  const ghState = { repos: new Map(), codes: new Map([['code-alice', { id: 1001, login: 'alice' }]]), base: '' };
+  const ghApi = {
+    authorizeUrl: (state) => `${ghState.base}/api/market/github/callback?code=code-alice&state=${state}`, // as if GitHub approved at once
+    exchangeCode: async (code) => { const u = ghState.codes.get(code); if (!u) throw Object.assign(new Error('bad code'), { code: 'BAD_CODE' }); return `tok_${u.login}_0000000000`; },
+    user: async (t) => [...ghState.codes.values()].find((u) => `tok_${u.login}_0000000000` === t),
+    repo: async (t, owner, name) => {
+      const u = [...ghState.codes.values()].find((x) => `tok_${x.login}_0000000000` === t);
+      const r = ghState.repos.get(`${owner}/${name}`.toLowerCase());
+      if (!u || !r) return null;
+      const push = r.writers.includes(u.login);
+      return { id: r.id, fullName: `${owner}/${name}`, defaultBranch: 'main', isPrivate: false, archived: false, fork: false, permissions: { admin: push, maintain: false, push, pull: true } };
+    },
+    file: async (_t, owner, name, path) => { const c = ghState.repos.get(`${owner}/${name}`.toLowerCase())?.files.get(path); return c === undefined ? null : { content: c, sha: 'blobsha1234567890' }; },
+  };
   const market = {
     db, keys: [mk], activeKey: mk,
+    github: createGitHubVerification({ db, keys: [mk], api: ghApi, fetchOptions: { resolver, transport } }),
     buyCatalog: async () => fakeBuy.catalog,
     ...(buy ? { buy } : {}),
     ...(buyConvert ? { buyConvert } : {}),
@@ -219,7 +241,7 @@ export async function startHarness({ seedLegacyDemoRows = true, capAtomic = 1_00
   }
 
   return {
-    BASE, token, db, call, receipts, txt, dns, publish, hashN: () => ++hashN, demoIds, wire, fundedBuyer, sellerKey, sellerPk, sellerToken: sc.token, buyGateway: fakeBuy.gateway, buyChain: fakeBuy, usdtBalances, simTextile,
+    BASE, token, db, call, receipts, txt, dns, hostProof, ghState, publish, hashN: () => ++hashN, demoIds, wire, fundedBuyer, sellerKey, sellerPk, sellerToken: sc.token, buyGateway: fakeBuy.gateway, buyChain: fakeBuy, usdtBalances, simTextile,
     newKey: () => generatePrivateKey(),
     close: () => new Promise((r) => server.close(() => r())),
   };

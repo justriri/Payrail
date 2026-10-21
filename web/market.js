@@ -411,7 +411,22 @@ const STATUS_CLASS = { Published: 'ok', Suspended: 'bad', Draft: '', 'Pending ve
 const chip = (text, cls) => el('span', { class: `badge ${cls || ''}`, text });
 const tick = (done, text) => el('li', { class: done ? 'step done' : 'step', text: `${done ? '✓' : '○'} ${text}` });
 
+function githubReturnNotice() {
+  const q = new URLSearchParams(location.search);
+  const g = q.get('github');
+  if (!g) return;
+  history.replaceState(null, '', location.pathname + location.hash);
+  const text = { connected: 'GitHub connected. Now choose your repository on the listing.', denied: 'GitHub authorization was cancelled: nothing was connected.', expired: 'That GitHub sign-in link expired or was already used: press Connect GitHub again.', error: 'GitHub could not be connected right now: try again.' }[g];
+  if (text) say(text, g === 'connected' ? 'ok' : 'bad');
+  // come back to the listing the seller was verifying
+  try {
+    const back = sessionStorage.getItem('payrail.ghReturn');
+    sessionStorage.removeItem('payrail.ghReturn');
+    if (back && /^#\/seller\/api\/[\w-]{1,80}$/.test(back)) location.hash = back;
+  } catch { /* optional */ }
+}
 async function renderSeller() {
+  githubReturnNotice();
   const mine = ++renderToken;
   const box = $('seller');
   if (!marketOn()) { say(''); return notEnabled(box); }
@@ -711,6 +726,67 @@ function newListingPage() {
   );
 }
 
+// ---- GitHub verification (an alternative to the DNS record and to pasting a token into the host's settings)
+function githubPanel(l) {
+  const box = el('details', { id: 'github-panel', open: '' }, el('summary', { text: 'Verify with GitHub (easiest, no DNS and no token to paste into your host)' }));
+  const body = el('div', {});
+  box.append(body);
+  const checklist = (checks) => el('ul', { id: 'github-checks', class: 'checks' }, ...checks.map((c) => el('li', { class: c.ok ? 'ok' : 'bad', 'data-check': c.id, 'data-ok': String(c.ok) },
+    el('strong', { text: `${c.ok ? '✓' : '✗'} ${c.label}` }), el('div', { class: 'muted', text: c.detail }))));
+  async function draw() {
+    clear(body);
+    const st = await api('/github/status', { bearer: session.seller });
+    if (!st.ok) { body.append(el('p', { class: 'problem', text: fail(st) })); return; }
+    body.append(el('p', { class: 'muted', id: 'github-why', text: 'GitHub proves you control a repository, not who runs a web address. So Payrail checks that the proof value (below) is in your repository, which needs your write access, AND that your live API serves the same file. An API built from your repository serves the committed file by itself: you commit one file and let it redeploy. A repository alone, its name, its README or a typed username never count, and a public repository that belongs to someone else is refused.' }));
+    if (!st.configured) { body.append(el('p', { class: 'notice', id: 'github-off', text: st.note || 'GitHub verification is not set up on this server. Use the DNS record or the well-known file.' })); return; }
+    if (!st.connected) {
+      body.append(el('div', { class: 'row' }, el('button', { type: 'button', id: 'github-connect', text: 'Connect GitHub', onclick: async (e) => {
+        e.target.disabled = true;
+        const r = await api('/github/connect', { body: {}, bearer: session.seller });
+        if (!r.ok) { say(fail(r), 'bad'); e.target.disabled = false; return; }
+        try { sessionStorage.setItem('payrail.ghReturn', `#/seller/api/${l.id}`); } catch { /* optional */ }
+        location.href = r.url; // GitHub asks the seller to authorize; no password ever reaches Payrail and no permissions are requested
+      } })), el('p', { class: 'muted', text: 'Payrail asks GitHub for no permissions beyond reading your public profile and public repositories.' }));
+      return;
+    }
+    body.append(el('p', {}, `Connected as `, el('strong', { id: 'github-login', text: st.login }), ' ', el('button', { type: 'button', class: 'secondary', id: 'github-disconnect', text: 'Disconnect', onclick: async () => { await api('/github/disconnect', { body: {}, bearer: session.seller }); draw(); } })));
+    const repoIn = el('input', { id: 'github-repo', placeholder: 'https://github.com/you/your-api', 'aria-label': 'GitHub repository address', value: (l.github && `https://github.com/${l.github.repo}`) || '' });
+    const out = el('div', { id: 'github-out' });
+    const useBtn = el('button', { type: 'button', id: 'github-use', text: 'Use this repository', onclick: async () => {
+      useBtn.disabled = true; clear(out);
+      const r = await api(`/seller/listing/${l.id}/github-start`, { body: { repoUrl: repoIn.value.trim() }, bearer: session.seller });
+      useBtn.disabled = false;
+      if (!r.ok) { out.append(el('p', { class: 'problem', id: 'github-error', text: `${r.code === 'NOT_OWNER' ? 'Repository refused' : r.code === 'BAD_INPUT' ? 'Invalid repository address' : 'Could not use that repository'}: ${r.message}` })); return; }
+      drawProof(out, r);
+    } });
+    body.append(el('label', { for: 'github-repo', text: 'Your repository' }), repoIn, el('div', { class: 'row' }, useBtn), out);
+    if (l.github && !l.github.verifiedAt) drawProof(out, { repo: { fullName: l.github.repo, defaultBranch: l.github.defaultBranch }, proofFile: { path: '.well-known/payrail-verification.txt', content: (l.challenge && l.challenge.wellKnown.content) || '', createUrl: `https://github.com/${l.github.repo}/new/${encodeURIComponent(l.github.defaultBranch)}?filename=${encodeURIComponent('.well-known/payrail-verification.txt')}&value=${encodeURIComponent((l.challenge && l.challenge.wellKnown.content) || '')}`, servedAt: l.challenge ? l.challenge.wellKnown.url : '' }, steps: [] }, l.github.checks);
+  }
+  function drawProof(out, g, prior) {
+    clear(out);
+    const result = el('div', { id: 'github-result' });
+    out.append(
+      el('p', { class: 'notice', id: 'github-repo-ok', text: `Repository ${g.repo.fullName} accepted: your GitHub account has write access to it.` }),
+      el('p', {}, el('strong', { text: 'Step 1. ' }), 'Commit this file to the default branch: ', el('a', { id: 'github-create', href: g.proofFile.createUrl, target: '_blank', rel: 'noopener noreferrer', text: 'create it on GitHub (prefilled)' })),
+      el('pre', { id: 'github-proof', text: `${g.proofFile.path}\n${g.proofFile.content}` }),
+      el('p', {}, el('strong', { text: 'Step 2. ' }), `Let your host redeploy. It must serve that file at ${g.proofFile.servedAt} (an API built from the repository does). Free hosting may take a minute to wake up.`),
+      el('p', {}, el('strong', { text: 'Step 3. ' }), 'Check:'),
+      el('div', { class: 'row' }, el('button', { type: 'button', id: 'github-check', text: 'Check now', onclick: async (e) => {
+        e.target.disabled = true; clear(result);
+        result.append(el('p', { class: 'muted', text: 'Checking GitHub, your deployed API and your endpoint…' }));
+        const r = await api(`/seller/listing/${l.id}/github-check`, { body: {}, bearer: session.seller });
+        e.target.disabled = false; clear(result);
+        if (!r.ok) { result.append(el('p', { class: 'problem', id: 'github-error', text: fail(r) })); return; }
+        result.append(checklist(r.checks));
+        if (r.verified === true && r.listing && r.listing.ownership.domain) { say('GitHub verification passed: every check succeeded.', 'ok'); await renderSeller(); return; }
+        result.append(el('p', { class: 'problem', id: 'github-failed', text: 'Not verified yet: fix the failed checks above and check again. Nothing was verified on trust.' }));
+      } })), result);
+    if (prior && prior.length) result.append(checklist(prior));
+  }
+  draw();
+  return box;
+}
+
 // ---- Manage one API
 function editorPage(l) {
   const st = per(l.id);
@@ -766,9 +842,10 @@ function editorPage(l) {
       !o.wallet && el('button', { type: 'button', class: 'secondary', text: 'Sign with wallet', onclick: async () => {
         try { const { signature } = await walletSign(ch.walletMessage); await act('/wallet-proof', { signature }, 'Wallet proof recorded.'); } catch (e) { say(e.message, 'bad'); }
       } }),
-      el('p', { text: `Domain proof: ${o.domain ? `done (${o.domainMethod === 'dns_txt' ? 'DNS record' : 'well-known file'})` : 'not done: publish ONE of these, then check'}` }),
+      el('p', { text: `Domain proof: ${o.domain ? `done (${o.domainMethod === 'dns_txt' ? 'DNS record' : o.domainMethod === 'github' ? 'GitHub' : 'well-known file'})` : 'not done: use GitHub (easiest) or publish ONE of the other proofs, then check'}` }),
       !o.domain && el('p', { class: 'muted', id: 'domain-help', text: 'You can only list an endpoint on a domain you control (for example api.yourdomain.com). Publish ONE of the two proofs below on that domain. A public third-party API (a domain you do not control) cannot be listed here.' }),
       !o.domain && el('pre', { text: `DNS TXT  ${ch.dnsRecord.name}\n  = ${ch.dnsRecord.value}\nor file  ${ch.wellKnown.url}\n  containing ${ch.wellKnown.content}` }),
+      !o.domain && githubPanel(l),
       !o.domain && el('div', { class: 'row' },
         el('button', { type: 'button', class: 'secondary', text: 'Check DNS', onclick: () => act('/domain-proof', { method: 'dns_txt' }, 'Domain verified.') }),
         el('button', { type: 'button', class: 'secondary', text: 'Check file', onclick: () => act('/domain-proof', { method: 'well_known' }, 'Domain verified.') })),
