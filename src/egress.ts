@@ -21,7 +21,7 @@ import { isIP } from 'node:net';
 export class EgressError extends Error {
   code:
     | 'URL_INVALID' | 'SCHEME_NOT_ALLOWED' | 'USERINFO_NOT_ALLOWED' | 'PORT_NOT_ALLOWED' | 'HOST_BLOCKED' | 'ADDRESS_BLOCKED'
-    | 'DNS_FAILED' | 'REDIRECT_BLOCKED' | 'TOO_MANY_REDIRECTS' | 'RESPONSE_TOO_LARGE' | 'TIMEOUT' | 'NETWORK'
+    | 'DNS_FAILED' | 'DNS_TEMPORARY' | 'REDIRECT_BLOCKED' | 'TOO_MANY_REDIRECTS' | 'RESPONSE_TOO_LARGE' | 'TIMEOUT' | 'NETWORK'
     | 'HEADER_INVALID' | 'METHOD_NOT_ALLOWED' | 'RATE_LIMITED';
   constructor(code: EgressError['code'], message: string) {
     super(message);
@@ -222,6 +222,27 @@ const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD']);
 const BLOCKED_REQUEST_HEADERS = new Set(['host', 'content-length', 'transfer-encoding', 'connection', 'keep-alive', 'te', 'trailer', 'upgrade', 'proxy-authorization', 'expect', 'accept-encoding', 'cookie']);
 const KEPT_RESPONSE_HEADERS = ['content-type', 'content-length', 'date', 'cache-control', 'retry-after', 'etag', 'last-modified', 'x-ratelimit-remaining', 'x-ratelimit-reset'];
 
+/** Resolver errors that mean "this name does not exist" (a definite answer), as opposed to "the resolver could not be asked" (temporary). */
+export function dnsErrorKind(e: unknown): 'absent' | 'temporary' {
+  const code = String((e as { code?: unknown })?.code ?? '');
+  const text = `${code} ${(e as Error)?.message ?? ''}`;
+  return /ENOTFOUND|ENODATA|NXDOMAIN/i.test(text) ? 'absent' : 'temporary';
+}
+
+/**
+ * The `lookup` hook that pins a socket to an address we already validated. Node (autoSelectFamily, the default since Node 20) calls
+ * lookup with `{ all: true }` and then expects an ARRAY of { address, family }; older callers expect (err, address, family). Answering with
+ * the wrong shape makes the socket read `undefined` as the address and fail with "Invalid IP address: undefined", so both shapes are honoured.
+ */
+export function pinnedLookup(ip: string, family: 4 | 6) {
+  return (_hostname: string, optionsOrCb: unknown, maybeCb?: unknown): void => {
+    const cb = (typeof optionsOrCb === 'function' ? optionsOrCb : maybeCb) as (e: Error | null, a: unknown, f?: number) => void;
+    const all = typeof optionsOrCb === 'object' && optionsOrCb !== null && (optionsOrCb as { all?: boolean }).all === true;
+    if (all) cb(null, [{ address: ip, family }]);
+    else cb(null, ip, family);
+  };
+}
+
 const defaultResolver: Resolver = async (h) => (await dnsLookup(h, { all: true, verbatim: true })).map((a) => ({ address: a.address, family: a.family }));
 
 /** The real transport: HTTPS to the PINNED address, verifying the certificate for the host name. */
@@ -237,7 +258,7 @@ export const httpsTransport: Transport = (r) =>
         servername: r.hostname,
         timeout: r.timeoutMs,
         // pin: the socket connects to the address we validated; the host name is only used for SNI/certificate checks
-        lookup: (_h, _o, cb) => (cb as unknown as (e: Error | null, a: string, f: number) => void)(null, r.ip, r.family),
+        lookup: pinnedLookup(r.ip, r.family) as never,
         rejectUnauthorized: true,
       },
       (res) => {
@@ -312,7 +333,8 @@ export async function safeFetch(rawUrl: string, opts: FetchOptions = {}): Promis
       ]);
     } catch (e) {
       if (e instanceof EgressError) throw e;
-      throw new EgressError('DNS_FAILED', `could not resolve ${hostname}`);
+      if (dnsErrorKind(e) === 'temporary') throw new EgressError('DNS_TEMPORARY', `the DNS service could not be reached while resolving ${hostname}; try again shortly`);
+      throw new EgressError('DNS_FAILED', `the name ${hostname} does not exist in DNS`);
     }
     if (answers.length === 0) throw new EgressError('DNS_FAILED', `no addresses for ${hostname}`);
     // ONE bad address rejects the host: an attacker-controlled name may mix public and private answers

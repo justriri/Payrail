@@ -134,6 +134,7 @@ function render(d, cfg) {
     el('h3', { text: 'Pricing and billing' }),
     table([
       ['Price per request', `${q.buyerPays.display} ${q.asset}`],
+      ...(l.listed ? [["Seller's pricing currency", `${l.listed.amount} ${l.listed.currency} (converted to USDT with a Textile rate of 1 ${l.listed.currency} = ${l.listed.rate} USDT, quoted ${String(l.listed.quotedAt).replace('T', ' ').slice(0, 19)} UTC; you are billed in USDT)`]] : []),
       ['Billing method', 'Outcome-based: charged only if the response meets the contract'],
       [`Platform fee (${q.platformFee.percent}%, taken from the seller's share)`, `${q.platformFee.display} ${q.asset}`],
       ['Seller receives', `${q.sellerReceives.display} ${q.asset}`],

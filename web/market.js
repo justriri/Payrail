@@ -38,6 +38,21 @@ async function api(path, { body, bearer } = {}) {
   try { return await r.json(); } catch { return { ok: false, message: 'Unreadable answer from the server.' }; }
 }
 const fail = (d) => `${d.message || 'Request failed'}${d.code ? ` (${d.code})` : ''}`;
+// seller-facing wording: say WHICH kind of problem it is (the code decides, never the text)
+const SELLER_PROBLEM = {
+  BAD_INPUT: (m) => (/endpoint/i.test(m) ? 'Invalid endpoint URL' : 'Invalid input'),
+  NOT_A_REAL_ENDPOINT: () => 'Invalid endpoint URL',
+  DOMAIN_PROOF_FAILED: () => 'Domain ownership not verified',
+  DNS_UNAVAILABLE: () => 'DNS lookup temporarily unavailable (this does not mean the proof failed)',
+  ENDPOINT_UNREACHABLE: () => 'API endpoint unreachable',
+  UNSUPPORTED_CURRENCY: () => 'Pricing currency cannot be used',
+  PRICE_UNAVAILABLE: () => 'Price cannot be converted reliably right now',
+  BAD_AMOUNT: () => 'Missing or invalid pricing information',
+};
+const sellerFail = (d) => {
+  const label = (SELLER_PROBLEM[d.code] || (() => ''))(d.message || '');
+  return label ? `${label}: ${d.message}` : fail(d);
+};
 const newKey = () => `ui-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 const flash = (box, text, bad) => { const p = el('p', { class: bad ? 'problem' : 'notice', text }); box.prepend(p); setTimeout(() => p.remove(), 9000); };
 
@@ -339,7 +354,7 @@ async function renderAgents() {
 // Seller UI state lives in `ui` (mirrored to localStorage; NEVER holds secrets) so that re-rendering the dashboard after
 // any action cannot lose what the seller typed. Secrets (credential values) are kept in memory only.
 const SELLER_UI_KEY = 'payrail.seller.ui';
-const blankForm = () => ({ name: '', desc: '', url: '', method: 'GET', price: '' });
+const blankForm = () => ({ name: '', desc: '', url: '', method: 'GET', price: '', currency: 'USDT' });
 const ui = (() => {
   try {
     const v = JSON.parse(store.get(SELLER_UI_KEY) || 'null');
@@ -496,7 +511,7 @@ function sellerOverviewPage(sm, listings) {
     wrap.append(el('table', {}, el('tr', {}, ...['API', 'Status', 'Price', ''].map((h) => el('th', { text: h }))),
       ...listings.slice(0, 8).map((l) => el('tr', {},
         el('td', { text: l.name }), el('td', {}, chip(l.displayStatus, STATUS_CLASS[l.displayStatus] || '')),
-        el('td', { text: l.price ? `${l.price.usd} ${l.price.asset}` : '' }),
+        el('td', { text: l.price ? `${l.price.usd} ${l.price.asset}${l.listed ? ` (listed ${l.listed.amount} ${l.listed.currency})` : ''}` : '' }),
         el('td', {}, el('a', { href: `#/seller/api/${l.id}`, text: 'Manage' }))))));
   }
   return wrap;
@@ -563,6 +578,7 @@ function myApisPage(listings, earn) {
       el('div', { class: 'muted', text: `${l.method} ${l.endpointUrl}` }),
       el('ul', { class: 'steps' },
         el('li', { text: `Price: ${l.price.usd} ${l.price.asset} per qualifying response (platform fee ${l.feePercent}%)` }),
+        l.listed && el('li', { id: 'listed-price', text: `Listed as ${l.listed.amount} ${l.listed.currency} (rate 1 ${l.listed.currency} = ${l.listed.rate} USDT, ${l.listed.source}, quoted ${String(l.listed.quotedAt).replace('T', ' ').slice(0, 19)} UTC)${l.listed.stale ? '. This quote is more than an hour old: save the price again to refresh it before publishing.' : ''}` }),
         tick(o.wallet, 'Wallet ownership proof'),
         tick(o.domain, `Domain ownership proof${o.domainMethod ? ` (${o.domainMethod === 'dns_txt' ? 'DNS record' : 'well-known file'})` : ''}`),
         tick(l.contractStatus.state === 'approved', `Response contract: ${l.contractStatus.state === 'none' ? 'none yet' : `v${l.contractStatus.version} ${l.contractStatus.state}`}`),
@@ -583,22 +599,60 @@ function newListingPage() {
   const method = el('select', {}, el('option', { value: 'GET', text: 'GET' }), el('option', { value: 'POST', text: 'POST' }));
   method.value = f.method; method.addEventListener('change', () => { f.method = method.value; saveUi(); });
   const msg = el('div', {});
+  // the currency list is loaded from the server (the same Textile route registry buyers use): never a list kept in this file
+  const currency = el('select', { id: 'price-currency', 'aria-label': 'Price currency' }, el('option', { value: 'USDT', text: 'USDT' }));
+  const pricePreview = el('div', { id: 'price-preview' });
+  let currencies = [];
+  api('/pricing/currencies').then((d) => {
+    if (!d.ok) { $('currency-note').textContent = `Could not load currencies (${fail(d)}). Only USDT can be used until this works.`; return; }
+    currencies = d.currencies;
+    clear(currency);
+    for (const c of d.currencies) {
+      const o = el('option', { value: c.symbol, text: c.selectable ? `${c.symbol}${c.symbol === 'USDT' ? '' : ` (${c.statusLabel})`}` : `${c.symbol} - ${c.statusLabel}: not usable` });
+      if (!c.selectable) o.disabled = true;
+      currency.append(o);
+    }
+    currency.value = currencies.some((c) => c.symbol === f.currency && c.selectable) ? f.currency : 'USDT';
+    f.currency = currency.value; saveUi();
+    $('currency-note').textContent = d.conversionEnabled ? d.note : `${d.note} Conversion is switched off on this server, so only USDT is available.`;
+  });
+  currency.value = f.currency || 'USDT';
+  currency.addEventListener('change', () => { f.currency = currency.value; saveUi(); clear(pricePreview); });
+  async function previewPrice() {
+    clear(pricePreview);
+    if (!f.price || !/^\d+(\.\d+)?$/.test(String(f.price).trim()) || Number(f.price) <= 0) { pricePreview.append(el('p', { class: 'problem', text: `${SELLER_PROBLEM.BAD_AMOUNT()}: enter a positive number such as 0.02.` })); return; }
+    pricePreview.append(el('p', { class: 'muted', text: 'Asking Textile for a rate…' }));
+    const d = await api('/pricing/normalize', { body: { currency: currency.value, amount: f.price }, bearer: session.seller });
+    clear(pricePreview);
+    if (!d.ok) { pricePreview.append(el('p', { class: 'problem', id: 'price-problem', text: sellerFail(d) })); return; }
+    pricePreview.append(el('table', { class: 'quote', id: 'price-table' },
+      el('tr', {}, el('th', { text: 'Your price' }), el('td', { class: 'v', id: 'price-yours', text: `${d.amount} ${d.currency}` })),
+      el('tr', {}, el('th', { text: 'Buyers are billed (USDT)' }), el('td', { class: 'v', id: 'price-usdt', text: `${d.usdt} USDT` })),
+      el('tr', {}, el('th', { text: 'Rate used' }), el('td', { class: 'v', text: d.currency === 'USDT' ? 'none: priced in USDT' : `1 ${d.currency} = ${d.rate} USDT` })),
+      el('tr', {}, el('th', { text: 'Source' }), el('td', { class: 'v', text: d.source })),
+      el('tr', {}, el('th', { text: 'Quoted at' }), el('td', { class: 'v', text: String(d.quotedAt).replace('T', ' ').slice(0, 19) + ' UTC' }))),
+      ...(d.limitations || []).map((t) => el('p', { class: 'muted', text: t })));
+  }
   return el('div', {},
     el('h3', { text: 'New listing' }),
     el('label', { text: 'Name' }), bind(el('input', { placeholder: 'e.g. Token price API' }), 'name'),
     el('label', { text: 'Description' }), bind(el('input', { placeholder: 'What does it return?' }), 'desc'),
     el('label', { text: 'Endpoint URL (https, fixed; buyers can only change input values)' }), bind(el('input', { placeholder: 'https://api.example.com/v1/price', type: 'url' }), 'url'),
     el('label', { text: 'HTTP method' }), method,
-    el('label', { text: `Price per qualifying response (${isDev() ? 'test credits, development only' : 'USDT'})` }), bind(el('input', { placeholder: 'e.g. 0.02' }), 'price'),
-    el('p', { class: 'muted', text: 'Listings are always priced in real USDT on Celo mainnet. Your endpoint must be a real, public https API you control.' }),
+    el('label', { text: `Price per qualifying response${isDev() ? ' (test credits, development only)' : ''}` }),
+    el('div', { class: 'row' }, bind(el('input', { placeholder: 'e.g. 0.02', id: 'price-amount', inputmode: 'decimal' }), 'price'), isDev() ? null : currency),
+    el('p', { class: 'muted', id: 'currency-note' }),
+    el('div', { class: 'row' }, el('button', { type: 'button', class: 'secondary', id: 'price-preview-btn', text: 'Show the USDT price buyers will be billed', onclick: () => previewPrice() })),
+    pricePreview,
+    el('p', { class: 'muted', text: 'Buyers are always billed in USDT on Celo mainnet. If you price in another currency, Payrail keeps your price and currency and converts it to USDT with a Textile rate. Your endpoint must be a real, public https API on a domain you control: you will prove that next (a DNS TXT record or a file on that domain).' }),
     el('p', { class: 'muted', text: 'Your entries are kept if something fails, and after a page reload, until you submit successfully.' }),
     el('div', { class: 'row' },
       el('button', { type: 'button', text: 'Submit listing', onclick: async () => {
         say('Submitting…', 'info');
-        const d = await api('/seller/listings', { body: { name: f.name, description: f.desc, endpointUrl: f.url, method: f.method, price: f.price }, bearer: session.seller });
-        if (!d.ok) { say(`Could not submit: ${fail(d)}. Your entries are still here.`, 'bad'); return; }
+        const d = await api('/seller/listings', { body: { name: f.name, description: f.desc, endpointUrl: f.url, method: f.method, price: f.price, priceCurrency: f.currency }, bearer: session.seller });
+        if (!d.ok) { say(`Could not submit. ${sellerFail(d)}. Your entries are still here.`, 'bad'); return; }
         Object.assign(f, blankForm()); saveUi();
-        say(`Saved "${d.listing.name}" as ${d.listing.displayStatus}. Continue with ownership verification below.`, 'ok');
+        say(`Saved "${d.listing.name}" as ${d.listing.displayStatus}${d.listing.listed ? ` (priced ${d.listing.listed.amount} ${d.listing.listed.currency}, billed ${d.listing.price.usd} USDT)` : ''}. It is NOT published yet: prove you control the domain next.`, 'ok');
         go(`#/seller/api/${d.listing.id}`);
       } }),
       el('button', { type: 'button', class: 'secondary', text: 'Clear form', onclick: () => { Object.assign(f, blankForm()); saveUi(); renderSeller(); } })),
@@ -613,8 +667,8 @@ function editorPage(l) {
     say('Working…', 'info');
     const d = await api(`/seller/listing/${l.id}${path}`, { body: body || {}, bearer: session.seller });
     if (!d.ok) {
-      st.note = { kind: 'bad', text: fail(d) }; saveUi();
-      say(fail(d), 'bad');
+      st.note = { kind: 'bad', text: sellerFail(d) }; saveUi();
+      say(sellerFail(d), 'bad');
       await renderSeller();
       return d;
     }
@@ -640,10 +694,13 @@ function editorPage(l) {
   // saved details
   const nameIn = bindState(el('input', {}), 'name', l.name);
   const descIn = bindState(el('input', {}), 'desc', l.description);
-  const priceIn = bindState(el('input', {}), 'price', l.price.usd);
+  const priceIn = bindState(el('input', {}), 'price', l.listed ? l.listed.amount : l.price.usd);
   page.append(el('details', { open: '' }, el('summary', { text: 'Listing details (saved in your account)' }),
     el('div', { class: 'muted', text: `${l.method} ${l.endpointUrl} (the endpoint and method are fixed once submitted; submit a new listing to change them)` }),
-    el('label', { text: 'Name' }), nameIn, el('label', { text: 'Description' }), descIn, el('label', { text: 'Price per qualifying response' }), priceIn,
+    el('p', { id: 'listed-price', text: l.listed
+      ? `Listed as ${l.listed.amount} ${l.listed.currency}; buyers are billed ${l.price.usd} USDT (rate 1 ${l.listed.currency} = ${l.listed.rate} USDT; ${l.listed.source}; quoted ${String(l.listed.quotedAt).replace('T', ' ').slice(0, 19)} UTC).${l.listed.stale ? ' This quote is more than an hour old: save the price again to refresh it before publishing.' : ''}`
+      : `Priced in USDT: buyers are billed ${l.price.usd} USDT.` }),
+    el('label', { text: 'Name' }), nameIn, el('label', { text: 'Description' }), descIn, el('label', { text: l.listed ? `Price per qualifying response (in ${l.listed.currency}; saving fetches a fresh Textile rate)` : 'Price per qualifying response (USDT)' }), priceIn,
     l.public && el('p', { class: 'muted', text: 'Unpublish before changing the price.' }),
     l.editable && el('button', { type: 'button', class: 'secondary', text: 'Save details', onclick: async () => {
       const d = await act('/details', { name: nameIn.value, description: descIn.value, price: priceIn.value }, 'Details saved.');
@@ -659,6 +716,7 @@ function editorPage(l) {
         try { const { signature } = await walletSign(ch.walletMessage); await act('/wallet-proof', { signature }, 'Wallet proof recorded.'); } catch (e) { say(e.message, 'bad'); }
       } }),
       el('p', { text: `Domain proof: ${o.domain ? `done (${o.domainMethod === 'dns_txt' ? 'DNS record' : 'well-known file'})` : 'not done: publish ONE of these, then check'}` }),
+      !o.domain && el('p', { class: 'muted', id: 'domain-help', text: 'You can only list an endpoint on a domain you control (for example api.yourdomain.com). Publish ONE of the two proofs below on that domain. A public third-party API (a domain you do not control) cannot be listed here.' }),
       !o.domain && el('pre', { text: `DNS TXT  ${ch.dnsRecord.name}\n  = ${ch.dnsRecord.value}\nor file  ${ch.wellKnown.url}\n  containing ${ch.wellKnown.content}` }),
       !o.domain && el('div', { class: 'row' },
         el('button', { type: 'button', class: 'secondary', text: 'Check DNS', onclick: () => act('/domain-proof', { method: 'dns_txt' }, 'Domain verified.') }),

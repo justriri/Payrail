@@ -9,7 +9,7 @@ import {
   ContractError, approveContract, currentContract, evaluate, hashContract, inferContract, listContracts, parseContractBody, proposeContract,
 } from '../src/contracts.ts';
 import type { ContractBody } from '../src/contracts.ts';
-import { RateLimiter } from '../src/egress.ts';
+import { EgressError, RateLimiter } from '../src/egress.ts';
 import type { EgressRequest, Resolver, Transport } from '../src/egress.ts';
 import { GatewayError, callUpstream } from '../src/gateway.ts';
 import {
@@ -386,4 +386,63 @@ test('publishing requires verification and an approved contract', async () => {
   assert.equal(publishListing(db, s.accountId, listing.id).status, 'published');
   assert.equal(publishListing(db, s.accountId, listing.id).status, 'published', 'idempotent');
   assert.ok(SellerError && GatewayError);
+});
+
+// ------------------------------------------------------------------ regression: the two reported domain-verification errors
+test('reported error 2: a refused/unavailable DNS service is a TEMPORARY failure, not a failed ownership proof', async () => {
+  const db = openDb(':memory:');
+  const { s, listing } = await sellerWithListing(db, newWallet(), 'https://jsonplaceholder.typicode.com/todos/1');
+  const refused = { txt: async () => { throw Object.assign(new Error('queryTxt ECONNREFUSED _payrail-challenge.jsonplaceholder.typicode.com'), { code: 'ECONNREFUSED' }); } };
+  const e = await checkDomainProof(db, s.accountId, listing.id, 'dns_txt', refused).catch((x) => x as SellerError);
+  assert.equal((e as SellerError).code, 'DNS_UNAVAILABLE');
+  assert.match((e as SellerError).message, /neither confirmed nor rejected/);
+  assert.match((e as SellerError).message, /try again/i);
+  assert.equal(getListing(db, listing.id)!.status, 'draft', 'nothing about the listing changed');
+  for (const c of ['ETIMEOUT', 'ESERVFAIL', 'EAI_AGAIN']) {
+    assert.equal(await code(checkDomainProof(db, s.accountId, listing.id, 'dns_txt', { txt: async () => { throw Object.assign(new Error(c), { code: c }); } })), 'DNS_UNAVAILABLE', c);
+  }
+});
+
+test('why _payrail-challenge.<host> is queried, and that a seller cannot claim a third-party domain (jsonplaceholder.typicode.com)', async () => {
+  const db = openDb(':memory:');
+  const { s, listing, challenge } = await sellerWithListing(db, newWallet(), 'https://jsonplaceholder.typicode.com/todos/1');
+  assert.equal(challenge.dnsRecord.name, '_payrail-challenge.jsonplaceholder.typicode.com', 'the record is looked up under the endpoint host: it is the host the seller claims to own');
+  // the real domain owner has published nothing: an empty answer and a missing name are both a failed proof, with instructions
+  for (const txt of [async () => [], async () => { throw Object.assign(new Error('queryTxt ENOTFOUND'), { code: 'ENOTFOUND' }); }, async () => [['v=spf1 -all']]]) {
+    const e = await checkDomainProof(db, s.accountId, listing.id, 'dns_txt', { txt }).catch((x) => x as SellerError);
+    assert.equal((e as SellerError).code, 'DOMAIN_PROOF_FAILED');
+    assert.match((e as SellerError).message, /domain you control/);
+    assert.match((e as SellerError).message, /_payrail-challenge\.jsonplaceholder\.typicode\.com/);
+    assert.match((e as SellerError).message, /third-party API/);
+    assert.match((e as SellerError).message, /payrail-verification\.txt/);
+  }
+  assert.notEqual(getListing(db, listing.id)!.status, 'verified');
+});
+
+test('a legitimate domain verifies by DNS, and is then refused to every other seller', async () => {
+  const db = openDb(':memory:');
+  const a = await sellerWithListing(db, newWallet(), 'https://api.priceco.example/v1/price');
+  const done = await verify(db, a.w, a.s.accountId, a.listing.id);
+  assert.equal(done.domainVerified, true);
+  assert.equal(getListing(db, a.listing.id)!.status, 'verified');
+  const b = await sellerWithListing(db, newWallet(), 'https://api.priceco.example/v1/other');
+  await submitWalletProof(db, b.s.accountId, b.listing.id, await b.w.signMessage({ message: b.challenge.walletMessage }), () => T0);
+  assert.equal(await code(checkDomainProof(db, b.s.accountId, b.listing.id, 'dns_txt', { txt: async () => [[b.challenge.dnsRecord.value]] })), 'HOST_CLAIMED');
+  // a token that belongs to another listing never proves this one
+  assert.equal(await code(checkDomainProof(db, b.s.accountId, b.listing.id, 'dns_txt', { txt: async () => [[a.challenge.dnsRecord.value]] })), 'DOMAIN_PROOF_FAILED');
+});
+
+test('file proof: an unreachable host or DNS outage is temporary (ENDPOINT_UNREACHABLE), a missing file is a failed proof', async () => {
+  const db = openDb(':memory:');
+  const { s, listing } = await sellerWithListing(db);
+  const wkTransport = (t: Transport, r: Resolver = resolver) => ({ fetchOptions: { resolver: r, transport: t } });
+  const dnsDown: Resolver = async () => { throw Object.assign(new Error('x'), { code: 'ECONNREFUSED' }); };
+  const gone: Resolver = async () => { throw Object.assign(new Error('x'), { code: 'ENOTFOUND' }); };
+  assert.equal(await code(checkDomainProof(db, s.accountId, listing.id, 'well_known', wkTransport(upstream('x'), dnsDown))), 'ENDPOINT_UNREACHABLE');
+  assert.equal(await code(checkDomainProof(db, s.accountId, listing.id, 'well_known', wkTransport(upstream('x'), gone))), 'ENDPOINT_UNREACHABLE');
+  const slow: Transport = async () => { throw new EgressError('TIMEOUT', 'no response'); };
+  assert.equal(await code(checkDomainProof(db, s.accountId, listing.id, 'well_known', wkTransport(slow))), 'ENDPOINT_UNREACHABLE');
+  const e = await checkDomainProof(db, s.accountId, listing.id, 'well_known', wkTransport(async () => ({ status: 404, headers: {}, body: Buffer.from('') }))).catch((x) => x as SellerError);
+  assert.equal((e as SellerError).code, 'DOMAIN_PROOF_FAILED');
+  assert.match((e as SellerError).message, /HTTP 404/);
 });

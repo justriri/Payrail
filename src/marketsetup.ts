@@ -168,6 +168,7 @@ export async function setupMarket(d: SetupDeps): Promise<MarketRuntime | undefin
       db, registry: new RouteRegistry(db, [textile]), provider: textile,
       buyerSwap: d.buyConvertOverride?.buyerSwap ?? createBuyerSwapRuntime({ firmQuote, getAllowance: d.readAllowance, provider: textile, chainId: 42220, tag: d.attributionTag }),
       reader, usdt: usdt.address, reactor: TEXTILE_REACTOR, chainId: 42220, minConfirmations: confirmations, maxUsdtAtomic: BigInt(Math.round(maxUsd * 1_000_000)),
+      allowUndocumented: new Set((env.PAYRAIL_BUY_CONVERT_UNDOCUMENTED ?? '').split(',').map((x) => x.trim()).filter(Boolean)),
       ...(d.readTokenBalance ? { tokenBalance: d.readTokenBalance } : {}), ...(d.readNativeBalance ? { nativeBalance: d.readNativeBalance } : {}),
     });
     d.log(`BUY CONVERSION ENABLED (not yet run on mainnet): buyers convert cNGN etc. to USDT with Textile in their own wallet (up to ${maxUsd} USDT per conversion), then pay Buy. Platform fee: none added here.`);

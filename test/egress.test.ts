@@ -199,3 +199,67 @@ test('rate limiter: a burst up to capacity, then refills over time, per key', ()
   t = 10_000;
   assert.deepEqual([rl.take('k'), rl.take('k'), rl.take('k'), rl.take('k')], [true, true, true, false], 'capped at capacity');
 });
+
+// ------------------------------------------------------------------ regression: "Invalid IP address: undefined"
+// Root cause: the pinned `lookup` answered (err, address, family), but Node (autoSelectFamily, default since Node 20) calls lookup with
+// { all: true } and expects an ARRAY, so the socket read `undefined` as the address. These tests use REAL sockets (loopback only).
+import { createServer, connect as netConnect } from 'node:net';
+import { pinnedLookup, httpsTransport, dnsErrorKind } from '../src/egress.ts';
+
+const withServer = async <T>(fn: (port: number, seen: () => number) => Promise<T>): Promise<T> => {
+  let connections = 0;
+  const srv = createServer((s) => { connections++; s.destroy(); });
+  await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+  try {
+    return await fn((srv.address() as { port: number }).port, () => connections);
+  } finally {
+    await new Promise<void>((r) => srv.close(() => r()));
+  }
+};
+const connectWith = (port: number, lookup: unknown) =>
+  new Promise<'connected' | string>((resolve) => {
+    const s = netConnect({ host: 'pinned.example.test', port, lookup: lookup as never });
+    s.once('connect', () => { s.destroy(); resolve('connected'); });
+    s.once('error', (e) => resolve(e.message));
+  });
+
+test('regression: the OLD lookup shape reproduces "Invalid IP address: undefined"; the pinned lookup connects', async () => {
+  await withServer(async (port) => {
+    const oldShape = (_h: string, _o: unknown, cb: (e: Error | null, a: string, f: number) => void) => cb(null, '127.0.0.1', 4);
+    assert.match(await connectWith(port, oldShape), /Invalid IP address: undefined/);
+    assert.equal(await connectWith(port, pinnedLookup('127.0.0.1', 4)), 'connected');
+  });
+});
+
+test('pinnedLookup answers both call shapes (all:true -> array, otherwise address and family)', () => {
+  const a: unknown[] = [];
+  pinnedLookup('203.0.113.9', 4)('h', { all: true }, (...x: unknown[]) => a.push(x));
+  assert.deepEqual(a[0], [null, [{ address: '203.0.113.9', family: 4 }]]);
+  const b: unknown[] = [];
+  pinnedLookup('203.0.113.9', 4)('h', {}, (...x: unknown[]) => b.push(x));
+  assert.deepEqual(b[0], [null, '203.0.113.9', 4]);
+  const c: unknown[] = [];
+  (pinnedLookup('2001:db8::1', 6) as unknown as (h: string, cb: (...x: unknown[]) => void) => void)('h', (...x: unknown[]) => c.push(x));
+  assert.deepEqual(c[0], [null, '2001:db8::1', 6]);
+});
+
+test('the real https transport connects to the PINNED address (never reads an undefined address)', async () => {
+  await withServer(async (port, seen) => {
+    let err = '';
+    try {
+      await httpsTransport({ ip: '127.0.0.1', family: 4, hostname: 'pinned.example.test', port, path: '/', method: 'GET', headers: {}, body: undefined, timeoutMs: 3_000, maxBytes: 1_000 });
+    } catch (e) { err = (e as Error).message; }
+    assert.doesNotMatch(err, /Invalid IP address/);
+    assert.equal(seen(), 1, 'the socket reached the pinned address (the TLS handshake then fails because the fake server is not TLS)');
+  });
+});
+
+test('DNS errors: a missing name is definite; every other resolver failure is temporary (ECONNREFUSED is the reported case)', async () => {
+  assert.equal(dnsErrorKind(Object.assign(new Error('queryTxt ENOTFOUND x'), { code: 'ENOTFOUND' })), 'absent');
+  assert.equal(dnsErrorKind(Object.assign(new Error('queryTxt ENODATA x'), { code: 'ENODATA' })), 'absent');
+  for (const c of ['ECONNREFUSED', 'ETIMEOUT', 'ESERVFAIL', 'EAI_AGAIN', 'ECONNRESET']) assert.equal(dnsErrorKind(Object.assign(new Error(`queryTxt ${c} x`), { code: c })), 'temporary', c);
+  const refused = async () => { throw Object.assign(new Error('getaddrinfo EAI_AGAIN'), { code: 'EAI_AGAIN' }); };
+  assert.equal(await code(safeFetch('https://api.example.com/x', { resolver: refused as never, transport: ok() })), 'DNS_TEMPORARY');
+  const gone = async () => { throw Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' }); };
+  assert.equal(await code(safeFetch('https://api.example.com/x', { resolver: gone as never, transport: ok() })), 'DNS_FAILED');
+});

@@ -577,6 +577,19 @@ CREATE TRIGGER buy_conversion_events_no_delete BEFORE DELETE ON buy_conversion_e
 ALTER TABLE buy_orders ADD COLUMN conversion_id TEXT;
 `;
 
+/**
+ * Version 14: a listing may be priced in another currency (one Textile can convert). The ORIGINAL price and currency are kept; price_atomic stays the
+ * USDT amount the marketplace bills, normalised from a Textile quote whose rate and time are recorded. NULL price_currency = priced in USDT directly.
+ */
+const V14 = `
+ALTER TABLE listings ADD COLUMN price_currency TEXT;
+ALTER TABLE listings ADD COLUMN price_decimals INTEGER;
+ALTER TABLE listings ADD COLUMN price_amount_atomic TEXT;
+ALTER TABLE listings ADD COLUMN price_rate TEXT;
+ALTER TABLE listings ADD COLUMN price_quoted_at TEXT;
+ALTER TABLE listings ADD COLUMN price_source TEXT;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'accounts, listings, contracts, ledger, executions, audit', sql: V1 },
   { version: 2, name: 'encrypted seller credentials', sql: V2 },
@@ -591,6 +604,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 11, name: 'database environment marker (production / development)', sql: V11 },
   { version: 12, name: 'direct Buy AI purchases paid by the buyer wallet (orders and events)', sql: V12 },
   { version: 13, name: 'buyer-wallet currency conversions that fund Buy AI purchases', sql: V13 },
+  { version: 14, name: 'listing prices in other currencies (original price kept, USDT price normalised from a Textile quote)', sql: V14 },
 ];
 
 /** Open (creating the file and folder if needed) and bring the schema up to date. ':memory:' for tests. */

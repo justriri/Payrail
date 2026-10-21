@@ -9,9 +9,9 @@ import type { ExecuteOptions } from './execute.ts';
 import { GatewayError, MAX_INPUT_BYTES, MAX_INPUT_KEYS, callUpstream } from './gateway.ts';
 import { LedgerError, balance, createAccount, deposit } from './ledger.ts';
 import {
-  SellerError, authenticate, challengeFor, createSandboxSeller, checkDomainProof, completeLogin, getListing, listingsOf, publishListing, startLogin, submitListing, submitWalletProof, unpublishListing,
+  SellerError, authenticate, challengeFor, createSandboxSeller, checkDomainProof, completeLogin, getListing, listingsOf, publishListing, setListingPrice, startLogin, submitListing, submitWalletProof, unpublishListing, PRICE_QUOTE_MAX_AGE_MS,
 } from './seller.ts';
-import type { DomainDeps, Listing } from './seller.ts';
+import type { DomainDeps, ListedPrice, Listing } from './seller.ts';
 import { TesterError, recentTests, runTest } from './tester.ts';
 import type { CallOptions } from './gateway.ts';
 import { VaultError, listCredentials, putCredential, revokeCredential } from './vault.ts';
@@ -332,6 +332,8 @@ function listingView(db: Db, l: Listing, forOwner: boolean, keyIds: readonly str
     host: l.host,
     method: l.method,
     price: { atomic: l.priceAtomic.toString(), usd: formatAtomic(l.priceAtomic), asset: l.asset },
+    // the seller's ORIGINAL price and currency, when it was not set in USDT (price above is what buyers are billed)
+    listed: l.listed ? { currency: l.listed.currency, amount: fmtUnits(l.listed.amountAtomic, l.listed.decimals), rate: l.listed.rate, quotedAt: l.listed.quotedAt, source: l.listed.source, stale: Date.now() - Date.parse(l.listed.quotedAt) > PRICE_QUOTE_MAX_AGE_MS } : null,
     seller: l.demo ? 'Payrail demo' : sellerLabel(db, l.sellerId),
     feePercent: l.feeBps / 100,
     demo: l.demo,
@@ -425,7 +427,7 @@ function mapError(e: unknown): MarketResponse {
   if (!known) return { status: 500, body: { ok: false, code: 'INTERNAL_ERROR', message: 'Something went wrong on our side.' } };
   const status: Record<string, number> = {
     SESSION_INVALID: 401, NOT_OWNER: 403, NOT_FOUND: 404, INSUFFICIENT_CREDITS: 402, IDEMPOTENCY_CONFLICT: 409, WRONG_STATE: 409, HOST_CLAIMED: 409,
-    LISTING_NOT_PUBLISHED: 409, CONTRACT_NOT_APPROVED: 409, RATE_LIMITED: 429, DOMAIN_PROOF_FAILED: 422, BAD_SIGNATURE: 422, WRONG_NETWORK: 422, NONCE_INVALID: 401, SERVICE_UNAVAILABLE: 409, INVALID_INPUT: 422, NO_USDT_OFFER: 409, PRICE_ABOVE_LIMIT: 422, CHALLENGE_REJECTED: 409, GATEWAY_UNREACHABLE: 502, INSUFFICIENT_USDT: 409, UNSUPPORTED_CURRENCY: 422, INSUFFICIENT_FUNDS: 409, ABOVE_LIMIT: 422, NO_QUOTE: 409, TX_ALREADY_USED: 409, QUOTE_STALE: 409,
+    LISTING_NOT_PUBLISHED: 409, CONTRACT_NOT_APPROVED: 409, RATE_LIMITED: 429, DOMAIN_PROOF_FAILED: 422, DNS_UNAVAILABLE: 503, ENDPOINT_UNREACHABLE: 502, BAD_SIGNATURE: 422, WRONG_NETWORK: 422, NONCE_INVALID: 401, SERVICE_UNAVAILABLE: 409, INVALID_INPUT: 422, NO_USDT_OFFER: 409, PRICE_ABOVE_LIMIT: 422, CHALLENGE_REJECTED: 409, GATEWAY_UNREACHABLE: 502, INSUFFICIENT_USDT: 409, UNSUPPORTED_CURRENCY: 422, INSUFFICIENT_FUNDS: 409, ABOVE_LIMIT: 422, NO_QUOTE: 409, TX_ALREADY_USED: 409, QUOTE_STALE: 409,
     WALLET_TAKEN: 409, NO_FUNDING_WALLET: 409, TX_NOT_FOUND: 404, TX_REVERTED: 422, NOT_ENOUGH_CONFIRMATIONS: 409, NO_MATCHING_TRANSFER: 422, OVER_LIMIT: 422, READ_FAILED: 502,
     KEY_INVALID: 401, LISTING_NOT_ALLOWED: 403, ROUTE_UNAVAILABLE: 409, ADDRESS_REQUIRED: 409, ADDRESS_TAKEN: 409, BELOW_FLOOR: 422, ABOVE_DEPTH: 422, NOT_ENABLED: 409, PER_REQUEST_CAP: 403, DAILY_CAP: 403, INSUFFICIENT_EARNINGS: 409, NO_WALLET: 409, TEST_ASSET: 422, NO_SELLER_WALLET: 409, HOLD_FAILED: 502,
     BAD_AMOUNT: 400, BELOW_MINIMUM: 422, ABOVE_MAXIMUM: 422, DAILY_LIMIT: 429, TOO_MANY_OPEN: 409, QUOTE_UNAVAILABLE: 502, QUOTE_EXPIRED: 409, DIGEST_MISMATCH: 409, SIGNING_UNAVAILABLE: 409, NOT_ALLOWED: 403,
@@ -1264,6 +1266,37 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
     return ok(r);
   }
 
+  // ---- pricing in other currencies: the list comes from the same Textile route registry the buyer checkout uses (one source of truth)
+  const priceFrom = async (currencyRaw: unknown, amount: unknown): Promise<{ priceAtomic: bigint; listed?: ListedPrice; limitations?: string[] }> => {
+    const cur = typeof currencyRaw === 'string' && currencyRaw.trim() ? currencyRaw.trim() : 'USDT';
+    if (cur.toUpperCase() === 'USDT') return { priceAtomic: parseAtomic(amount) };
+    if (!rt.buyConvert) throw new ApiError(422, 'UNSUPPORTED_CURRENCY', `Pricing in ${cur} is not enabled on this server: Textile conversion is switched off here. Price in USDT.`);
+    const dec = (await rt.buyConvert.pricingCurrencies()).find((x) => x.symbol.toLowerCase() === cur.toLowerCase())?.decimals;
+    if (dec === undefined) throw new ApiError(422, 'UNSUPPORTED_CURRENCY', `${cur} is not a currency Payrail can price in: Textile has no conversion route for it.`);
+    const n = await rt.buyConvert.normalizePrice({ symbol: cur, amountAtomic: parseUnitsText(amount, dec) });
+    return { priceAtomic: n.usdtAtomic, listed: { currency: n.currency, decimals: n.decimals, amountAtomic: n.amountAtomic, rate: n.rate, quotedAt: n.quotedAt, source: n.source }, limitations: n.limitations };
+  };
+  if (method === 'GET' && path === '/pricing/currencies') {
+    const list = rt.buyConvert ? await rt.buyConvert.pricingCurrencies() : [];
+    return ok({
+      base: 'USDT',
+      conversionEnabled: Boolean(rt.buyConvert),
+      note: 'Buyers are always billed in USDT on Celo. A price set in another currency is converted to USDT with a Textile rate, and both are kept. Only currencies with a current, usable Textile route can be chosen.',
+      currencies: [{ symbol: 'USDT', decimals: 6, status: 'available', statusLabel: 'Available', selectable: true, reason: null, minUsdt: null }, ...list],
+    });
+  }
+  if (method === 'POST' && path === '/pricing/normalize') {
+    seller();
+    const cur = typeof body.currency === 'string' && body.currency.trim() ? body.currency.trim() : 'USDT';
+    if (cur.toUpperCase() === 'USDT') {
+      const a = parseAtomic(body.amount);
+      return ok({ currency: 'USDT', amount: formatAtomic(a), usdtAtomic: a.toString(), usdt: formatAtomic(a), rate: '1', quotedAt: new Date(now()).toISOString(), source: 'priced in USDT directly: no conversion', limitations: [] });
+    }
+    const p = await priceFrom(cur, body.amount);
+    const n = p.listed!;
+    return ok({ currency: n.currency, amount: fmtUnits(n.amountAtomic, n.decimals), usdtAtomic: p.priceAtomic.toString(), usdt: formatAtomic(p.priceAtomic), rate: n.rate, quotedAt: n.quotedAt, source: n.source, limitations: p.limitations ?? [] });
+  }
+
   // ---- seller
   if (method === 'GET' && path === '/seller/listings') {
     const id = seller();
@@ -1273,10 +1306,12 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
     const id = seller();
     const meth = body.method === 'POST' ? 'POST' : 'GET';
     if (rt.live && isSandboxHost(safeHost(str(body.endpointUrl, 'endpointUrl', 500)))) throw new ApiError(422, 'NOT_A_REAL_ENDPOINT', 'sandbox endpoints cannot be listed in real-funds mode: use your real, public https API');
+    // the price is normalised HERE from a Textile quote; a USDT amount sent by the page is never trusted for a non-USDT price
+    const priced = await priceFrom(body.priceCurrency, body.price);
     const r = submitListing(
       db,
       id,
-      { name: str(body.name, 'name', 80), description: typeof body.description === 'string' ? body.description : '', endpointUrl: str(body.endpointUrl, 'endpointUrl', 500), method: meth, priceAtomic: parseAtomic(body.price), asset: rt.live ? liveOnly().asset : body.live === true ? liveOnly().asset : TEST_ASSET },
+      { name: str(body.name, 'name', 80), description: typeof body.description === 'string' ? body.description : '', endpointUrl: str(body.endpointUrl, 'endpointUrl', 500), method: meth, priceAtomic: priced.priceAtomic, ...(priced.listed ? { listed: priced.listed } : {}), asset: rt.live ? liveOnly().asset : body.live === true ? liveOnly().asset : TEST_ASSET },
       now,
     );
     return ok({ listing: listingView(db, r.listing, true, rt.keys.map((k) => k.id)) }, 201);
@@ -1342,7 +1377,13 @@ async function route(rt: MarketRuntime, req: MarketRequest): Promise<MarketRespo
           const patch: { name?: string; description?: string; priceAtomic?: bigint } = {};
           if (typeof body.name === 'string') patch.name = body.name;
           if (typeof body.description === 'string') patch.description = body.description;
-          if (body.price !== undefined) patch.priceAtomic = parseAtomic(body.price);
+          if (body.price !== undefined) {
+            // a price change always goes through the same normalisation as a new listing (original currency kept, USDT from a fresh Textile quote)
+            const priced = await priceFrom(body.priceCurrency ?? l.listed?.currency, body.price);
+            updateListingDetails(db, id, lid, patch, now);
+            setListingPrice(db, id, lid, { priceAtomic: priced.priceAtomic, ...(priced.listed ? { listed: priced.listed } : {}) }, now);
+            return view();
+          }
           updateListingDetails(db, id, lid, patch, now);
           return view();
         }

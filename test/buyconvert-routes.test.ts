@@ -43,7 +43,12 @@ const ON_CHAIN: Record<string, { address: string; decimals: number }> = {
   CELO: { address: '0x471EcE3750Da237f93B8E339c536989b8978a438', decimals: 18 },
 };
 /** the routes the application enables (funding: X -> USDT). CELO is listed by Textile but deliberately kept off. */
-const ENABLED = ['cNGN', 'wARS', 'wBRL', 'USDC', 'USAT', 'IDRX', 'wCOP', 'WETH', 'wMXN'];
+/** corridors Textile's OFFICIAL address book lists for Celo (read 2026-10-17): cNGN, USDC, wARS, wBRL, IDRX (each against USDT) */
+const DOCUMENTED = ['cNGN', 'wARS', 'wBRL', 'USDC', 'IDRX'];
+/** quoted by Textile's live API with makers, but NOT in the official Celo list: Unsupported unless the operator names them */
+const UNDOCUMENTED = ['USAT', 'wCOP', 'WETH', 'wMXN'];
+const ENABLED = [...DOCUMENTED, ...UNDOCUMENTED];
+const envFor = (sym: string): Record<string, string> => (UNDOCUMENTED.includes(sym) ? { PAYRAIL_BUY_CONVERT_UNDOCUMENTED: UNDOCUMENTED.join(',') } : {});
 
 async function serve(market: MarketRuntime) {
   const { server, token } = createWebServer(createSimulatedRuntime({ scenario: 'ok', delayMs: 5 }), { token: 'routes-test', market, environment: 'production' });
@@ -132,7 +137,12 @@ test('currency list: exactly the routes with live makers and an operator opt-in 
   try {
     const c = (await s.call('GET', '/buy/currencies')).body;
     const avail = c.currencies.filter((x: any) => x.available).map((x: any) => x.symbol).sort();
-    assert.deepEqual(avail, [...ENABLED].sort());
+    assert.deepEqual(avail, [...DOCUMENTED].sort(), 'by default only corridors in the official Textile address book are offered');
+    for (const sym of UNDOCUMENTED) {
+      const x = c.currencies.find((y: any) => y.symbol === sym);
+      assert.ok(x && x.available === false && x.status === 'unsupported', `${sym} stays visible but unsupported`);
+      assert.match(x.reason, /official address book/);
+    }
     const gd = c.currencies.find((x: any) => x.symbol === 'G$');
     assert.ok(!gd || gd.available === false, 'G$ has no liquidity: listed at most as unavailable');
     for (const x of c.currencies.filter((y: any) => ON_CHAIN[y.symbol])) {
@@ -212,6 +222,7 @@ test('currency status is honest: Available only for a route executed on mainnet,
   const bc = createBuyConvert({
     db, registry: new RouteRegistry(db, [textile]), provider: textile, buyerSwap: { converterFor: () => { throw new Error('unused'); }, prepare: async () => { throw new Error('unused'); } },
     reader: { blockNumber: async () => 0n, receipt: async () => null }, usdt: USDT, reactor: TEXTILE_REACTOR, chainId: 42220, minConfirmations: 1, maxUsdtAtomic: 2_000_000n,
+    allowUndocumented: new Set(UNDOCUMENTED),
   });
   const list = await bc.currencies();
   const st = (sym: string) => list.find((c) => c.symbol === sym);
@@ -248,11 +259,32 @@ test('currency status is honest: Available only for a route executed on mainnet,
   }
 });
 
+test('the documentation gate is enforced in code: USAT, wCOP, WETH and wMXN cannot start a conversion by default, whatever the allow-list row says', async () => {
+  const w = await world();
+  const s = await serve(w.market);
+  try {
+    const b = await walletBuyer(s);
+    const q = await quoteBuy(s, b);
+    // even a database row that enables them (an older default) must not switch them on
+    w.market.db.prepare("UPDATE conversion_assets SET funding_enabled = 1").run();
+    for (const sym of UNDOCUMENTED) {
+      const r = await s.call('POST', '/buy/convert/estimate', { bearer: b.token, body: { orderId: q.order.id, symbol: sym } });
+      assert.equal(r.body.code, 'UNSUPPORTED_CURRENCY', sym);
+      assert.match(r.body.message, /official address book/);
+    }
+    const c = (await s.call('GET', '/buy/currencies')).body;
+    assert.deepEqual(c.currencies.filter((x: any) => x.available).map((x: any) => x.symbol).sort(), [...DOCUMENTED].sort());
+    assert.equal(Number((w.market.db.prepare('SELECT COUNT(*) AS n FROM buy_conversions').get() as { n: number | bigint }).n), 0);
+  } finally {
+    await s.close();
+  }
+});
+
 // ---------------------------------------------------------------------------------------------------------------- per currency
 
 for (const sym of ENABLED) {
   test(`${sym}: estimate -> wallet-signed swap -> verified from the receipt -> Buy paid in USDT; amounts, limits and receipts are right`, async () => {
-    const w = await world();
+    const w = await world(envFor(sym));
     const s = await serve(w.market);
     try {
       const b = await walletBuyer(s);
@@ -411,7 +443,7 @@ test('the same swap transaction cannot confirm two conversions, and another buye
 
 for (const sym of ENABLED) {
   test(`${sym}: a wallet that cannot cover the swap is refused BEFORE anything is signed, and no conversion record is created`, async () => {
-    const w = await world();
+    const w = await world(envFor(sym));
     const s = await serve(w.market);
     try {
       const b = await walletBuyer(s);

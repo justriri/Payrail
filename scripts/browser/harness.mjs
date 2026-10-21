@@ -46,6 +46,7 @@ export async function startHarness({ seedLegacyDemoRows = true, capAtomic = 1_00
   const receipts = new Map();
   const reader = { blockNumber: async () => 5_000n, receipt: async (h) => receipts.get(h.toLowerCase()) ?? null };
   const txt = new Map();
+  const dns = { mode: 'ok' }; // 'refused' makes the fake DNS service unreachable (a temporary failure, not a failed proof)
   const resolver = async () => [{ address: '93.184.216.34', family: 4 }];
   const transport = async (r) => {
     const ok = r.headers['x-api-key'] === SELLER_SECRET;
@@ -83,7 +84,7 @@ export async function startHarness({ seedLegacyDemoRows = true, capAtomic = 1_00
       demoCall: { limiter: new RateLimiter(100, 100), fetchOptions: { resolver: demo.resolver, transport: demo.transport, timeoutMs: 500 } },
     },
     testCall: { limiter: new RateLimiter(100, 100), fetchOptions: { resolver, transport } },
-    domain: { txt: async (name) => (txt.has(name) ? [[txt.get(name)]] : []) },
+    domain: { txt: async (name) => { if (dns.mode === 'refused') throw Object.assign(new Error(`queryTxt ECONNREFUSED ${name}`), { code: 'ECONNREFUSED' }); return txt.has(name) ? [[txt.get(name)]] : []; } },
     live: {
       funding: { chainId: 42220, token: USDT, asset: 'USDT', depositAddress: DEP, minConfirmations, maxDepositAtomic: capAtomic, reader },
       payout: { payableAssets: ['USDT'], minAtomic: 10_000n, maxAtomic: capAtomic },
@@ -212,7 +213,7 @@ export async function startHarness({ seedLegacyDemoRows = true, capAtomic = 1_00
   }
 
   return {
-    BASE, token, db, call, receipts, txt, publish, demoIds, wire, fundedBuyer, sellerKey, sellerToken: sc.token, buyGateway: fakeBuy.gateway, buyChain: fakeBuy, usdtBalances, simTextile,
+    BASE, token, db, call, receipts, txt, dns, publish, demoIds, wire, fundedBuyer, sellerKey, sellerToken: sc.token, buyGateway: fakeBuy.gateway, buyChain: fakeBuy, usdtBalances, simTextile,
     newKey: () => generatePrivateKey(),
     close: () => new Promise((r) => server.close(() => r())),
   };

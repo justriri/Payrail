@@ -8,7 +8,7 @@ import { resolveTxt } from 'node:dns/promises';
 import { verifyMessage } from 'viem';
 import { audit, inTransaction, query, queryOne } from './db.ts';
 import type { Db } from './db.ts';
-import { safeFetch, validateDestination } from './egress.ts';
+import { EgressError, dnsErrorKind, safeFetch, validateDestination } from './egress.ts';
 import type { FetchOptions } from './egress.ts';
 
 export class SellerError extends Error {
@@ -22,6 +22,8 @@ export class SellerError extends Error {
     | 'WRONG_STATE'
     | 'PROOF_MISSING'
     | 'DOMAIN_PROOF_FAILED'
+    | 'DNS_UNAVAILABLE'
+    | 'ENDPOINT_UNREACHABLE'
     | 'HOST_CLAIMED';
   constructor(code: SellerError['code'], message: string) {
     super(message);
@@ -123,6 +125,17 @@ export interface Listing {
   verifiedAt: string | null;
   /** platform-operated demo listing: served only by the in-process demo network */
   demo: boolean;
+  /** the seller's ORIGINAL price when it was set in another currency (priceAtomic is then the normalised USDT amount); null = priced in USDT */
+  listed: ListedPrice | null;
+}
+export interface ListedPrice {
+  currency: string;
+  decimals: number;
+  amountAtomic: bigint;
+  /** USDT per 1 whole unit of the currency, as a decimal string, from the Textile quote used */
+  rate: string;
+  quotedAt: string;
+  source: string;
 }
 const toListing = (r: Record<string, unknown>): Listing => ({
   id: String(r.id),
@@ -138,6 +151,10 @@ const toListing = (r: Record<string, unknown>): Listing => ({
   feeBps: Number(r.fee_bps),
   verifiedAt: r.verified_at === null ? null : String(r.verified_at),
   demo: Number(r.demo) === 1,
+  listed: r.price_currency === null || r.price_currency === undefined ? null : {
+    currency: String(r.price_currency), decimals: Number(r.price_decimals), amountAtomic: BigInt(String(r.price_amount_atomic)),
+    rate: String(r.price_rate), quotedAt: String(r.price_quoted_at), source: String(r.price_source),
+  },
 });
 
 export function getListing(db: Db, id: string): Listing | undefined {
@@ -161,6 +178,8 @@ export interface ListingInput {
   method?: 'GET' | 'POST';
   priceAtomic: bigint;
   asset: string;
+  /** set when the seller priced the API in another currency: priceAtomic is the already-normalised USDT amount */
+  listed?: ListedPrice;
 }
 
 /** Create a draft listing with an ownership challenge. The endpoint URL is validated by the same rules the gateway enforces. */
@@ -184,8 +203,9 @@ export function submitListing(db: Db, sellerId: string, i: ListingInput, now: Cl
   const token = randomBytes(24).toString('hex');
   inTransaction(db, () => {
     db.prepare(
-      "INSERT INTO listings (id, seller_id, name, status, price_atomic, asset, created_at, endpoint_url, http_method, description, host) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)",
-    ).run(id, sellerId, name, i.priceAtomic, i.asset, iso(now), dest.url.toString(), method, (i.description ?? '').slice(0, 500), dest.hostname);
+      "INSERT INTO listings (id, seller_id, name, status, price_atomic, asset, created_at, endpoint_url, http_method, description, host, price_currency, price_decimals, price_amount_atomic, price_rate, price_quoted_at, price_source) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(id, sellerId, name, i.priceAtomic, i.asset, iso(now), dest.url.toString(), method, (i.description ?? '').slice(0, 500), dest.hostname,
+      i.listed?.currency ?? null, i.listed?.decimals ?? null, i.listed ? i.listed.amountAtomic.toString() : null, i.listed?.rate ?? null, i.listed?.quotedAt ?? null, i.listed?.source ?? null);
     db.prepare('INSERT INTO ownership_challenges (listing_id, token, created_at) VALUES (?, ?, ?)').run(id, token, iso(now));
     audit(db, sellerId, 'listing.submitted', id, { host: dest.hostname }, new Date(now()));
   });
@@ -241,6 +261,15 @@ export async function submitWalletProof(db: Db, actorId: string, listingId: stri
   return finalize(db, listingId, actorId, now);
 }
 
+const errText = (e: unknown) => String((e as { code?: unknown })?.code ?? (e as Error)?.message ?? e).slice(0, 80);
+function withDeadline<T>(p: Promise<T>, ms: number): Promise<T> {
+  let t: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([p, new Promise<never>((_, rej) => { t = setTimeout(() => rej(Object.assign(new Error('DNS lookup timed out'), { code: 'ETIMEOUT' })), ms); })]).finally(() => t && clearTimeout(t));
+}
+/** The instructions a seller needs when a proof is missing. Ownership can only be shown for a host the seller controls. */
+export const HOW_TO_PROVE = (ch: Challenge) =>
+  `You can only list an endpoint on a domain you control (for example api.yourdomain.com, which may forward to your service). Either add the DNS TXT record ${ch.dnsRecord.name} = ${ch.dnsRecord.value}, or publish ${ch.wellKnown.url} containing exactly ${ch.wellKnown.content}, then check again. A public third-party API (one whose domain you do not control) cannot be listed under your account.`;
+
 export interface DomainDeps {
   txt?: (name: string) => Promise<string[][]>;
   fetchOptions?: FetchOptions;
@@ -260,18 +289,36 @@ export async function checkDomainProof(
   const ch = challengeFor(db, listingId)!;
   const expected = proofValue(ch.token);
   let found = false;
-  try {
-    if (method === 'dns_txt') {
-      const records = await (deps.txt ?? resolveTxt)(ch.dnsRecord.name);
+  if (method === 'dns_txt') {
+    try {
+      const records = await withDeadline((deps.txt ?? resolveTxt)(ch.dnsRecord.name), 8_000);
       found = records.some((chunks) => chunks.join('') === expected);
-    } else {
+    } catch (e) {
+      // "the name has no TXT record" is a definite answer (the proof is not there); anything else means DNS could not be asked,
+      // which says NOTHING about ownership and must be reported as temporary, never as a failed proof
+      if (dnsErrorKind(e) === 'temporary') {
+        throw new SellerError('DNS_UNAVAILABLE', `The DNS service could not be reached just now (${errText(e)}), so ownership was neither confirmed nor rejected. Nothing is wrong with your listing: try again in a minute.`);
+      }
+      throw new SellerError('DOMAIN_PROOF_FAILED', `No TXT record was found at ${ch.dnsRecord.name}. ${HOW_TO_PROVE(ch)}`);
+    }
+  } else {
+    try {
       const res = await safeFetch(ch.wellKnown.url, { method: 'GET', maxBytes: 512, timeoutMs: 8_000, maxRedirects: 0, ...(deps.fetchOptions ?? {}) });
       found = res.status === 200 && res.body.toString('utf8').trim() === expected;
+      if (!found && res.status !== 200) throw new SellerError('DOMAIN_PROOF_FAILED', `${ch.wellKnown.url} answered HTTP ${res.status}, not the verification file. ${HOW_TO_PROVE(ch)}`);
+    } catch (e) {
+      if (e instanceof SellerError) throw e;
+      if (e instanceof EgressError && ['DNS_TEMPORARY', 'TIMEOUT', 'NETWORK'].includes(e.code)) {
+        throw new SellerError('ENDPOINT_UNREACHABLE', `The host could not be reached just now (${e.message}), so ownership was neither confirmed nor rejected. Check that ${l.host} is online, then try again.`);
+      }
+      if (e instanceof EgressError && e.code === 'DNS_FAILED') {
+        throw new SellerError('ENDPOINT_UNREACHABLE', `${l.host} does not exist in DNS, so there is nothing to verify. Check the endpoint address.`);
+      }
+      // blocked addresses, redirects, oversize or invalid replies: the proof cannot be accepted this way
+      throw new SellerError('DOMAIN_PROOF_FAILED', `The verification file could not be accepted: ${(e as Error).message}. ${HOW_TO_PROVE(ch)}`);
     }
-  } catch (e) {
-    throw new SellerError('DOMAIN_PROOF_FAILED', `could not read the ${method === 'dns_txt' ? 'DNS record' : 'file'}: ${(e as Error).message}`);
   }
-  if (!found) throw new SellerError('DOMAIN_PROOF_FAILED', `the ${method === 'dns_txt' ? 'TXT record' : 'file'} does not contain the expected value`);
+  if (!found) throw new SellerError('DOMAIN_PROOF_FAILED', `${method === 'dns_txt' ? `The TXT record at ${ch.dnsRecord.name}` : `The file at ${ch.wellKnown.url}`} does not contain the expected value. ${HOW_TO_PROVE(ch)}`);
   // another seller who already verified this host keeps it until they release it
   const clash = queryOne(db, "SELECT id FROM listings WHERE host = ? AND seller_id <> ? AND status IN ('verified','published')", l.host, actorId);
   if (clash) throw new SellerError('HOST_CLAIMED', 'this host is already verified by another seller');
@@ -292,24 +339,56 @@ function finalize(db: Db, listingId: string, actorId: string, now: Clock): Chall
 
 // ------------------------------------------------------------------ publishing
 
+/** a USDT price derived from another currency is only trusted for this long; after that it must be re-checked against a fresh Textile quote */
+export const PRICE_QUOTE_MAX_AGE_MS = 60 * 60_000;
+
 export interface Readiness {
   ready: boolean;
   /** every unmet publication condition, in the order a seller would fix them */
-  missing: Array<{ code: 'WALLET_PROOF' | 'DOMAIN_PROOF' | 'CONTRACT_NOT_APPROVED' | 'LISTING_STATE'; message: string }>;
+  missing: Array<{ code: 'WALLET_PROOF' | 'DOMAIN_PROOF' | 'CONTRACT_NOT_APPROVED' | 'LISTING_STATE' | 'PRICE_STALE'; message: string }>;
 }
 
 /** The single definition of "may this listing be published right now?". Publishing enforces exactly this. */
-export function publishReadiness(db: Db, l: Listing): Readiness {
+export function publishReadiness(db: Db, l: Listing, now: Clock = Date.now): Readiness {
   const missing: Readiness['missing'] = [];
   if (l.status === 'suspended') missing.push({ code: 'LISTING_STATE', message: 'This listing is suspended and cannot be published.' });
   if (l.demo) return { ready: missing.length === 0, missing };
   const ch = challengeFor(db, l.id);
   if (!ch?.walletVerified) missing.push({ code: 'WALLET_PROOF', message: 'Wallet ownership proof is missing: sign the listing challenge with your wallet.' });
   if (!ch?.domainVerified) missing.push({ code: 'DOMAIN_PROOF', message: 'Domain ownership proof is missing: publish the DNS TXT record or the well-known file, then press a Check button.' });
+  if (l.listed && now() - Date.parse(l.listed.quotedAt) > PRICE_QUOTE_MAX_AGE_MS) {
+    missing.push({ code: 'PRICE_STALE', message: `The USDT price of ${formatListed(l.listed)} was fixed from a Textile quote more than an hour ago: re-check the price against a fresh Textile quote before publishing.` });
+  }
   const c = queryOne(db, "SELECT id FROM contract_versions WHERE listing_id = ? AND status = 'approved'", l.id);
   if (!c) missing.push({ code: 'CONTRACT_NOT_APPROVED', message: 'No response contract is approved yet: propose a contract and approve it.' });
   if (missing.length === 0 && l.verifiedAt === null && l.status !== 'published') missing.push({ code: 'LISTING_STATE', message: 'The listing has not been marked verified yet; re-run a proof check.' });
   return { ready: missing.length === 0, missing };
+}
+
+function formatListed(p: ListedPrice): string {
+  const s = p.amountAtomic.toString().padStart(p.decimals + 1, '0');
+  const whole = s.slice(0, s.length - p.decimals);
+  const frac = s.slice(s.length - p.decimals).replace(/0+$/, '');
+  return `${whole}${frac ? `.${frac}` : ''} ${p.currency}`;
+}
+
+/**
+ * Re-price a listing: store the seller's price in its own currency AND the USDT amount normalised from a Textile quote (the caller does the quote;
+ * this function only records it). A published listing must be unpublished first, exactly as for any price change.
+ */
+export function setListingPrice(db: Db, actorId: string, listingId: string, p: { priceAtomic: bigint; listed?: ListedPrice }, now: Clock = Date.now): Listing {
+  return inTransaction(db, () => {
+    const l = owned(db, listingId, actorId);
+    if (l.demo) throw new SellerError('WRONG_STATE', 'demo listings are managed by the platform');
+    if (l.status === 'suspended') throw new SellerError('WRONG_STATE', 'a suspended listing cannot be edited');
+    if (p.priceAtomic <= 0n) throw new SellerError('BAD_INPUT', 'price must be a positive amount');
+    if (l.status === 'published' && (p.priceAtomic !== l.priceAtomic)) throw new SellerError('WRONG_STATE', 'unpublish the listing before changing its price');
+    db.prepare('UPDATE listings SET price_atomic = ?, price_currency = ?, price_decimals = ?, price_amount_atomic = ?, price_rate = ?, price_quoted_at = ?, price_source = ? WHERE id = ?').run(
+      p.priceAtomic, p.listed?.currency ?? null, p.listed?.decimals ?? null, p.listed ? p.listed.amountAtomic.toString() : null, p.listed?.rate ?? null, p.listed?.quotedAt ?? null, p.listed?.source ?? null, listingId,
+    );
+    audit(db, actorId, 'listing.price_set', listingId, { currency: p.listed?.currency ?? 'USDT', priceAtomic: p.priceAtomic.toString() }, new Date(now()));
+    return getListing(db, listingId)!;
+  });
 }
 
 /** verified + approved contract -> published (visible to buyers). */
@@ -318,7 +397,7 @@ export function publishListing(db: Db, actorId: string, listingId: string, now: 
     const l = owned(db, listingId, actorId);
     if (l.status === 'published') return l;
     if (l.status === 'suspended') throw new SellerError('WRONG_STATE', 'a suspended listing cannot be published');
-    const r = publishReadiness(db, l);
+    const r = publishReadiness(db, l, now);
     if (!r.ready) throw new SellerError(l.status === 'draft' ? 'WRONG_STATE' : 'PROOF_MISSING', `Cannot publish yet. ${r.missing.map((m) => m.message).join(' ')}`);
     if (l.status !== 'verified' && l.status !== 'unpublished') throw new SellerError('WRONG_STATE', `a ${l.status} listing cannot be published`);
     db.prepare("UPDATE listings SET status = 'published' WHERE id = ?").run(listingId);

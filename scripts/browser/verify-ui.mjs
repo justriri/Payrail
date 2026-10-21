@@ -87,7 +87,7 @@ await go('#/seller', 1500);
 check('seller: My APIs (empty for a new seller) with a way to create one', /My APIs/.test(await b.text('#seller')) && /Create your first listing/.test(await b.text('#seller')));
 await go('#/seller/new', 1500);
 st = await b.text('#seller');
-check('seller: Create API is a guided form with real-USDT pricing, no presets or test options', /New listing/.test(st) && /Price per qualifying response \(USDT\)/.test(st) && /real, public https API/.test(st) && (await b.ev(`document.querySelectorAll('#seller input').length`)) >= 4 && (await noDemo()) === '', await noDemo());
+check('seller: Create API is a guided form with real-USDT pricing, no presets or test options', /New listing/.test(st) && /Price per qualifying response/.test(st) && /always billed in USDT/.test(st) && /real, public https API/.test(st) && (await b.ev(`document.querySelectorAll('#seller input').length`)) >= 4 && (await noDemo()) === '', await noDemo());
 await go('#/seller/earnings', 1800);
 check('seller: Earnings page states payouts are disabled', /Earnings|Gross sales|Your earnings|No requests yet/.test(await b.text('#seller')) && /Payouts are disabled/.test(await b.text('#seller')));
 await go('#/seller/payout-settings', 1500);

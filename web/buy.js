@@ -247,8 +247,13 @@ function renderBuy(d, cfg) {
     clear(box);
     box.append(
       el('table', { class: 'quote', id: 'estimate-table' },
+        el('tr', {}, el('th', { text: 'Selected API' }), el('td', { class: 'v', id: 'est-service', text: s.title })),
+        el('tr', {}, el('th', { text: 'Listed price and its currency' }), el('td', { class: 'v', id: 'est-listed', text: `${cv.apiPrice.amount} USDT (Buy prices this API in USDT)` })),
+        el('tr', {}, el('th', { text: 'Buy is paid in' }), el('td', { class: 'v', id: 'est-pay-currency', text: 'USDT on Celo (Buy accepts nothing else here)' })),
+        el('tr', {}, el('th', { text: 'Textile conversion route' }), el('td', { class: 'v', id: 'est-route', text: `${cv.sell.symbol} -> USDT (Celo, Textile reactor)` })),
+        el('tr', {}, el('th', { text: 'Quote status' }), el('td', { class: 'v', id: 'est-quote-status', text: 'INDICATIVE only. A firm Textile quote is requested when you approve, and the swap is refused if it would give you less than the minimum shown.' })),
         el('tr', {}, el('th', { text: 'API price (Buy, in USDT)' }), el('td', { class: 'v', id: 'est-api', text: `${cv.apiPrice.amount} USDT` })),
-        el('tr', {}, el('th', { text: `You sell (Textile, ${cv.sell.symbol} -> USDT)` }), el('td', { class: 'v', id: 'est-sell', text: `${cv.sell.amount} ${cv.sell.symbol}` })),
+        el('tr', {}, el('th', { text: `You will spend (Textile sells ${cv.sell.symbol} for USDT; this is more than the API price)` }), el('td', { class: 'v', id: 'est-sell', text: `${cv.sell.amount} ${cv.sell.symbol}` })),
         el('tr', {}, el('th', { text: 'Smallest swap Textile allows' }), el('td', { class: 'v', id: 'est-min-swap', text: limits ? `${limits.minSell} ${cv.sell.symbol}` : 'n/a' })),
         el('tr', {}, el('th', { text: 'Rate' }), el('td', { class: 'v', text: cv.rate })),
         el('tr', {}, el('th', { text: 'Conversion cost (Textile fee, included)' }), el('td', { class: 'v', id: 'est-fee', text: `${cv.conversionFee.amount} ${cv.conversionFee.symbol}` })),

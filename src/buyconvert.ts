@@ -21,6 +21,7 @@ import { audit, query, queryOne } from './db.ts';
 import type { Db } from './db.ts';
 import type { BuyerSwapRuntime, PrepareResult } from './buyerswap.ts';
 import { USDT_CELO } from './conversion.ts';
+import { DOCUMENTED_ON_CELO } from './routeevidence.ts';
 import type { ConversionProvider, RouteRegistry } from './conversion.ts';
 import type { ChainReader } from './funding.ts';
 import { verifyConversion } from './marketfunding.ts';
@@ -28,7 +29,7 @@ import type { FundingOp } from './marketfunding.ts';
 import type { TakerProof } from './textile.ts';
 
 export class BuyConvertError extends Error {
-  readonly code: 'UNSUPPORTED_CURRENCY' | 'NOT_FOUND' | 'NOT_OWNER' | 'WRONG_STATE' | 'BAD_INPUT' | 'ABOVE_LIMIT' | 'RATE_LIMITED' | 'NO_QUOTE' | 'TX_ALREADY_USED' | 'QUOTE_STALE' | 'INSUFFICIENT_FUNDS';
+  readonly code: 'UNSUPPORTED_CURRENCY' | 'NOT_FOUND' | 'NOT_OWNER' | 'WRONG_STATE' | 'BAD_INPUT' | 'ABOVE_LIMIT' | 'RATE_LIMITED' | 'NO_QUOTE' | 'TX_ALREADY_USED' | 'QUOTE_STALE' | 'INSUFFICIENT_FUNDS' | 'PRICE_UNAVAILABLE';
   constructor(code: BuyConvertError['code'], message: string) {
     super(message);
     this.name = 'BuyConvertError';
@@ -58,6 +59,11 @@ export interface BuyConvertDeps {
   minConfirmations: number;
   /** the most USDT one conversion may deliver (operator cap) */
   maxUsdtAtomic: bigint;
+  /**
+   * Currencies that Textile's live API quotes but its OFFICIAL address book does not list as a Celo corridor stay Unsupported here unless the operator
+   * names them (PAYRAIL_BUY_CONVERT_UNDOCUMENTED). This is enforced in code, so a stale allow-list row in the database cannot switch one on.
+   */
+  allowUndocumented?: ReadonlySet<string>;
   /** read-only balance of an ERC-20 for a wallet; when present, a conversion the wallet cannot fund is refused before anything is signed */
   tokenBalance?: (token: Address, wallet: Address) => Promise<bigint>;
   /** read-only native CELO balance of a wallet (gas); only used to warn */
@@ -147,7 +153,11 @@ export function createBuyConvert(d: BuyConvertDeps) {
       let status: CurrencyStatus;
       let reason: string | null = r.usable ? null : r.reason;
       let minUsdt: string | null = null;
-      if (!r.enabled) {
+      const gate = r.enabled && r.available ? documentationGate(r.from.symbol) : undefined;
+      if (gate) {
+        status = 'unsupported';
+        reason = gate;
+      } else if (!r.enabled) {
         status = 'unsupported'; // not offered by this server (not registered, not on Textile's ladder, or switched off by the operator)
       } else if (!r.available) {
         // Textile lists the pair but has no makers / quote right now (or could not be reached)
@@ -201,6 +211,12 @@ export function createBuyConvert(d: BuyConvertDeps) {
     return value;
   }
 
+  /** why a route may not be used although the registry says it is live and enabled (undefined = fine) */
+  const documentationGate = (symbol: string): string | undefined =>
+    DOCUMENTED_ON_CELO.has(symbol) || d.allowUndocumented?.has(symbol)
+      ? undefined
+      : `Textile's live API quotes ${symbol} -> USDT, but Textile's official address book does not list it as a Celo corridor, so Payrail does not offer it. It can be enabled by the operator once Textile documents it.`;
+
   const balanceOf = async (token: Address, wallet: Address): Promise<bigint | undefined> => {
     if (!d.tokenBalance) return undefined;
     try { return await d.tokenBalance(token, wallet); } catch { return undefined; }
@@ -214,6 +230,8 @@ export function createBuyConvert(d: BuyConvertDeps) {
     if (!route) throw new BuyConvertError('UNSUPPORTED_CURRENCY', `${a.symbol} cannot be used: Textile has no conversion route from it to USDT, so the currency is not offered.`);
     if (route.passthrough) throw new BuyConvertError('BAD_INPUT', 'USDT needs no conversion');
     if (!route.usable) throw new BuyConvertError('UNSUPPORTED_CURRENCY', `${route.from.symbol} cannot be used right now: ${route.reason ?? 'unavailable'}.`);
+    const gated = documentationGate(route.from.symbol);
+    if (gated) throw new BuyConvertError('UNSUPPORTED_CURRENCY', gated);
     // pick the smallest sell amount that is at least the corridor minimum AND whose guaranteed (minimum) USDT covers the API price
     let sell = route.minInputAtomic;
     let q = await d.provider.quote({ direction: 'funding', from: route.from, to: USDT_CELO, inputAtomic: sell }).catch((e: Error) => { throw new BuyConvertError('NO_QUOTE', `Textile gave no price for ${route.from.symbol} -> USDT: ${e.message.slice(0, 160)}`); });
@@ -321,7 +339,55 @@ export function createBuyConvert(d: BuyConvertDeps) {
     return view(get(r.id)!);
   }
 
+  /**
+   * SELLER PRICING. Express an API price in a currency Textile can convert, and get the USDT amount that the marketplace will actually bill.
+   * The rate comes from a Textile indicative preview at (at least) the corridor minimum, scaled to the seller's amount: a price of a few cents in a
+   * local currency is far below Textile's ~1 USD minimum, so it cannot be previewed directly. The result states the quote time and every limitation.
+   * A currency that is not selectable (no live makers, not documented, switched off) cannot be used, so a price is never silently reinterpreted.
+   */
+  async function normalizePrice(a: { symbol: string; amountAtomic: bigint }) {
+    if (a.amountAtomic <= 0n) throw new BuyConvertError('BAD_INPUT', 'the price must be greater than zero');
+    const list = await currencies();
+    const c = list.find((x) => x.symbol.toLowerCase() === a.symbol.toLowerCase());
+    if (!c) throw new BuyConvertError('UNSUPPORTED_CURRENCY', `${a.symbol} cannot be used for pricing: Textile has no conversion route between it and USDT.`);
+    if (!c.available) throw new BuyConvertError('UNSUPPORTED_CURRENCY', `${c.symbol} cannot be used for pricing right now (${c.statusLabel}): ${c.reason ?? c.statusDetail}`);
+    const route = await d.registry.find('funding', c.symbol);
+    if (!route) throw new BuyConvertError('UNSUPPORTED_CURRENCY', `${c.symbol} cannot be used for pricing.`);
+    const probe = a.amountAtomic < route.minInputAtomic ? route.minInputAtomic : a.amountAtomic > route.maxInputAtomic ? route.maxInputAtomic : a.amountAtomic;
+    let q;
+    try {
+      q = await d.provider.quote({ direction: 'funding', from: route.from, to: USDT_CELO, inputAtomic: probe });
+    } catch (e) {
+      throw new BuyConvertError('PRICE_UNAVAILABLE', `Textile gave no price for ${c.symbol} -> USDT just now (${(e as Error).message.slice(0, 100)}), so this price cannot be converted reliably. Try again shortly, or price in USDT.`);
+    }
+    if (q.expectedOutputAtomic <= 0n || probe <= 0n) throw new BuyConvertError('PRICE_UNAVAILABLE', 'Textile returned an unusable price');
+    // round UP so the seller is never under-priced by rounding; 6 decimals is USDT's precision
+    const usdtAtomic = (a.amountAtomic * q.expectedOutputAtomic + probe - 1n) / probe;
+    if (usdtAtomic < 1n) throw new BuyConvertError('BAD_INPUT', `this price is worth less than 0.000001 USDT, the smallest amount the marketplace can bill`);
+    const rate = formatUnits((q.expectedOutputAtomic * 10n ** BigInt(route.from.decimals) * 1_000_000n) / probe, 12);
+    const quotedAt = new Date(now()).toISOString();
+    return {
+      currency: c.symbol, decimals: route.from.decimals, amountAtomic: a.amountAtomic, amount: formatUnits(a.amountAtomic, route.from.decimals),
+      usdtAtomic, usdt: usdtText(usdtAtomic), rate, quotedAt,
+      source: `Textile indicative preview of ${formatUnits(probe, route.from.decimals)} ${c.symbol} -> USDT${probe === a.amountAtomic ? '' : ' (scaled to your amount)'}`,
+      status: c.status, statusLabel: c.statusLabel,
+      limitations: [
+        'This is an INDICATIVE rate from Textile, not a firm quote and not a promise of liquidity. The USDT price is fixed from it when you save or re-check the listing; buyers are billed that USDT amount.',
+        `Textile only converts about ${c.minUsdt ?? '1'} USDT or more at a time, so a buyer paying with ${c.symbol} converts more than a small API costs and keeps the unused USDT.`,
+        'If the rate moves, re-check the price: a price derived from a quote older than an hour cannot be published.',
+        ...(c.status === 'needs_live_test' ? [`The ${c.symbol} -> USDT route has not been executed on mainnet by Payrail yet (it is implemented and shows a live price).`] : []),
+      ],
+    };
+  }
+
+  /** the currencies a seller may price in: USDT directly, plus every currency whose Textile route is currently selectable */
+  async function pricingCurrencies() {
+    const list = await currencies();
+    return list.map((c) => ({ symbol: c.symbol, decimals: c.decimals, status: c.status, statusLabel: c.statusLabel, selectable: c.available, reason: c.available ? null : c.reason ?? c.statusDetail, minUsdt: c.minUsdt }));
+  }
+
   return {
+    normalizePrice, pricingCurrencies,
     currencies, estimate, prepare, recordTx, verify,
     get: (buyerId: string, id: string) => view(owned(buyerId, id)),
     /** used to attach the conversion to the Buy order it funded */
