@@ -59,15 +59,16 @@ function fakeGitHub() {
 async function start() {
   const db = openDb(':memory:');
   const gh = fakeGitHub();
-  const host = { proof: undefined as string | undefined, endpointStatus: 200, endpointBody: '{"message":"hi","asOf":"2026-10-21T00:00:00Z"}', endpointType: 'application/json', dnsDown: false, calls: 0 };
+  const host = { proof: undefined as string | undefined, endpointStatus: 200, endpointBody: '{"message":"hi","asOf":"2026-10-21T00:00:00Z"}', endpointType: 'application/json', dnsDown: false, calls: 0, asleep: 0 };
   const resolver: Resolver = async () => { if (host.dnsDown) throw Object.assign(new Error('x'), { code: 'ECONNREFUSED' }); return [{ address: '93.184.216.34', family: 4 }]; };
   const transport: Transport = async (r) => {
     host.calls++;
+    if (host.asleep > 0) { host.asleep--; return new Promise<never>(() => {}); } // a sleeping free host: the connection just hangs
     if (r.path === `/${PROOF_PATH}`) return host.proof === undefined ? { status: 404, headers: { 'content-type': 'application/json' }, body: Buffer.from('{}') } : { status: 200, headers: { 'content-type': 'text/plain' }, body: Buffer.from(host.proof) };
     return { status: host.endpointStatus, headers: { 'content-type': host.endpointType }, body: Buffer.from(host.endpointBody) };
   };
   const fetchOptions = { resolver, transport };
-  const github = createGitHubVerification({ db, keys: [mk], api: gh.api, fetchOptions });
+  const github = createGitHubVerification({ db, keys: [mk], api: gh.api, fetchOptions, wake: [100, 100, 100] });
   const market: MarketRuntime = {
     db, keys: [mk], activeKey: mk, github,
     execute: { call: { limiter: new RateLimiter(100, 100), fetchOptions } }, testCall: { limiter: new RateLimiter(100, 100), fetchOptions },
@@ -324,8 +325,8 @@ test('a failing API blocks verification: wrong status, non-JSON, or an unreachab
     h.host.endpointBody = '{"ok":true}'; h.host.endpointType = 'application/json'; h.host.dnsDown = true;
     r = await check();
     assert.equal(r.verified, false);
-    assert.match(r.checks.find((c: any) => c.id === 'deployed_file').detail, /could not be reached just now/);
-    assert.match(r.checks.find((c: any) => c.id === 'deployed_file').detail, /not a failed proof/);
+    assert.match(r.checks.find((c: any) => c.id === 'deployed_file').detail, /did not answer in time/);
+    assert.match(r.checks.find((c: any) => c.id === 'deployed_file').detail, /NOT a failed proof/);
     assert.equal(r.listing.ownership.domain, false);
     // once everything works again the SAME listing verifies
     h.host.dnsDown = false;
@@ -403,4 +404,44 @@ test('not configured: the routes say so plainly, and DNS and the well-known file
     // the callback route does not exist without GitHub configured
     assert.notEqual((await fetch(base + '/api/market/github/callback?code=a&state=b', { redirect: 'manual' })).status, 302);
   } finally { await new Promise<void>((r) => server.close(() => r())); }
+});
+
+test('cold start: a sleeping host that wakes within the retries passes; the probe waits longer instead of failing at once', async () => {
+  const h = await start();
+  try {
+    const a = await seller(h, 'alice', 1001);
+    await connect(h, a);
+    const l = await draft(h, a);
+    addRepo(h, 'alice/payrail-test-api', { id: 5001, perms: { alice: { push: true } }, file: value(l) });
+    h.host.proof = value(l);
+    await h.call('POST', `/seller/listing/${l.id}/github-start`, { bearer: a.token, body: { repoUrl: REPO } });
+    h.host.asleep = 2; // the first two attempts hang, the third is answered
+    const r = (await h.call('POST', `/seller/listing/${l.id}/github-check`, { bearer: a.token })).body;
+    assert.equal(r.verified, true, JSON.stringify(r.checks));
+  } finally { await h.close(); }
+});
+
+test('a host that never wakes is a temporary timeout (not a failed proof), never verified; and a wrong proof is NOT retried', async () => {
+  const h = await start();
+  try {
+    const a = await seller(h, 'alice', 1001);
+    await connect(h, a);
+    const l = await draft(h, a);
+    addRepo(h, 'alice/payrail-test-api', { id: 5001, perms: { alice: { push: true } }, file: value(l) });
+    h.host.proof = value(l);
+    await h.call('POST', `/seller/listing/${l.id}/github-start`, { bearer: a.token, body: { repoUrl: REPO } });
+    h.host.asleep = 100;
+    let r = (await h.call('POST', `/seller/listing/${l.id}/github-check`, { bearer: a.token })).body;
+    assert.equal(r.verified, false);
+    const d = r.checks.find((c: any) => c.id === 'deployed_file').detail as string;
+    assert.match(d, /did not answer in time/);
+    assert.match(d, /tried 3 times/);
+    assert.match(d, /NOT a failed proof/);
+    assert.equal(r.listing.ownership.domain, false);
+    // a host that answers with the wrong content is judged at once: one request, no waiting
+    h.host.asleep = 0; h.host.proof = 'payrail-verify=' + '0'.repeat(48); h.host.calls = 0;
+    r = (await h.call('POST', `/seller/listing/${l.id}/github-check`, { bearer: a.token })).body;
+    assert.equal(r.verified, false);
+    assert.match(r.checks.find((c: any) => c.id === 'deployed_file').detail, /does not contain|different|not the/i);
+  } finally { await h.close(); }
 });

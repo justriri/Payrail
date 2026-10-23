@@ -39,11 +39,35 @@ export interface GitHubVerifyDeps {
   now?: () => number;
   /** options for the outbound checks of the deployed host (tests inject a resolver and transport; production leaves this empty) */
   fetchOptions?: FetchOptions;
+  /**
+   * Per-attempt timeouts (ms) when the deployed host does not answer. Free hosting sleeps when idle and needs about a minute to wake, and the first
+   * request is what wakes it, so a timeout is retried with longer waits instead of being reported at once. Only timeouts and network failures are
+   * retried: a definite answer (wrong content, 404, a blocked address) is judged immediately. Default 10 s, 30 s, 30 s.
+   */
+  wake?: readonly number[];
 }
 
 export function createGitHubVerification(d: GitHubVerifyDeps) {
   const now = d.now ?? Date.now;
   const activeKey = d.keys[0]!;
+  const attempts = d.wake ?? [10_000, 30_000, 30_000];
+  const WAKEABLE = new Set(['TIMEOUT', 'NETWORK', 'DNS_TEMPORARY']);
+  /** one outbound read of the seller's host, retried (with longer waits) only while it is not answering at all */
+  async function probe(url: string, o: { method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD'; maxBytes: number }) {
+    let last: unknown;
+    let waited = 0;
+    for (let i = 0; i < attempts.length; i++) {
+      try {
+        return await safeFetch(url, { method: o.method, maxBytes: o.maxBytes, maxRedirects: 0, timeoutMs: attempts[i]!, ...(d.fetchOptions ?? {}) });
+      } catch (e) {
+        last = e;
+        waited += attempts[i]!;
+        if (!(e instanceof EgressError && WAKEABLE.has(e.code))) throw e;
+      }
+    }
+    if (last instanceof EgressError) throw Object.assign(new EgressError(last.code, `${last.message}; tried ${attempts.length} times over ${Math.round(waited / 1000)} seconds`), { waitedMs: waited });
+    throw last;
+  }
 
   const connection = (accountId: string) => queryOne(d.db, 'SELECT * FROM github_connections WHERE account_id = ?', accountId);
   const tokenOf = (accountId: string): string | undefined => {
@@ -169,7 +193,7 @@ export function createGitHubVerification(d: GitHubVerifyDeps) {
       // 4: the DEPLOYED host serves the same proof (this is what ties the repository to the endpoint)
       const url = `https://${l.host}${WELL_KNOWN_PATH}`;
       try {
-        const res = await safeFetch(url, { method: 'GET', maxBytes: 512, timeoutMs: 8_000, maxRedirects: 0, ...(d.fetchOptions ?? {}) });
+        const res = await probe(url, { method: 'GET', maxBytes: 512 });
         if (res.status !== 200) add('deployed_file', 'Your deployed API serves the proof file', false, `${url} answered HTTP ${res.status}. The deployment must serve the committed file (redeploy after committing it).`);
         else if (res.body.toString('utf8').trim() !== expected) add('deployed_file', 'Your deployed API serves the proof file', false, `${url} does not contain this listing's value: the deployment is not built from the repository with the proof file yet, or it belongs to someone else.`);
         else add('deployed_file', 'Your deployed API serves the proof file', true, `${l.host} serves this listing's value.`);
@@ -180,7 +204,7 @@ export function createGitHubVerification(d: GitHubVerifyDeps) {
       // 5: the listed endpoint answers with valid JSON
       let endpointStatus: number | null = null;
       try {
-        const res = await safeFetch(l.endpointUrl, { method: l.method, maxBytes: 262_144, timeoutMs: 8_000, maxRedirects: 0, ...(d.fetchOptions ?? {}) });
+        const res = await probe(l.endpointUrl, { method: l.method, maxBytes: 262_144 });
         endpointStatus = res.status;
         let json = true;
         try { JSON.parse(res.body.toString('utf8')); } catch { json = false; }
@@ -228,7 +252,7 @@ function accessProblem(repo: GhRepo): string | undefined {
 
 function describeEgress(e: unknown, host: string): string {
   if (e instanceof EgressError) {
-    if (e.code === 'DNS_TEMPORARY' || e.code === 'TIMEOUT' || e.code === 'NETWORK') return `${host} could not be reached just now (${e.message}). Check that the service is awake (free hosting sleeps when idle) and try again: this is not a failed proof.`;
+    if (e.code === 'DNS_TEMPORARY' || e.code === 'TIMEOUT' || e.code === 'NETWORK') return `${host} did not answer in time (${e.message}). Free hosting sleeps when idle and can take a minute or more to wake: open its /health address in a browser until it answers, then check again. This is a hosting timeout, NOT a failed proof.`;
     if (e.code === 'DNS_FAILED') return `${host} does not exist in DNS. Check the endpoint address.`;
     return `${host} cannot be used: ${e.message}`;
   }

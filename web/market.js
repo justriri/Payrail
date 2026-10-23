@@ -773,7 +773,7 @@ function githubPanel(l) {
       el('p', {}, el('strong', { text: 'Step 3. ' }), 'Check:'),
       el('div', { class: 'row' }, el('button', { type: 'button', id: 'github-check', text: 'Check now', onclick: async (e) => {
         e.target.disabled = true; clear(result);
-        result.append(el('p', { class: 'muted', text: 'Checking GitHub, your deployed API and your endpoint…' }));
+        result.append(el('p', { class: 'muted', text: 'Checking GitHub, your deployed API and your endpoint… free hosting can take about a minute to wake up, so this may take a while.' }));
         const r = await api(`/seller/listing/${l.id}/github-check`, { body: {}, bearer: session.seller });
         e.target.disabled = false; clear(result);
         if (!r.ok) { result.append(el('p', { class: 'problem', id: 'github-error', text: fail(r) })); return; }
