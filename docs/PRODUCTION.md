@@ -1,5 +1,7 @@
 # Payrail in production: what is real, what is verified, what is blocked
 
+> Update 2026-10-23: the evidence table below predates Buy payments (`PAYRAIL_BUY_PAYMENTS`), in-app Textile conversion (`PAYRAIL_BUY_CONVERSION`), seller payout requests and GitHub verification. For those, [BUY-PAYMENTS.md](BUY-PAYMENTS.md) and the README's "What is verified" table are current. Nothing in the marketplace has been run with a real browser wallet on mainnet.
+
 Payrail has **no demo, test-credit, sandbox or simulation mode**. `scripts/serve.ts` refuses `--simulate`, `--no-demo`,
 `--escrow-testnet` and `--scenario`, seeds no demo APIs, builds no simulated provider, and starts the marketplace only when the
 operator sets `PAYRAIL_MARKET_LIVE=1` (real USDT on Celo mainnet, chain 42220).

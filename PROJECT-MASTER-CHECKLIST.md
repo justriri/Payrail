@@ -1,6 +1,8 @@
 # Payrail — Master Project Checklist
 
-> **Last refreshed:** 2026-10-13, after re-running the checks below (not from memory).
+> **Status note (2026-10-23):** this file is the original build checklist and is partly historical. Current status is in `README.md`, `docs/HACKATHON.md`
+> and `docs/PRODUCTION.md`. The snapshot below is current; sections 4-7 predate the marketplace and the GitHub push.
+> **Last refreshed:** 2026-10-23.
 > **Labels:** `[x]` verified complete · `[~]` implemented, not fully verified · `[ ]` not done · `[!]` blocked / needs an external answer.
 > **Evidence levels:** **MOCK** = automated test with fakes only · **LIVE** = ran against a real service · **CHAIN** = confirmed on Celo mainnet by independent reads.
 > **Deadline (from Loops' own API):** submission **Nov 9 2026, 09:00 UTC (Africa/Abidjan)**.
@@ -10,10 +12,10 @@
 | Check | Result |
 |---|---|
 | `tsc` type check | exit 0 |
-| Full test suite | **334 tests, 334 pass, 0 fail** (~80 s) |
+| Full test suite | **685 tests, 685 pass, 0 fail** (~5 min); 12 browser regressions pass |
 | Evidence regeneration (`scripts/evidence.ts --verify`) | 10 transactions, 4 orders, 3 payments, 7 conversion records, **0 warnings, 0 unresolved** (attempt-2 order has a verified acknowledgement note; see B10) |
-| Git | 2 local commits, 78 tracked files, **no remote**, working tree clean |
-| Loops entry (`loops project get`) | tag `celo_b2fff2ac9413`, agent wallet `0x652C…D2a4`, **`hasIdentity: true`**, **project not yet created** |
+| Git | remote `https://github.com/justriri/Payrail` (history kept outside OneDrive); see README |
+| Loops entry (`loops project get`) | tag `celo_b2fff2ac9413`, agent wallet `0x652C…D2a4`, **`hasIdentity: true`**, **project not yet created**; required fields: name, description, repo URL, screenshot, **demo URL**, agent wallet |
 
 ---
 
