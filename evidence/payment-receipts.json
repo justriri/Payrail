@@ -1,0 +1,98 @@
+{
+  "generatedFrom": "evidence/evidence.json",
+  "evidenceGeneratedAt": "2026-10-23T12:27:15.742Z",
+  "addresses": [
+    {
+      "role": "payTo (recipient of the x402 payment)",
+      "address": "0x20faAca5F980E29639A0FCC6dcA6988E18ed333B",
+      "note": "the service gateway's receiving address"
+    },
+    {
+      "role": "payer (Payrail wallet)",
+      "address": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4",
+      "note": "signed the payment authorization; NOT the payTo"
+    }
+  ],
+  "payments": [
+    {
+      "receiptId": "direct-2026-10-12T16-02-41-922Z",
+      "paidAt": "2026-10-12T16:02:41.922Z",
+      "status": "CONFIRMED",
+      "chain": "Celo mainnet (chainId 42220)",
+      "txHash": "0xfb012c514207add68399c8c575d89e9c352c94ac8131378d8e1ffa233f8217ac",
+      "explorerUrl": "https://celoscan.io/tx/0xfb012c514207add68399c8c575d89e9c352c94ac8131378d8e1ffa233f8217ac",
+      "onChainStatus": "success",
+      "blockNumber": "79920194",
+      "amount": "0.005",
+      "currency": "USDT",
+      "tokenContract": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+      "service": "x.posts.search",
+      "endpoint": "https://gateway.usebuy.ai/v1/social/x/posts/search",
+      "payer": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4",
+      "payTo": "0x20faAca5F980E29639A0FCC6dcA6988E18ed333B",
+      "transferVerified": true,
+      "delivered": true,
+      "httpStatus": 200,
+      "responseSha256": null,
+      "orderId": null,
+      "conversion": null
+    },
+    {
+      "receiptId": "direct-2026-10-13T14-41-27-277Z",
+      "paidAt": "2026-10-13T14:41:27.277Z",
+      "status": "CONFIRMED",
+      "chain": "Celo mainnet (chainId 42220)",
+      "txHash": "0x57c3c046355dcd623efdcf1daa76b7cb8c46db87528a92116afa379d290f57fe",
+      "explorerUrl": "https://celoscan.io/tx/0x57c3c046355dcd623efdcf1daa76b7cb8c46db87528a92116afa379d290f57fe",
+      "onChainStatus": "success",
+      "blockNumber": "80001720",
+      "amount": "0.005",
+      "currency": "USDT",
+      "tokenContract": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+      "service": "x.posts.search",
+      "endpoint": "https://gateway.usebuy.ai/v1/social/x/posts/search",
+      "payer": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4",
+      "payTo": "0x20faAca5F980E29639A0FCC6dcA6988E18ed333B",
+      "transferVerified": true,
+      "delivered": true,
+      "httpStatus": 200,
+      "responseSha256": "08d00251fe2226a89174efc8fbe1a7ec70fe2bdb1c8f2f516df11de5bdd8ff04",
+      "orderId": "b5660887-a162-4116-ab65-c2a86512a7c6",
+      "conversion": null
+    },
+    {
+      "receiptId": "direct-2026-10-14T00-58-50-389Z",
+      "paidAt": "2026-10-14T00:58:50.389Z",
+      "status": "CONFIRMED",
+      "chain": "Celo mainnet (chainId 42220)",
+      "txHash": "0xf3652222377fb527211fb4fbd1a7e6c6f7f7341048334eb4223806b88c9f2c9c",
+      "explorerUrl": "https://celoscan.io/tx/0xf3652222377fb527211fb4fbd1a7e6c6f7f7341048334eb4223806b88c9f2c9c",
+      "onChainStatus": "success",
+      "blockNumber": "80038764",
+      "amount": "0.005",
+      "currency": "USDT",
+      "tokenContract": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+      "service": "x.posts.search",
+      "endpoint": "https://gateway.usebuy.ai/v1/social/x/posts/search",
+      "payer": "0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4",
+      "payTo": "0x20faAca5F980E29639A0FCC6dcA6988E18ed333B",
+      "transferVerified": true,
+      "delivered": true,
+      "httpStatus": 200,
+      "responseSha256": "4a2451147286359972506af30aaff4f85d7892ad8ca9175bf2f829ba90b15177",
+      "orderId": "90f8d4be-0388-467e-a5b0-4b630d0411d2",
+      "conversion": {
+        "provider": "textile-fx-v2",
+        "route": "converted",
+        "sold": "1363665000 atomic cNGN",
+        "received": "998910 atomic USDT",
+        "swapTxHash": "0x102eafffbaf5d561aa9a5fa65ac9d4910b87613fd1b1b679afca9bdd028bacb7",
+        "swapBlock": "80038743",
+        "swapExplorerUrl": "https://celoscan.io/tx/0x102eafffbaf5d561aa9a5fa65ac9d4910b87613fd1b1b679afca9bdd028bacb7",
+        "attributionCodes": [
+          "celo_b2fff2ac9413"
+        ]
+      }
+    }
+  ]
+}

@@ -6,7 +6,8 @@ converts it with **Textile FX** and then pays through the **Buy x402 gateway**. 
 prove they own them, define a response contract, test, publish, and are paid only for responses that qualify.
 
 Built for the Celo **Agents on Open Rails** hackathon. Screenshots of the real running app are in
-[docs/screenshots](docs/screenshots).
+[docs/screenshots](docs/screenshots); the logo assets (SVG masters, PNGs, favicon) are in [assets/brand](assets/brand)
+(rebuild with `node scripts/brand-assets/build.mjs --png`).
 
 > **Safety first.** Payrail can spend real money. The command-line tools are **plan-only by default** and the web
 > server never holds a buyer key. Nothing signs or sends unless you pass an explicit flag and every safeguard passes.
@@ -114,6 +115,7 @@ node --env-file=.env scripts/balances.ts                           # balances an
 node --env-file=.env scripts/routes.ts                             # which conversions are live
 node --env-file=.env scripts/history.ts                            # payments, swaps, orders
 node --env-file=.env scripts/evidence.ts --verify                  # regenerate evidence and re-check the chain
+node scripts/export-receipts.ts                                    # evidence/payment-receipts.json and .csv (local files only)
 ```
 
 Spending (need a key file, an explicit flag and an interactive confirmation or explicit bounds):

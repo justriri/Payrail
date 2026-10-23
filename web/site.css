@@ -14,6 +14,7 @@ a { color: var(--brand); }
 
 /* ------------------------------------------------------------------ shared marks */
 .brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 750; font-size: 18px; letter-spacing: -.02em; color: var(--ink); text-decoration: none; }
+.brand img { display: block; flex: none; height: 30px; width: auto; }
 .brand-mark { width: 26px; height: 26px; border-radius: 7px; background: var(--brand); position: relative; flex: none; }
 .brand-mark::before, .brand-mark::after { content: ""; position: absolute; left: 6px; right: 6px; height: 3px; border-radius: 2px; background: #fff; }
 .brand-mark::before { top: 8px; } .brand-mark::after { top: 15px; opacity: .65; }
