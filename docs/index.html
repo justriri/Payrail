@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Payrail: pay for APIs with the money you already hold</title>
+  <meta name="description" content="Payrail lets people and agents pay for API services with the stablecoin they already hold, converting a supported local stablecoin first when needed. Open source hackathon prototype on Celo.">
+  <meta name="theme-color" content="#0a5c45">
+  <link rel="icon" type="image/svg+xml" href="assets/payrail-icon.svg">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Payrail: pay for APIs with the money you already hold">
+  <meta property="og:description" content="Convert a supported local stablecoin when needed, then pay for the API through Celo's x402 Buy gateway. Verified on Celo mainnet. Hackathon prototype.">
+  <meta property="og:image" content="https://justriri.github.io/Payrail/assets/payrail-icon-512.png">
+  <meta property="og:url" content="https://justriri.github.io/Payrail/">
+  <meta name="twitter:card" content="summary">
+  <link rel="stylesheet" href="landing.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="top">
+    <div class="wrap bar">
+      <a class="logo" href="#top" aria-label="Payrail, back to top"><img src="assets/payrail-logo.svg" alt="Payrail" width="101" height="30"></a>
+      <nav aria-label="Main">
+        <a href="#how">How it works</a>
+        <a href="#support">What works</a>
+        <a href="#proof">Proof</a>
+        <a href="#start">Get started</a>
+        <a class="gh" href="https://github.com/justriri/Payrail">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero wrap" id="top">
+      <div class="hero-copy">
+        <p class="status"><span aria-hidden="true"></span>Hackathon prototype · Celo mainnet · open source</p>
+        <h1>Pay for an API with the money you already hold.</h1>
+        <p class="lede">Payrail finds the service, checks what you hold, converts a supported local stablecoin into the payment currency only when it has to, pays through Celo&rsquo;s x402 Buy gateway, and hands back the response with a receipt you can verify on-chain.</p>
+        <p class="cta">
+          <a class="btn primary" href="https://github.com/justriri/Payrail">Explore the Repository</a>
+          <a class="btn" href="#start">Read the Getting Started Guide</a>
+        </p>
+        <p class="fine">No hosted demo yet: Payrail runs on your own machine. <a href="#limits">What that means</a>.</p>
+      </div>
+      <figure class="shot zoom">
+        <div class="frame"><img src="screenshots/03-api-detail.png" alt="Payrail API detail page: price in USDT, the seller's own price in cNGN, the response contract in plain words, and a Pay and Use API button" width="1235" height="1547" loading="eager"></div>
+        <figcaption>A published listing in the real app (local run): price, billing rule and the contract that decides whether you are charged.</figcaption>
+      </figure>
+    </section>
+
+    <section class="trio wrap" aria-label="In short">
+      <article>
+        <h2>What is it?</h2>
+        <p>An API marketplace and payment agent. You pick a service; Payrail works out how to pay for it from the stablecoin you actually hold.</p>
+      </article>
+      <article>
+        <h2>How does it work?</h2>
+        <p>Price from the service&rsquo;s own payment request, balance check, optional Textile FX conversion, x402 payment on Celo, then an on-chain check of what happened.</p>
+      </article>
+      <article>
+        <h2>Why does it matter?</h2>
+        <p>Many people and agents hold cNGN or another local stablecoin while the service wants USDT. Fixing that by hand, every time, is slow and risky. Payrail makes it one approved step.</p>
+      </article>
+    </section>
+
+    <section class="section wrap" id="how" aria-labelledby="how-h">
+      <p class="eyebrow">How Payrail works</p>
+      <h2 id="how-h">One payment, five steps</h2>
+      <ol class="flow">
+        <li><span class="n">1</span><h3>Choose an API</h3><p>Browse the live Buy catalog (about 170 services) next to APIs listed by independent sellers.</p></li>
+        <li><span class="n">2</span><h3>Use what you hold</h3><p>Pay with USDT directly, or pick a supported local stablecoin. You see the live rate, fee and the most you could spend first.</p></li>
+        <li class="opt"><span class="n">3</span><h3>Convert, if needed</h3><p>Only when the balance is the wrong currency and a route is live. Textile FX swaps it to USDT in one signed order.</p></li>
+        <li><span class="n">4</span><h3>Pay on the rail</h3><p>The x402 payment goes to the Buy gateway on Celo. Spending limits, locks and a journal guard every step.</p></li>
+        <li><span class="n">5</span><h3>Get response and receipt</h3><p>The response is saved and hashed. Settlement is re-checked on-chain. Anything uncertain stops and is never retried.</p></li>
+      </ol>
+      <p class="note">Which currencies, routes and services you can use depends on what is live and supported right now. The app shows the real status for each; nothing is offered that the server will not do.</p>
+    </section>
+
+    <section class="section tint" id="support" aria-labelledby="support-h">
+      <div class="wrap">
+        <p class="eyebrow">What Payrail supports</p>
+        <h2 id="support-h">What is verified, what is only tested, what is planned</h2>
+        <p class="sub">Three honest groups. Nothing in the second or third group is claimed as a working feature.</p>
+        <div class="cols">
+          <article class="card ok">
+            <h3><span class="tag">Verified on mainnet</span></h3>
+            <ul>
+              <li>Direct x402 payments to the Buy gateway in USDT (3 real payments).</li>
+              <li>Convert-then-pay: cNGN to USDT through Textile FX, then the x402 payment (1 real order).</li>
+              <li>A Mento swap and a Textile swap, with the event attribution tag on every transaction Payrail submits.</li>
+              <li>ERC-8004 agent identity (agent 9906).</li>
+              <li>Receipts, saved response hashes and on-chain re-checks of every transaction.</li>
+              <li>Seller ownership proof with GitHub (OAuth, repository write access, proof file in the repo and on the host, endpoint check), run against real GitHub and a real host.</li>
+            </ul>
+          </article>
+          <article class="card test">
+            <h3><span class="tag">Implemented, tested with fakes</span></h3>
+            <ul>
+              <li>Seller flow: register, DNS or file proof, encrypted credentials, free test calls, response contracts, publish.</li>
+              <li>Outcome billing: buyers are charged only when a response satisfies the contract.</li>
+              <li>Browser-wallet purchase of a Buy API with in-app currency conversion.</li>
+              <li>Conversion from wARS, wBRL, IDRX and USDC: quoted live by Textile, never executed by Payrail.</li>
+              <li>Recovery tools (reconcile, resume, resolve an uncertain payment) and seller payout accounting.</li>
+            </ul>
+          </article>
+          <article class="card plan">
+            <h3><span class="tag">Planned or not built</span></h3>
+            <ul>
+              <li>A hosted public deployment.</li>
+              <li>Seller payouts actually sent (no payout has ever been made).</li>
+              <li>On-chain escrow (a contract exists in the repo; it is not deployed or used).</li>
+              <li>Fiat on and off ramps, and providers beyond Buy.</li>
+              <li>Direct payment in USDC or USAT (accepted by Buy; Payrail only signs for USDT today).</li>
+              <li>An independent security review.</li>
+            </ul>
+          </article>
+        </div>
+        <dl class="facts">
+          <div><dt>Network</dt><dd>Celo mainnet, chain 42220</dd></div>
+          <div><dt>Settlement currency</dt><dd>USDT</dd></div>
+          <div><dt>Conversion corridors (Textile, official Celo list)</dt><dd>cNGN (executed), wARS, wBRL, IDRX, USDC (quoted, not executed)</dd></div>
+          <div><dt>Payment rail</dt><dd>x402 via the Buy gateway; Mento router for some swaps</dd></div>
+          <div><dt>Receipts</dt><dd>JSON and CSV export from verified evidence</dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <section class="section wrap" id="proof" aria-labelledby="proof-h">
+      <p class="eyebrow">Proof</p>
+      <h2 id="proof-h">Real transactions you can check yourself</h2>
+      <p class="sub">All on Celo mainnet. Each row links to the block explorer. The agent wallet signs; the payTo address belongs to the Buy gateway, which also submits the x402 settlement.</p>
+      <div class="table" role="region" aria-label="Verified transactions" tabindex="0">
+        <table>
+          <thead><tr><th scope="col">What</th><th scope="col">Amount</th><th scope="col">Block</th><th scope="col">Transaction</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">x402 payment to Buy, <code>x.posts.search</code></th><td>0.005 USDT</td><td>79920194</td><td><a href="https://celoscan.io/tx/0xfb012c514207add68399c8c575d89e9c352c94ac8131378d8e1ffa233f8217ac">0xfb012c51…17ac</a></td></tr>
+            <tr><th scope="row">x402 payment to Buy (direct order)</th><td>0.005 USDT</td><td>80001720</td><td><a href="https://celoscan.io/tx/0x57c3c046355dcd623efdcf1daa76b7cb8c46db87528a92116afa379d290f57fe">0x57c3c046…57fe</a></td></tr>
+            <tr><th scope="row">Textile FX swap, cNGN to USDT (convert-then-pay)</th><td>1363.665 cNGN to 0.998910 USDT</td><td>80038743</td><td><a href="https://celoscan.io/tx/0x102eafffbaf5d561aa9a5fa65ac9d4910b87613fd1b1b679afca9bdd028bacb7">0x102eafff…acb7</a></td></tr>
+            <tr><th scope="row">x402 payment funded by that swap</th><td>0.005 USDT</td><td>80038764</td><td><a href="https://celoscan.io/tx/0xf3652222377fb527211fb4fbd1a7e6c6f7f7341048334eb4223806b88c9f2c9c">0xf3652222…2c9c</a></td></tr>
+            <tr><th scope="row">ERC-8004 agent registration (agent 9906)</th><td>n/a</td><td>80032609</td><td><a href="https://celoscan.io/tx/0xf654ea5f5286e0a53a1412a7769b48ef38742134d98bd0a7c6938089126cab1b">0xf654ea5f…ab1b</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="addr">
+        <p><strong>Agent wallet</strong> <code>0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4</code> <span>(owner of ERC-8004 agent 9906, checked on-chain)</span></p>
+        <p><strong>x402 payTo (Buy gateway)</strong> <code>0x20faAca5F980E29639A0FCC6dcA6988E18ed333B</code></p>
+      </div>
+      <p class="links">
+        <a href="https://github.com/justriri/Payrail/blob/main/evidence/SUBMISSION-EVIDENCE.md">Full evidence report</a>
+        <a href="https://github.com/justriri/Payrail/blob/main/evidence/payment-receipts.csv">Receipts (CSV)</a>
+        <a href="https://github.com/justriri/Payrail/blob/main/evidence/payment-receipts.json">Receipts (JSON)</a>
+        <a href="https://github.com/justriri/payrail-test-apipayrail-test-api">Seller test API repo</a>
+      </p>
+      <p class="note">Re-check it yourself with <code>node scripts/evidence.ts --verify</code>: it re-reads every transaction from several Celo RPC endpoints and recomputes the response hashes.</p>
+    </section>
+
+    <section class="section tint" aria-labelledby="sell-h">
+      <div class="wrap two">
+        <div>
+          <p class="eyebrow">For sellers</p>
+          <h2 id="sell-h">More than a catalog of someone else&rsquo;s APIs</h2>
+          <p>A seller signs in with a wallet, lists an API, proves they own it, tests it for free, defines what a qualifying response looks like, and publishes. Buyers pay only when the response meets that contract. Credentials are encrypted and sent only to the verified host.</p>
+          <p class="links"><a href="https://github.com/justriri/Payrail/blob/main/docs/MARKETPLACE.md">Marketplace design</a><a href="https://github.com/justriri/Payrail/blob/main/docs/LOCAL-GITHUB-SETUP.md">GitHub verification setup</a></p>
+        </div>
+        <figure class="shot small">
+          <img src="screenshots/02-explore-marketplace.png" alt="Payrail Explore APIs page: one independent seller listing next to Buy gateway services, each with a price in USDT" width="1235" height="2298" loading="lazy">
+          <figcaption>Explore: an independent seller listing beside Buy services.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section wrap" id="start" aria-labelledby="start-h">
+      <p class="eyebrow">Getting started</p>
+      <h2 id="start-h">Run it on your machine</h2>
+      <p class="sub">Needs Node.js 22.18 or newer. Nothing to build, and the commands below never spend money.</p>
+      <ol class="steps">
+        <li>
+          <h3>Install and check</h3>
+          <div class="code"><button type="button" class="copy" data-copy="start-1" aria-label="Copy these commands">Copy</button><pre id="start-1"><code>git clone https://github.com/justriri/Payrail.git
+cd Payrail
+npm install
+cp .env.example .env      # Windows PowerShell: Copy-Item .env.example .env
+npm run check             # type check and all tests (fakes only, about 5 minutes)</code></pre></div>
+        </li>
+        <li>
+          <h3>Open the app (read-only)</h3>
+          <div class="code"><button type="button" class="copy" data-copy="start-2" aria-label="Copy this command">Copy</button><pre id="start-2"><code>npm run serve
+# then open http://127.0.0.1:4402</code></pre></div>
+          <p>Live catalog, balances and quotes. No key is loaded, so it cannot pay.</p>
+        </li>
+        <li>
+          <h3>Plan an order without spending</h3>
+          <div class="code"><button type="button" class="copy" data-copy="start-3" aria-label="Copy these commands">Copy</button><pre id="start-3"><code>node --env-file=.env scripts/order.ts --service x.posts.search
+node --env-file=.env scripts/routes.ts
+node --env-file=.env scripts/evidence.ts --verify</code></pre></div>
+          <p>Prints the route, cost and a plan digest. Paying needs a wallet key file kept <em>outside</em> the project, an explicit <code>--execute</code> flag and your confirmation.</p>
+        </li>
+        <li>
+          <h3>Go further</h3>
+          <p class="links"><a href="https://github.com/justriri/Payrail/blob/main/docs/DEMO.md">Demo walkthrough</a><a href="https://github.com/justriri/Payrail/blob/main/docs/ARCHITECTURE.md">Architecture</a><a href="https://github.com/justriri/Payrail/blob/main/docs/PRODUCTION.md">What is real, what is not</a><a href="https://github.com/justriri/Payrail/blob/main/docs/LIVE-TEST-RUNBOOK.md">Live test runbook</a><a href="https://github.com/justriri/Payrail/blob/main/docs/WALLET-KEY-BACKUP.md">Wallet key handling</a></p>
+        </li>
+      </ol>
+      <h3 class="sm">Build on it</h3>
+      <ul class="map">
+        <li><code>src/</code> planner, policy, executors, Textile, Mento and Buy clients, marketplace, evidence</li>
+        <li><code>web/</code> the app&rsquo;s pages, plain JavaScript</li>
+        <li><code>scripts/</code> command-line tools and the server entry point</li>
+        <li><code>test/</code> 687 tests with fakes; browser regressions in <code>scripts/browser/</code></li>
+        <li><code>docs/</code> guides, and this page (<code>docs/index.html</code>)</li>
+      </ul>
+    </section>
+
+    <section class="section tint" id="limits" aria-labelledby="limits-h">
+      <div class="wrap">
+        <p class="eyebrow">Limits</p>
+        <h2 id="limits-h">Honest status</h2>
+        <ul class="plain">
+          <li><strong>Prototype.</strong> Built for the Celo Agents on Open Rails hackathon. It is not production-ready and has had no third-party security review.</li>
+          <li><strong>Local only.</strong> There is no hosted app, so there is no live demo link. This page is static and shows the real app through screenshots and on-chain evidence.</li>
+          <li><strong>Mostly one real route.</strong> Only cNGN to USDT has been executed on mainnet. The other corridors are quoted live, not executed.</li>
+          <li><strong>Custody.</strong> In marketplace mode, buyer deposits sit at an operator-controlled address and a ledger, and seller payouts are operator-run and have not been used.</li>
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <div class="wrap">
+      <img src="assets/payrail-logo.svg" alt="Payrail" width="101" height="30">
+      <p>Open source hackathon prototype. Pay in your currency. Pay for results.</p>
+      <p class="links"><a href="https://github.com/justriri/Payrail">Repository</a><a href="https://github.com/justriri/Payrail/blob/main/README.md">README</a><a href="https://github.com/justriri/Payrail/blob/main/docs/HACKATHON.md">Hackathon notes</a><a href="https://github.com/justriri/Payrail/issues">Issues</a></p>
+    </div>
+  </footer>
+  <script src="landing.js" defer></script>
+</body>
+</html>

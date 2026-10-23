@@ -45,6 +45,12 @@ Built for the Celo **Agents on Open Rails** hackathon. Screenshots of the real r
 Full detail: [docs/PRODUCTION.md](docs/PRODUCTION.md), [docs/BUY-PAYMENTS.md](docs/BUY-PAYMENTS.md),
 [docs/MARKETPLACE.md](docs/MARKETPLACE.md), [evidence/SUBMISSION-EVIDENCE.md](evidence/SUBMISSION-EVIDENCE.md).
 
+## Project website (GitHub Pages)
+
+A static landing page lives in [`docs/index.html`](docs/index.html) (plain HTML and CSS, no build step, no backend). To publish it:
+GitHub repository **Settings, Pages, Build and deployment, Source: Deploy from a branch, Branch: `main`, Folder: `/docs`, Save**.
+It then appears at `https://justriri.github.io/Payrail/` after a minute or two. The app itself is unchanged and still runs locally.
+
 ## Architecture
 
 ```
