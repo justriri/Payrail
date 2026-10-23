@@ -90,6 +90,8 @@ test('a submitted listing is immediately in My APIs with every entered value, an
     // not in the public catalog
     const pub = async () => ((await h.call('GET', '/catalog')).body.items as any[]).map((i) => i.id);
     assert.ok(!(await pub()).includes(l.id));
+    assert.equal(mine.marketplace.path, null, 'a draft has no public page to link to');
+    assert.equal((await h.call('GET', `/listing/${l.id}`)).status, 404, 'an unpublished listing is not reachable by its URL');
 
     await h.call('POST', `/seller/listing/${l.id}/wallet-proof`, st, { sandbox: true, seed });
     mine = await listingOf(h, st, l.id);
@@ -123,6 +125,11 @@ test('a submitted listing is immediately in My APIs with every entered value, an
     assert.equal(mine.public, true);
     assert.match(mine.visibility, /Public/);
     assert.ok((await pub()).includes(l.id), 'a published listing appears in the public marketplace');
+    // the seller's "View in the marketplace" link points at THIS listing's public page (not the buyer overview), and that page works
+    assert.equal(mine.marketplace.path, `/api.html?id=${l.id}`);
+    const pubPage = await h.call('GET', `/listing/${l.id}`);
+    assert.equal(pubPage.status, 200);
+    assert.deepEqual([pubPage.body.listing.id, pubPage.body.listing.name, pubPage.body.listing.price.usd], [l.id, 'Persist price API', '0.03']);
     // everything entered is still there after the whole journey
     assert.deepEqual([mine.name, mine.description, mine.endpointUrl, mine.method, mine.price.usd], ['Persist price API', 'keeps its details', 'https://keep-1.sandbox.payrail.example/v1/price', 'GET', '0.03']);
 
@@ -131,6 +138,8 @@ test('a submitted listing is immediately in My APIs with every entered value, an
     assert.ok(!(await pub()).includes(l.id));
     mine = await listingOf(h, st, l.id);
     assert.equal(mine.public, false);
+    assert.equal(mine.marketplace.path, null);
+    assert.equal((await h.call('GET', `/listing/${l.id}`)).status, 404, 'unpublishing closes the public URL again');
     assert.equal(mine.name, 'Persist price API');
     assert.equal(mine.contractStatus.state, 'approved');
   } finally {
@@ -290,4 +299,12 @@ test('My APIs stats count requests and earnings for each listing', async () => {
   } finally {
     await h.close();
   }
+});
+
+test('the "View in the marketplace" link is built from the listing\'s own public path, never the buyer overview', async () => {
+  const { readFileSync } = await import('node:fs');
+  const js = readFileSync(new URL('../web/market.js', import.meta.url), 'utf8');
+  assert.ok(!/href: '#\/buyer', text: 'View in the marketplace'/.test(js), 'no link labelled View in the marketplace may point at the buyer overview');
+  assert.equal((js.match(/marketplaceLink\(l, '/g) ?? []).length, 2, 'both seller screens use the shared link helper');
+  assert.match(js, /href: l\.marketplace\.path/);
 });

@@ -380,6 +380,8 @@ function listingView(db: Db, l: Listing, forOwner: boolean, keyIds: readonly str
     tests: recentTests(db, l.id, 5),
     displayStatus,
     public: l.status === 'published',
+    // where buyers see THIS listing (the public detail page); null while it is not published. `realFunds` tells whether a real-funds server would show it.
+    marketplace: { path: l.status === 'published' ? `/api.html?id=${encodeURIComponent(l.id)}` : null, realFunds: isRealListing(l) },
     visibility: l.status === 'published' ? 'Public: buyers can find and run it in the marketplace' : 'Private: only you can see it',
     github: gh ? gh.proofOf(l.id) : null,
     ownership: { wallet, domain, domainMethod: ch?.domainMethod ?? null, verified: l.verifiedAt !== null || l.demo },

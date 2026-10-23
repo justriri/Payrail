@@ -653,7 +653,7 @@ function myApisPage(listings, earn) {
       el('div', { class: 'muted', text: `Requests: ${l.stats.requests} · qualified: ${l.stats.qualified} · earned: ${l.stats.earned} ${l.price.asset}` }),
       el('div', { class: 'row' },
         el('a', { class: 'btn', href: `#/seller/api/${l.id}`, text: l.public ? 'Manage' : 'Open and continue' }),
-        l.public && el('a', { class: 'btn secondary', href: '#/buyer', text: 'View in the marketplace', onclick: () => { $('q').value = l.name; } }))));
+        marketplaceLink(l, 'secondary'))));
   }
   return wrap;
 }
@@ -931,7 +931,7 @@ function editorPage(l) {
     if (l.public) {
       pub.append(el('p', { class: 'notice', text: 'Published: buyers can find and run this API in the Buyer tab.' }),
         el('div', { class: 'row' },
-          el('a', { class: 'btn', href: '#/buyer', text: 'View in the marketplace', onclick: () => { $('q').value = l.name; } }),
+          marketplaceLink(l, ''),
           el('button', { type: 'button', class: 'secondary', text: 'Unpublish', onclick: () => act('/unpublish', {}, 'Unpublished: it is private again.') })));
     } else {
       if (!rd.ready) pub.append(el('div', { class: 'problem' }, el('strong', { text: 'Not ready to publish yet:' }), el('ul', {}, ...rd.missing.map((m) => el('li', { text: m.message })))));
@@ -944,6 +944,14 @@ function editorPage(l) {
 }
 
 // ------------------------------------------------------------------ Buyer / Seller tabs
+/** the public marketplace page of THIS listing (never the buyer overview); only offered while it is published and a buyer here could actually see it */
+function marketplaceLink(l, cls) {
+  if (!l.public || !l.marketplace || !l.marketplace.path) return null;
+  if (config.realFunds && !l.marketplace.realFunds) {
+    return el('span', { class: 'muted', 'data-testid': 'not-in-marketplace', text: 'Published, but buyers cannot see it on this server: only real-USDT listings with a real host are shown when real funds are on.' });
+  }
+  return el('a', { class: `btn ${cls}`.trim(), 'data-testid': 'view-in-marketplace', href: l.marketplace.path, text: 'View in the marketplace' });
+}
 function currentView() { return /^#\/?seller(\/.*)?$/.test(location.hash) ? 'seller' : 'buyer'; }
 const BUYER_PANELS = ['overview', 'explore', 'usage', 'funding', 'transactions'];
 function currentPanel() {
