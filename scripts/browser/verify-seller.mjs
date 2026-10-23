@@ -98,6 +98,8 @@ await until(async () => /Published at/.test((await bar()) || '') && /Published/.
 check('publish confirms in the status bar and the status updates', /Published at/.test(await bar()) && /Published/.test(await seller()), await bar());
 const cat = (await h.call('GET', '/catalog')).items.find((i) => i.title === 'My Quote API');
 check('the published API is in the public catalogue priced in real USDT with its seller', cat && cat.pricing.asset === 'USDT' && cat.pricing.usd === '0.02' && cat.available && /0x/.test(cat.seller), JSON.stringify(cat && { p: cat.pricing, s: cat.seller }));
+const mpHref = await b.ev(`(() => { const a=[...document.querySelectorAll('#seller a')].find(x => x.textContent === 'View in the marketplace'); return a ? a.getAttribute('href') : null; })()`);
+check('the View in the marketplace link points at the public page of this listing, not the buyer overview', cat && mpHref === `/api.html?id=${cat.id}`, String(mpHref));
 await b.send('Page.reload');
 await b.sleep(2600);
 await b.click('#seller a', 'My APIs');

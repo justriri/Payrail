@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-14T10:01:32.619Z",
+  "generatedAt": "2026-10-23T12:27:15.742Z",
   "addresses": [
     {
       "role": "payTo (recipient of the x402 payment)",
@@ -48,7 +48,7 @@
         "legacy receipt (written before schema v1)",
         "the response body was not retained for this payment (only a structural summary was kept)",
         "x402 settlement is submitted by the facilitator and carries no attribution tag; the organizers confirmed none is needed for Buy",
-        "LIVE RE-VERIFICATION 2026-10-14T10:01:36.754Z: receipt success, block 79920194, confirmed by 2 endpoint(s), Transfer(payer -> payTo, 0.005 USDT) found: true"
+        "LIVE RE-VERIFICATION 2026-10-23T12:27:18.332Z: receipt success, block 79920194, confirmed by 2 endpoint(s), Transfer(payer -> payTo, 0.005 USDT) found: true"
       ]
     },
     {
@@ -74,7 +74,7 @@
       "responseSummary": "JSON keys [capability, transaction, payment, provider, upstreamRunId, resultCount, output]; output: object; 48403 bytes",
       "notes": [
         "x402 settlement is submitted by the facilitator and carries no attribution tag; the organizers confirmed none is needed for Buy",
-        "LIVE RE-VERIFICATION 2026-10-14T10:01:37.623Z: receipt success, block 80001720, confirmed by 2 endpoint(s), Transfer(payer -> payTo, 0.005 USDT) found: true",
+        "LIVE RE-VERIFICATION 2026-10-23T12:27:19.924Z: receipt success, block 80001720, confirmed by 2 endpoint(s), Transfer(payer -> payTo, 0.005 USDT) found: true",
         "RESPONSE FILE CHECK: sha256 of responses/direct-2026-10-13T14-41-27-277Z.body recomputed and matches the receipt"
       ]
     },
@@ -101,7 +101,7 @@
       "responseSummary": "JSON keys [capability, transaction, payment, provider, upstreamRunId, resultCount, output]; output: object; 67154 bytes",
       "notes": [
         "x402 settlement is submitted by the facilitator and carries no attribution tag; the organizers confirmed none is needed for Buy",
-        "LIVE RE-VERIFICATION 2026-10-14T10:01:38.478Z: receipt success, block 80038764, confirmed by 2 endpoint(s), Transfer(payer -> payTo, 0.005 USDT) found: true",
+        "LIVE RE-VERIFICATION 2026-10-23T12:27:20.673Z: receipt success, block 80038764, confirmed by 2 endpoint(s), Transfer(payer -> payTo, 0.005 USDT) found: true",
         "RESPONSE FILE CHECK: sha256 of responses/direct-2026-10-14T00-58-50-389Z.body recomputed and matches the receipt"
       ]
     }
@@ -326,7 +326,7 @@
       },
       "origin": "payment receipt",
       "onChain": {
-        "checkedAt": "2026-10-14T10:01:38.479Z",
+        "checkedAt": "2026-10-23T12:27:20.674Z",
         "found": true,
         "status": "success",
         "blockNumber": "79920194",
@@ -379,7 +379,7 @@
       },
       "origin": "confirmed conversion",
       "onChain": {
-        "checkedAt": "2026-10-14T10:01:40.296Z",
+        "checkedAt": "2026-10-23T12:27:22.365Z",
         "found": true,
         "status": "success",
         "blockNumber": "79963003",
@@ -425,7 +425,7 @@
       },
       "origin": "confirmed conversion",
       "onChain": {
-        "checkedAt": "2026-10-14T10:01:44.143Z",
+        "checkedAt": "2026-10-23T12:27:23.848Z",
         "found": true,
         "status": "success",
         "blockNumber": "79963010",
@@ -484,7 +484,7 @@
       },
       "origin": "stopped attempt (FAILED/QUOTE_INVALID); no swap was sent",
       "onChain": {
-        "checkedAt": "2026-10-14T10:01:45.704Z",
+        "checkedAt": "2026-10-23T12:27:25.371Z",
         "found": true,
         "status": "success",
         "blockNumber": "79963336",
@@ -530,7 +530,7 @@
       },
       "origin": "confirmed conversion",
       "onChain": {
-        "checkedAt": "2026-10-14T10:01:55.432Z",
+        "checkedAt": "2026-10-23T12:27:26.966Z",
         "found": true,
         "status": "success",
         "blockNumber": "79963880",
@@ -598,7 +598,7 @@
       "origin": "payment receipt",
       "orderId": "b5660887-a162-4116-ab65-c2a86512a7c6",
       "onChain": {
-        "checkedAt": "2026-10-14T10:01:58.323Z",
+        "checkedAt": "2026-10-23T12:27:28.518Z",
         "found": true,
         "status": "success",
         "blockNumber": "80001720",
@@ -651,7 +651,7 @@
       },
       "origin": "agent identity registration",
       "onChain": {
-        "checkedAt": "2026-10-14T10:01:59.818Z",
+        "checkedAt": "2026-10-23T12:27:29.962Z",
         "found": true,
         "status": "success",
         "blockNumber": "80032609",
@@ -698,7 +698,7 @@
       "origin": "stopped attempt (FAILED/APPROVAL_INEFFECTIVE); no swap was sent",
       "orderId": "d9c24dc8-87c4-41be-8791-a82bff1bbb81",
       "onChain": {
-        "checkedAt": "2026-10-14T10:02:02.138Z",
+        "checkedAt": "2026-10-23T12:27:33.838Z",
         "found": true,
         "status": "success",
         "blockNumber": "80038278",
@@ -745,7 +745,7 @@
       "origin": "confirmed conversion",
       "orderId": "90f8d4be-0388-467e-a5b0-4b630d0411d2",
       "onChain": {
-        "checkedAt": "2026-10-14T10:02:03.464Z",
+        "checkedAt": "2026-10-23T12:27:35.175Z",
         "found": true,
         "status": "success",
         "blockNumber": "80038743",
@@ -813,7 +813,7 @@
       "origin": "payment receipt",
       "orderId": "90f8d4be-0388-467e-a5b0-4b630d0411d2",
       "onChain": {
-        "checkedAt": "2026-10-14T10:02:04.609Z",
+        "checkedAt": "2026-10-23T12:27:37.480Z",
         "found": true,
         "status": "success",
         "blockNumber": "80038764",

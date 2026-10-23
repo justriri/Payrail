@@ -1,6 +1,6 @@
 # Payrail: services used and proof of payments
 
-Generated 2026-10-14T10:01:32.619Z
+Generated 2026-10-23T12:27:15.742Z
 
 ## Addresses
 
@@ -88,7 +88,7 @@ Only transactions that were actually sent to Celo mainnet are listed. Mock tests
 - **transaction submitter:** the gateway/facilitator; shown as tx.from when verified on-chain
 - **Settlement (journal):** authorization settled; Transfer(payer -> payTo) found: true; receipt status CONFIRMED
 - **Attribution:** not applicable; x402 settlements are submitted by the facilitator; attribution tags are not yet supported by x402 and the organizers confirmed none is needed for Buy
-- **On-chain re-check (2026-10-14T10:01:38.479Z):** found: true; status: success; block 79920194; tx.from `0x0d74D5Cefd2e7F24E623330ebE3d8D4cB45fFB48`; to `0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e`
+- **On-chain re-check (2026-10-23T12:27:20.674Z):** found: true; status: success; block 79920194; tx.from `0x0d74D5Cefd2e7F24E623330ebE3d8D4cB45fFB48`; to `0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e`
   - verifyTx attribution codes: none
   - Transfer of 0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e: 0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4 -> 0x20faAca5F980E29639A0FCC6dcA6988E18ed333B, 5000 atomic
   - submitted by 0x0d74D5Cefd2e7F24E623330ebE3d8D4cB45fFB48 (not the Payrail wallet), as expected for a gateway-sponsored x402 settlement
@@ -103,7 +103,7 @@ Only transactions that were actually sent to Celo mainnet are listed. Mock tests
 - **called contract (token):** `0x765DE816845861e75A25fCA122bb6898B8B1282a`
 - **Settlement (journal):** mined; conversion state CONFIRMED; received 1016308 atomic
 - **Attribution:** journal verified: true (celo_b2fff2ac9413); Payrail submitted this transaction itself, so it carries the ERC-8021 tag
-- **On-chain re-check (2026-10-14T10:01:40.296Z):** found: true; status: success; block 79963003; tx.from `0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4`; to `0x765DE816845861e75A25fCA122bb6898B8B1282a`
+- **On-chain re-check (2026-10-23T12:27:22.365Z):** found: true; status: success; block 79963003; tx.from `0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4`; to `0x765DE816845861e75A25fCA122bb6898B8B1282a`
   - verifyTx attribution codes: celo_b2fff2ac9413
   - call: approve(spender 0x4861840C2EfB2b98312B0aE34d86fD73E8f9B6f6, amount 1015267685224275700 atomic)
 
@@ -117,7 +117,7 @@ Only transactions that were actually sent to Celo mainnet are listed. Mock tests
 - **called contract (venue):** `0x4861840C2EfB2b98312B0aE34d86fD73E8f9B6f6`
 - **Settlement (journal):** mined; conversion state CONFIRMED; received 1016308 atomic
 - **Attribution:** journal verified: true (celo_b2fff2ac9413); Payrail submitted this transaction itself, so it carries the ERC-8021 tag
-- **On-chain re-check (2026-10-14T10:01:44.143Z):** found: true; status: success; block 79963010; tx.from `0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4`; to `0x4861840C2EfB2b98312B0aE34d86fD73E8f9B6f6`
+- **On-chain re-check (2026-10-23T12:27:23.848Z):** found: true; status: success; block 79963010; tx.from `0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4`; to `0x4861840C2EfB2b98312B0aE34d86fD73E8f9B6f6`
   - verifyTx attribution codes: celo_b2fff2ac9413
   - Transfer of 0x765DE816845861e75A25fCA122bb6898B8B1282a: 0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4 -> 0x0FEBa760d93423D127DE1B6ABECdB60E5253228D, 1015267685224275700 atomic
   - Transfer of 0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e: 0x0FEBa760d93423D127DE1B6ABECdB60E5253228D -> 0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4, 1016308 atomic
@@ -132,7 +132,7 @@ Only transactions that were actually sent to Celo mainnet are listed. Mock tests
 - **called contract (token):** `0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e`
 - **Settlement (journal):** mined; conversion state FAILED
 - **Attribution:** journal verified: true (celo_b2fff2ac9413); Payrail submitted this transaction itself, so it carries the ERC-8021 tag
-- **On-chain re-check (2026-10-14T10:01:45.704Z):** found: true; status: success; block 79963336; tx.from `0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4`; to `0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e`
+- **On-chain re-check (2026-10-23T12:27:25.371Z):** found: true; status: success; block 79963336; tx.from `0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4`; to `0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e`
   - verifyTx attribution codes: celo_b2fff2ac9413
   - call: approve(spender 0xa9AA0a64769cBed4d3B1Ceb4Df01CdE915C235b3, amount 1000000 atomic)
 
@@ -146,7 +146,7 @@ Only transactions that were actually sent to Celo mainnet are listed. Mock tests
 - **called contract (venue):** `0xa9AA0a64769cBed4d3B1Ceb4Df01CdE915C235b3`
 - **Settlement (journal):** mined; conversion state CONFIRMED; received 1365928991 atomic
 - **Attribution:** journal verified: true (celo_b2fff2ac9413); Payrail submitted this transaction itself, so it carries the ERC-8021 tag
-- **On-chain re-check (2026-10-14T10:01:55.432Z):** found: true; status: success; block 79963880; tx.from `0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4`; to `0xa9AA0a64769cBed4d3B1Ceb4Df01CdE915C235b3`
+- **On-chain re-check (2026-10-23T12:27:26.966Z):** found: true; status: success; block 79963880; tx.from `0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4`; to `0xa9AA0a64769cBed4d3B1Ceb4Df01CdE915C235b3`
   - verifyTx attribution codes: celo_b2fff2ac9413
   - Transfer of 0xF6829D7393dAe24509eb1E52eE8e572e2E271a4f: 0x25A5c1Ae633eB3e1988CfdEed07CdbD2E998AB52 -> 0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4, 1365928991 atomic
   - Transfer of 0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e: 0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4 -> 0x25A5c1Ae633eB3e1988CfdEed07CdbD2E998AB52, 999901 atomic
@@ -163,7 +163,7 @@ Only transactions that were actually sent to Celo mainnet are listed. Mock tests
 - **transaction submitter:** the gateway/facilitator; shown as tx.from when verified on-chain
 - **Settlement (journal):** authorization settled; Transfer(payer -> payTo) found: true; receipt status CONFIRMED
 - **Attribution:** not applicable; x402 settlements are submitted by the facilitator; attribution tags are not yet supported by x402 and the organizers confirmed none is needed for Buy
-- **On-chain re-check (2026-10-14T10:01:58.323Z):** found: true; status: success; block 80001720; tx.from `0x0d74D5Cefd2e7F24E623330ebE3d8D4cB45fFB48`; to `0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e`
+- **On-chain re-check (2026-10-23T12:27:28.518Z):** found: true; status: success; block 80001720; tx.from `0x0d74D5Cefd2e7F24E623330ebE3d8D4cB45fFB48`; to `0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e`
   - verifyTx attribution codes: none
   - Transfer of 0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e: 0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4 -> 0x20faAca5F980E29639A0FCC6dcA6988E18ed333B, 5000 atomic
   - submitted by 0x0d74D5Cefd2e7F24E623330ebE3d8D4cB45fFB48 (not the Payrail wallet), as expected for a gateway-sponsored x402 settlement
@@ -178,7 +178,7 @@ Only transactions that were actually sent to Celo mainnet are listed. Mock tests
 - **called contract (Identity Registry):** `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432`
 - **Settlement (journal):** CONFIRMED; block 80032609; agent ID 9906; owner verified: 0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4; stored tokenURI matches: true
 - **Attribution:** journal verified: true (celo_b2fff2ac9413); Payrail submitted this transaction itself, so it carries the ERC-8021 tag
-- **On-chain re-check (2026-10-14T10:01:59.818Z):** found: true; status: success; block 80032609; tx.from `0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4`; to `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432`
+- **On-chain re-check (2026-10-23T12:27:29.962Z):** found: true; status: success; block 80032609; tx.from `0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4`; to `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432`
   - verifyTx attribution codes: celo_b2fff2ac9413
 
 ### 8. approve: [0x0e33a9e1a192eb93c090cee957d5745b17632576abfb51cb4cf1583163b2dd32](https://celoscan.io/tx/0x0e33a9e1a192eb93c090cee957d5745b17632576abfb51cb4cf1583163b2dd32)
@@ -191,7 +191,7 @@ Only transactions that were actually sent to Celo mainnet are listed. Mock tests
 - **called contract (token):** `0xF6829D7393dAe24509eb1E52eE8e572e2E271a4f`
 - **Settlement (journal):** mined; conversion state FAILED
 - **Attribution:** journal verified: true (celo_b2fff2ac9413); Payrail submitted this transaction itself, so it carries the ERC-8021 tag
-- **On-chain re-check (2026-10-14T10:02:02.138Z):** found: true; status: success; block 80038278; tx.from `0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4`; to `0xF6829D7393dAe24509eb1E52eE8e572e2E271a4f`
+- **On-chain re-check (2026-10-23T12:27:33.838Z):** found: true; status: success; block 80038278; tx.from `0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4`; to `0xF6829D7393dAe24509eb1E52eE8e572e2E271a4f`
   - verifyTx attribution codes: celo_b2fff2ac9413
   - call: approve(spender 0xa9AA0a64769cBed4d3B1Ceb4Df01CdE915C235b3, amount 1363665000 atomic)
 
@@ -205,7 +205,7 @@ Only transactions that were actually sent to Celo mainnet are listed. Mock tests
 - **called contract (venue):** `0xa9AA0a64769cBed4d3B1Ceb4Df01CdE915C235b3`
 - **Settlement (journal):** mined; conversion state CONFIRMED; received 998910 atomic
 - **Attribution:** journal verified: true (celo_b2fff2ac9413); Payrail submitted this transaction itself, so it carries the ERC-8021 tag
-- **On-chain re-check (2026-10-14T10:02:03.464Z):** found: true; status: success; block 80038743; tx.from `0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4`; to `0xa9AA0a64769cBed4d3B1Ceb4Df01CdE915C235b3`
+- **On-chain re-check (2026-10-23T12:27:35.175Z):** found: true; status: success; block 80038743; tx.from `0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4`; to `0xa9AA0a64769cBed4d3B1Ceb4Df01CdE915C235b3`
   - verifyTx attribution codes: celo_b2fff2ac9413
   - Transfer of 0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e: 0x25A5c1Ae633eB3e1988CfdEed07CdbD2E998AB52 -> 0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4, 998910 atomic
   - Transfer of 0xF6829D7393dAe24509eb1E52eE8e572e2E271a4f: 0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4 -> 0x25A5c1Ae633eB3e1988CfdEed07CdbD2E998AB52, 1363528648 atomic
@@ -222,7 +222,7 @@ Only transactions that were actually sent to Celo mainnet are listed. Mock tests
 - **transaction submitter:** the gateway/facilitator; shown as tx.from when verified on-chain
 - **Settlement (journal):** authorization settled; Transfer(payer -> payTo) found: true; receipt status CONFIRMED
 - **Attribution:** not applicable; x402 settlements are submitted by the facilitator; attribution tags are not yet supported by x402 and the organizers confirmed none is needed for Buy
-- **On-chain re-check (2026-10-14T10:02:04.609Z):** found: true; status: success; block 80038764; tx.from `0x0d74D5Cefd2e7F24E623330ebE3d8D4cB45fFB48`; to `0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e`
+- **On-chain re-check (2026-10-23T12:27:37.480Z):** found: true; status: success; block 80038764; tx.from `0x0d74D5Cefd2e7F24E623330ebE3d8D4cB45fFB48`; to `0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e`
   - verifyTx attribution codes: none
   - Transfer of 0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e: 0x652C9023626d1a00AD0d130C9cdc5C5f3644D2a4 -> 0x20faAca5F980E29639A0FCC6dcA6988E18ed333B, 5000 atomic
   - submitted by 0x0d74D5Cefd2e7F24E623330ebE3d8D4cB45fFB48 (not the Payrail wallet), as expected for a gateway-sponsored x402 settlement
@@ -243,7 +243,7 @@ Only transactions that were actually sent to Celo mainnet are listed. Mock tests
 - _Note:_ legacy receipt (written before schema v1)
 - _Note:_ the response body was not retained for this payment (only a structural summary was kept)
 - _Note:_ x402 settlement is submitted by the facilitator and carries no attribution tag; the organizers confirmed none is needed for Buy
-- _Note:_ LIVE RE-VERIFICATION 2026-10-14T10:01:36.754Z: receipt success, block 79920194, confirmed by 2 endpoint(s), Transfer(payer -> payTo, 0.005 USDT) found: true
+- _Note:_ LIVE RE-VERIFICATION 2026-10-23T12:27:18.332Z: receipt success, block 79920194, confirmed by 2 endpoint(s), Transfer(payer -> payTo, 0.005 USDT) found: true
 
 ### direct-2026-10-13T14-41-27-277Z
 
@@ -256,7 +256,7 @@ Only transactions that were actually sent to Celo mainnet are listed. Mock tests
 - **Settlement:** authorization `settled`; Transfer(payer -> payTo) found: true
 - **Response:** JSON keys [capability, transaction, payment, provider, upstreamRunId, resultCount, output]; output: object; 48403 bytes; sha256 `08d00251fe2226a89174efc8fbe1a7ec70fe2bdb1c8f2f516df11de5bdd8ff04`; stored at `responses/direct-2026-10-13T14-41-27-277Z.body`
 - _Note:_ x402 settlement is submitted by the facilitator and carries no attribution tag; the organizers confirmed none is needed for Buy
-- _Note:_ LIVE RE-VERIFICATION 2026-10-14T10:01:37.623Z: receipt success, block 80001720, confirmed by 2 endpoint(s), Transfer(payer -> payTo, 0.005 USDT) found: true
+- _Note:_ LIVE RE-VERIFICATION 2026-10-23T12:27:19.924Z: receipt success, block 80001720, confirmed by 2 endpoint(s), Transfer(payer -> payTo, 0.005 USDT) found: true
 - _Note:_ RESPONSE FILE CHECK: sha256 of responses/direct-2026-10-13T14-41-27-277Z.body recomputed and matches the receipt
 
 ### direct-2026-10-14T00-58-50-389Z
@@ -270,7 +270,7 @@ Only transactions that were actually sent to Celo mainnet are listed. Mock tests
 - **Settlement:** authorization `settled`; Transfer(payer -> payTo) found: true
 - **Response:** JSON keys [capability, transaction, payment, provider, upstreamRunId, resultCount, output]; output: object; 67154 bytes; sha256 `4a2451147286359972506af30aaff4f85d7892ad8ca9175bf2f829ba90b15177`; stored at `responses/direct-2026-10-14T00-58-50-389Z.body`
 - _Note:_ x402 settlement is submitted by the facilitator and carries no attribution tag; the organizers confirmed none is needed for Buy
-- _Note:_ LIVE RE-VERIFICATION 2026-10-14T10:01:38.478Z: receipt success, block 80038764, confirmed by 2 endpoint(s), Transfer(payer -> payTo, 0.005 USDT) found: true
+- _Note:_ LIVE RE-VERIFICATION 2026-10-23T12:27:20.673Z: receipt success, block 80038764, confirmed by 2 endpoint(s), Transfer(payer -> payTo, 0.005 USDT) found: true
 - _Note:_ RESPONSE FILE CHECK: sha256 of responses/direct-2026-10-14T00-58-50-389Z.body recomputed and matches the receipt
 
 ## Conversions Payrail executed (ERC-8021 tagged)
